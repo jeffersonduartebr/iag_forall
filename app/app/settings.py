@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Parâmetros de controle
     # ------------------------------------------------------
     QUALITY_MIN: float = Field(default=6.5, description="Qualidade mínima para considerar um modelo bom")
-    MAX_TOKENS: int = Field(default=512, description="Limite máximo de tokens por requisição")
+    MAX_TOKENS: int = Field(default=2048, description="Limite máximo de tokens por requisição")
     ENABLE_RAG_FOR_JUDGES: bool = Field(default=True, description="Ativa o uso de contexto RAG nos juízes")
     # ------------------------------------------------------
     # Juízes / avaliação de qualidade
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     JUDGE_MODELS: list[str] = Field(
         default_factory=lambda: [
             "phi4:latest",
-            "gemini-2.0-flash",
+            "deepseek-r1:8b",
             "gemini-2.5-flash",
         ],
         description="Lista de modelos LLM usados como juízes"
@@ -99,6 +99,22 @@ class Settings(BaseSettings):
         return result
 
     ADMIN_TOKEN: str = Field(default="admin123", description="Token de autenticação para rotas administrativas")
+
+    # RAG
+    RAG_ENABLED: bool = Field(default=True)
+    RAG_SIM_THRESHOLD: float = Field(default=0.75)
+    RAG_TOP_K: int = Field(default=4)
+
+    # Cache semântico
+    SEM_CACHE_ENABLED: bool = Field(default=True)
+    CACHE_SIM_THRESHOLD: float = Field(default=0.86)
+    CACHE_TTL_SECONDS: int = Field(default=86400)
+    CACHE_TOP_K: int = Field(default=3)
+
+    # Celery/Redis (se preferir deixar visível nas settings)
+    CELERY_BROKER_URL: str = Field(default="redis://redis:6379/0")
+    CELERY_RESULT_BACKEND: str = Field(default="redis://redis:6379/1")
+
 
 
 # ------------------------------------------------------

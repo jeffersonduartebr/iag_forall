@@ -9,7 +9,7 @@ from .observability import *
 from .providers import safe_call_model as call_model
 from .bandits import select_model as bandit_select, update_model as bandit_update
 from .router_strategy import choose_top2_models, update_metrics
-from .rag import retrieve_context
+from .rag import retrieve_context_adaptive
 import os, time, asyncio, logging
 from fastapi import Header
 
@@ -161,7 +161,8 @@ async def _route_logic(req: QueryRequest) -> QueryResponse:
             ),
         ]
 
-    rag_context_for_answer = retrieve_context(req.query) if req.enable_rag_for_answer else ""
+    rag_context_for_answer = retrieve_context_adaptive(req.query) if req.enable_rag_for_answer else ""
+
     full_prompt = req.query if not rag_context_for_answer else f"""Use o contexto se relevante:
 ---
 {rag_context_for_answer}

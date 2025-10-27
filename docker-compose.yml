@@ -148,10 +148,34 @@ services:
     networks:
       - ai_net
 
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "SenhaForte"]
+    restart: unless-stopped
+    ports:
+      - "6379:6379"        # opcional: exponha só se precisar acessar fora do compose
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build: .
+    command: celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=2
+    depends_on: [redis]
+    environment:
+      - CELERY_BROKER_URL=redis://:SenhaForte@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:SenhaForte@redis:6379/1
+
+
 volumes:
   ollama_data:
   chroma_data:
   bandit_state:
+  redis-data:
 
 networks:
   ai_net:

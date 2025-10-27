@@ -1,60 +1,54 @@
+# app/rag.py
 import logging
-import requests
-from typing import Optional
 from .settings import settings
+from .embeddings import get_embedding
+from .vectorstore import chroma_client
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------
-# Retrieval-Augmented Generation (RAG)
-# ---------------------------------------------------------
-# Esta função tenta recuperar contexto relevante de uma base vetorial (ChromaDB)
-# com base no texto da consulta. Caso falhe, retorna string vazia.
-# ---------------------------------------------------------
+def retrieve_context(query: str, top_k: int | None = None) -> str:
+    """
+    (Função original simples) - mantém por compatibilidade.
+    """
+    try:
+        k = top_k or getattr(settings, "RAG_TOP_K", 4)
+        q_emb = get_embedding(query)
+        coll = chroma_client.get_or_create_collection("docs")
+        res = coll.query(query_embeddings=[q_emb], n_results=k)
+        docs = (res.get("documents") or [[]])[0]
+        return "\n\n".join(docs) if docs else ""
+    except Exception as e:
+        logger.warning(f"[RAG] Falha retrieve_context: {e}")
+        return ""
 
-def retrieve_context(query: str, top_k: int = 3) -> str:
+def retrieve_context_adaptive(query: str) -> str:
     """
-    Recupera contexto textual relevante a partir de um repositório vetorial (ChromaDB).
-    Se o serviço não responder, retorna string vazia.
+    Ativa RAG apenas se a similaridade do top-1 exceder o threshold.
     """
-    chroma_url = f"http://{settings.CHROMADB_HOST}:{settings.CHROMADB_PORT}/query"
-    payload = {
-        "collection": "knowledge",
-        "query_texts": [query],
-        "n_results": top_k,
-    }
+    if not getattr(settings, "RAG_ENABLED", True):
+        return ""
 
     try:
-        logger.info(f"[RAG] Consultando ChromaDB em {chroma_url} (top_k={top_k})")
-        response = requests.post(chroma_url, json=payload, timeout=5)
+        k = getattr(settings, "RAG_TOP_K", 4)
+        thr = float(getattr(settings, "RAG_SIM_THRESHOLD", 0.75))
 
-        if response.status_code != 200:
-            logger.warning(f"[RAG] Erro HTTP {response.status_code} ao consultar ChromaDB")
+        q_emb = get_embedding(query)
+        coll = chroma_client.get_or_create_collection("docs")
+        res = coll.query(query_embeddings=[q_emb], n_results=k)
+
+        docs = (res.get("documents") or [[]])[0]
+        dists = (res.get("distances") or [[]])[0]
+        if not dists:
             return ""
 
-        data = response.json()
-        # Chroma retorna estrutura: {"documents": [["texto1", "texto2", ...]]}
-        docs = data.get("documents", [])
-        if not docs or not isinstance(docs, list):
-            logger.warning("[RAG] Nenhum documento retornado ou formato inválido")
+        best_sim = 1.0 - float(dists[0])  # se for cos distance
+        if best_sim < thr:
+            logger.info(f"[RAG] OFF (sim={best_sim:.3f} < thr={thr})")
             return ""
 
-        flat_docs = []
-        for group in docs:
-            if isinstance(group, list):
-                flat_docs.extend(group)
-
-        # Monta contexto consolidado
-        context = "\n---\n".join(flat_docs[:top_k])
-        logger.info(f"[RAG] {len(flat_docs)} fragmentos recuperados do ChromaDB")
-        return context
-
-    except requests.exceptions.ConnectionError:
-        logger.warning("[RAG] Falha de conexão com ChromaDB — RAG desativado temporariamente.")
-        return ""
-    except requests.exceptions.Timeout:
-        logger.warning("[RAG] Timeout ao consultar ChromaDB — ignorando contexto.")
-        return ""
+        ctx = "\n\n".join(docs) if docs else ""
+        logger.info(f"[RAG] ON (sim={best_sim:.3f}, k={len(docs)})")
+        return ctx
     except Exception as e:
-        logger.error(f"[RAG] Erro inesperado: {e}")
+        logger.warning(f"[RAG] Falha retrieve_context_adaptive: {e}")
         return ""
