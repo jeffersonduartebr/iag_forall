@@ -1,0 +1,93 @@
+{
+  "title": "LLM Router \u2013 Judges & Quality",
+  "uid": "llm-router-judges-quality",
+  "schemaVersion": 37,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-2h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Scores",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Judge score (avg, 1m)",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "rate(judge_score_sum[1m]) / rate(judge_score_count[1m])"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Judge LLM calls (proxy via requests)",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(api_requests_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Latency & Cost",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Candidate latency (p95)",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(candidate_latency_seconds_bucket[5m])) by (le))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Candidate cost (per min)",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(candidate_estimated_cost_usd_sum[1m]))"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "title": "LLM Router \u2013 Routing Efficacy",
+  "uid": "llm-router-routing-efficacy",
+  "schemaVersion": 37,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-2h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Routing Decisions",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Chosen model frequency (per 5m)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(router_chosen_model_total[5m])) by (model)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Fallbacks used (rate/5m)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(router_fallback_used_total[5m])) by (first_model, second_model)"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Cost Efficiency",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Average cost per answer (USD)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "targets": [
+        {
+          "expr": "rate(candidate_estimated_cost_usd_sum[5m])/rate(candidate_estimated_cost_usd_count[5m])"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bandit reward (avg)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "targets": [
+        {
+          "expr": "rate(bandit_reward_sum[5m])/rate(bandit_reward_count[5m])"
+        }
+      ]
+    }
+  ]
+}

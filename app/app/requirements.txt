@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic>=2.7
+pydantic-settings>=2.2
+requests
+litellm==1.43.4
+prometheus_client
+chromadb
+onnxruntime
+numpy
