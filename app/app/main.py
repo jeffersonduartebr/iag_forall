@@ -1,5 +1,8 @@
+import json
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
+from fastapi import HTTPException
+from typing import List
 from .settings import settings
 from .schemas import QueryRequest, QueryResponse, CandidateResult, JudgeScore, RouteDecision
 from .observability import *
@@ -8,6 +11,8 @@ from .bandits import select_model as bandit_select, update_model as bandit_updat
 from .router_strategy import choose_top2_models, update_metrics
 from .rag import retrieve_context
 import os, time, asyncio, logging
+from fastapi import Header
+
 
 # ------------------------------------------------------
 # Configurações gerais
@@ -91,6 +96,42 @@ async def route_query(req: QueryRequest):
     resp = await _route_logic(req)
     API_LATENCY.observe(time.time() - start)
     return resp
+
+
+# =========================================
+# 🔧 Administração: Configuração de Juízes
+# =========================================
+
+@app.get("/admin/judges", response_model=List[str])
+async def get_judges():
+    """Retorna a lista atual de modelos de juízes configurados."""
+    return settings.JUDGE_MODELS
+
+
+@app.post("/admin/judges", response_model=List[str])
+async def update_judges(models: List[str], x_admin_token: str = Header(None)):
+    if x_admin_token != settings.ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Token inválido.")
+    """
+    Atualiza dinamicamente a lista de juízes (modelos LLM usados para julgamento).
+    Exemplo de uso:
+        curl -X POST http://localhost:8000/admin/judges \
+             -H "Content-Type: application/json" \
+             -d '["phi4:latest","gemini-2.0-flash"]'
+    """
+    if not isinstance(models, list) or not all(isinstance(m, str) for m in models):
+        raise HTTPException(status_code=400, detail="A lista de juízes deve conter apenas strings.")
+    
+    if not models:
+        raise HTTPException(status_code=400, detail="A lista de juízes não pode estar vazia.")
+
+    old = getattr(settings, "JUDGE_MODELS", [])
+    settings.JUDGE_MODELS = models
+    logger.info(f"[Admin] Juízes atualizados de {old} para {models}")
+    with open(".env", "a") as f:
+        f.write(f"\nJUDGE_MODELS={json.dumps(models)}\n")
+
+    return settings.JUDGE_MODELS
 
 # ------------------------------------------------------
 # Lógica central do roteamento LLM

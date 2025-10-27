@@ -1,50 +1,99 @@
-# Generative AI Routing Platform
+# 🧭 Roadmap Técnico — 12 Meses
 
-![status-badge](https://img.shields.io/badge/status-alpha-blue)
-![license-badge](https://img.shields.io/badge/license-MIT-green)
+Este roadmap descreve as principais etapas de evolução técnica do **roteador de LLMs multiobjetivo**, que integra múltiplos modelos (locais e comerciais), sistema de *bandits adaptativos*, observabilidade em tempo real e mecanismos de avaliação automática via “juízes” LLM.
 
-## Introduction
+---
 
-This repository hosts the **Generative AI Routing Platform (GAIRP)**—an open, cloud‑native backbone that dynamically **routes user requests across heterogeneous Large Language Models (LLMs)** and **spins up specialised agents on‑demand**.  
-GAIRP is designed for researchers and builders who need a cost‑aware, observable, and easily extensible environment to orchestrate multiple generative models (local or SaaS) under a single, well‑governed API.
+## 🚀 Visão Geral
 
-## Methodology
+O objetivo central do projeto é desenvolver uma arquitetura **modular, autoavaliativa e expansível**, capaz de:
+- Orquestrar chamadas a múltiplos modelos LLM (Ollama, Gemini, OpenAI, etc.);
+- Avaliar respostas com juízes dinâmicos e multiheurísticos;
+- Otimizar a seleção de modelos com base em custo, qualidade e latência (NSGA-II);
+- Garantir rastreabilidade, observabilidade e transparência via métricas e dashboards.
 
-GAIRP follows an **incremental roadmap** that delivers value early while de‑risking complex features:
+---
 
-| Phase  | Key Deliverables | Milestones |
-|--------|------------------|------------|
-| **MVP** | *Gateway* + *static router* + 1 local model + 1 SaaS model | ⬜ API prototype <br> ⬜ Docker‑compose demo |
-| **v0.2** | *Agent Manager* + core plugins (SQL, Web Search) | ⬜ Persona DSL <br> ⬜ Tool execution sandbox |
-| **v0.3** | *Bandit/Cost‑aware router* + real‑time cost metrics | ⬜ Token & $ tracking <br> ⬜ Grafana dashboards |
-| **v1.0** | Self‑service UI + billing + agent marketplace | ⬜ Stripe integration <br> ⬜ Public beta |
+## 📅 Cronograma de Desenvolvimento (12 Meses)
 
-Each phase is implemented as a **thin, replaceable microservice** that communicates through an event bus (NATS/JetStream).  
+| Mês | Foco Principal | Entregas Técnicas |
+|-----|----------------|-------------------|
+| **1–2** | **Fundação da arquitetura** | - Estrutura modular (`app/`, `routers/`, `services/`, `providers/`)<br>- Integração básica com `LiteLLM` e `Ollama`<br>- Configuração de `.env`, `settings.py` e logs estruturados<br>- Criação dos endpoints iniciais (`/query`, `/health`) |
+| **3–4** | **Sistema de decisão (Bandits)** | - Implementação de `epsilon-greedy` com persistência (`history.json`)<br>- Salvamento incremental e carregamento automático<br>- Testes de exploração/exploração em cenário multi-modelo<br>- Integração com Prometheus para métricas básicas |
+| **5–6** | **Camada de juízes LLM** | - Suporte a múltiplos juízes dinâmicos (`JUDGE_LLMS`)<br>- Julgamento híbrido: heurístico + LLM<br>- Configuração via API para adicionar/remover juízes<br>- Logs e métricas de acurácia dos julgamentos |
+| **7–8** | **Algoritmo Multiobjetivo (NSGA-II)** | - Implementação completa do NSGA-II<br>- Integração com camada de decisão (`router_strategy`)<br>- Normalização dos objetivos: custo, latência e qualidade<br>- Visualização das frentes de Pareto em painel de métricas |
+| **9–10** | **Observabilidade e dashboards** | - Integração total com **Prometheus** e **Grafana**<br>- Criação de dashboards: performance dos modelos, latência média, distribuição de rewards<br>- Endpoint `/metrics` aprimorado e documentação PromQL |
+| **11** | **RAG e contexto adaptativo** | - Suporte opcional a RAG (document retrievers)<br>- Avaliação contextual dos juízes com `use_rag=True`<br>- Métricas de impacto do RAG na qualidade |
+| **12** | **Consolidação e automação** | - Testes de carga com **Locust** e benchmarking cruzado<br>- Ajuste fino de hiperparâmetros (ε, α, N dos juízes)<br>- Automação CI/CD via GitHub Actions<br>- Documentação final (API, diagramas, deploy Docker) |
 
-### Technical Stack (snapshot)
-* **API Gateway**: Traefik
-* **Service Runtime**: FastAPI (Async) + Ray Serve workers
-* **Model Serving**: vLLM/TGI containers and OpenAI‑compatible proxies
-* **Vector Store**: Qdrant (Hybrid search)
-* **Observability**: OpenTelemetry → Prometheus, Grafana, Tempo
+---
 
-## Expected Results
+## ⚙️ Principais Marcos Técnicos
 
-* **Elastic throughput** — automatic GPU / CPU scaling per workload class.
-* **Cost transparency** — live dashboards for tokens and USD burn‑rate per tenant.
-* **Pluggable agents** — YAML‑defined personas with fine‑grained tool permissions.
-* **Governance & security** — JWT, rate‑limit, and audit‑grade trace logs out‑of‑the‑box.
-* **Research velocity** — rapid A/B testing of new models via declarative routing rules.
+### 🧩 Módulos Core
+- `providers/` — abstração para múltiplos backends (Gemini, Ollama, etc.)
+- `judges/` — avaliação de qualidade multi-LLM
+- `bandits/` — aprendizado adaptativo (ε-greedy com histórico)
+- `router_strategy/` — seleção ótima baseada em NSGA-II
+- `settings.py` — parametrização centralizada (pydantic)
 
-## Related Publications
+### 🧠 Inteligência Adaptativa
+- Avaliação contínua de *rewards*
+- Atualização automática de pesos de decisão
+- Persistência incremental dos resultados
+- Suporte a reinicialização e análise retroativa (`history.json`)
 
-> *This section is reserved for future conference papers, journal articles, or technical reports related to GAIRP.*
+### 📊 Observabilidade
+- Exposição de métricas Prometheus (`/metrics`)
+- Dashboards Grafana: performance por modelo, eficiência dos juízes, Pareto fronts
+- Logging estruturado com `uvicorn + logging`
 
-## Contact
+---
 
-| Role | Name | Organisation | Email |
-|------|------|--------------|-------|
-| Lead Maintainer | **Jefferson Silva** | IFRN – Campus Ipanguaçu | jefferson.duarte@ifrn.edu.br |
+## 🧪 Stack Tecnológica
 
-Feel free to open an [issue](https://github.com/your‑org/gairp/issues).
+| Componente | Tecnologia |
+|-------------|-------------|
+| **API / Core** | Python 3.11 + FastAPI |
+| **LLM Providers** | LiteLLM + Ollama + Gemini |
+| **Decisão / Aprendizado** | ε-Greedy + NSGA-II |
+| **Observabilidade** | Prometheus + Grafana |
+| **Testes de Carga** | Locust |
+| **Persistência** | JSON (histórico local) / Banco opcional |
+| **CI/CD** | GitHub Actions + Docker Compose |
 
+---
+
+## 📈 Métricas e Indicadores
+
+- **Qualidade média por modelo**
+- **Tempo de resposta (latência)**
+- **Custo estimado por 1K tokens**
+- **Número de julgamentos automáticos realizados**
+- **Distribuição dos rewards (explore/exploit ratio)**
+- **Evolução da média ponderada NSGA-II**
+
+---
+
+## 🔮 Extensões Futuras (Ano 2+)
+
+- Armazenamento de histórico em banco relacional (PostgreSQL)
+- Interface Web para controle de juízes e modelos
+- Integração com frameworks de avaliação como **Helm** e **LangSmith**
+- Módulo de aprendizado por reforço contínuo (bandits + PPO)
+- Implementação de *reputation weighting* entre juízes
+
+---
+
+## 🧾 Licença e Governança
+
+O projeto segue licença **MIT**, com código aberto e documentação pública.  
+Contribuições e *pull requests* são bem-vindos — especialmente nas áreas de:
+- Novos provedores LLM;
+- Estratégias de seleção multiobjetivo;
+- Dashboards de observabilidade.
+
+---
+
+📍 **Última atualização:** Outubro de 2025  
+📘 **Responsável técnico:** [Jefferson Duarte (@jeffersonduartebr)](https://github.com/jeffersonduartebr)

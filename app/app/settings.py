@@ -37,20 +37,16 @@ class Settings(BaseSettings):
         default="auto",
         description="Modo de operação dos juízes (auto, disabled, manual)"
     )
-    # ------------------------------------------------------
-    # Juízes de avaliação LLM
-    # ------------------------------------------------------
-    JUDGE_LLM_MODEL: str = Field(
-        default="phi4:latest",
-        description="Modelo usado para julgamento de qualidade de resposta"
+
+    JUDGE_MODELS: list[str] = Field(
+        default_factory=lambda: [
+            "phi4:latest",
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+        ],
+        description="Lista de modelos LLM usados como juízes"
     )
-    # ------------------------------------------------------
-    # Configuração de quantidade de juízes LLM
-    # ------------------------------------------------------
-    JUDGE_LLM_N: int = Field(
-        default=3,
-        description="Número de instâncias LLM usadas para julgamento paralelo"
-    )
+
 
 
     # ------------------------------------------------------
@@ -101,6 +97,8 @@ class Settings(BaseSettings):
         except Exception as e:
             logging.warning(f"[settings] Falha ao carregar custos customizados: {e}")
         return result
+
+    ADMIN_TOKEN: str = Field(default="admin123", description="Token de autenticação para rotas administrativas")
 
 
 # ------------------------------------------------------

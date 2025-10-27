@@ -78,13 +78,15 @@ def heuristic_score(answer: str) -> float:
 
 
 # ======================================================
-# 🔹 Avaliação baseada em modelo LLM externo
+# 🔹 Avaliação baseada em modelos LLM externos (dinâmica)
 # ======================================================
 async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
-    """Usa um modelo LLM para avaliar a qualidade da resposta."""
+    """Executa julgamento dinâmico usando a lista de juízes configurada."""
     try:
-        judge_model = settings.JUDGE_LLM_MODEL
-        api_base = None  # pode ser adicionado se quiser usar Ollama como juiz
+        # Determina juízes: lista ou fallback
+        judge_models = getattr(settings, "JUDGE_MODELS", None)
+        if not judge_models:
+            judge_models = [settings.JUDGE_LLM_MODEL] * settings.JUDGE_LLM_N
 
         prompt = f"""
 Avalie a resposta de um assistente com base na pergunta e, se relevante, no contexto adicional.
@@ -98,29 +100,26 @@ Pergunta: {query}
 Resposta: {answer}
 {"(O contexto RAG foi usado na geração.)" if use_rag else ""}
 Responda apenas com um número entre 0 e 10.
-"""
+""".strip()
 
-        # Faz N julgamentos independentes (votação)
         scores = []
-        for i in range(settings.JUDGE_LLM_N):
+        for idx, model in enumerate(judge_models, start=1):
             try:
                 text, meta = call_model(
-                    model=judge_model,
-                    prompt=prompt.strip(),
+                    model=model,
+                    prompt=prompt,
                     max_tokens=32,
                     temperature=0.0,
-                    api_base=api_base,
                 )
                 numeric = extract_score(text)
                 scores.append(numeric)
-                logger.info(f"[Judges] Execução {i+1}/{settings.JUDGE_LLM_N}: {numeric}")
+                logger.info(f"[Judges] {model} → nota={numeric:.2f} (juiz {idx}/{len(judge_models)})")
             except Exception as e:
-                logger.warning(f"[Judges] Falha no julgamento {i+1}: {e}")
+                logger.warning(f"[Judges] Falha no julgamento com {model}: {e}")
 
         if not scores:
             return 0.0
 
-        # Média das notas normalizada (0–10 → 0–1)
         avg = sum(scores) / len(scores)
         normalized = round(avg / 10.0, 3)
         return normalized
@@ -128,6 +127,7 @@ Responda apenas com um número entre 0 e 10.
     except Exception as e:
         logger.error(f"[Judges] Erro no julgamento via LLM: {e}")
         return 0.0
+
 
 
 # ======================================================

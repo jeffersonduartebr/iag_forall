@@ -59,7 +59,7 @@ services:
         ollama list >/dev/null 2>&1 && break;
         echo '... ainda iniciando';
       done;
-      ollama pull phi4 || true;
+      ollama pull phi4 deepseek-r1:8b || true;
       wait
       "
     networks:
