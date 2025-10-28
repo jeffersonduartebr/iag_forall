@@ -8,3 +8,10 @@ prometheus_client
 chromadb
 onnxruntime
 numpy
+celery
+redis
+celery[redis]
+pytest
+pytest-asyncio
+pytest-cov
+httpx

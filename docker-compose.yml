@@ -5,7 +5,6 @@ services:
     restart: unless-stopped
     depends_on:
       - ollama
-      - chromadb
       - prometheus
     env_file:
       - .env
@@ -17,15 +16,13 @@ services:
       - BANDIT_STATE_PATH=${BANDIT_STATE_PATH}
       - PROMETHEUS_PORT=${PROMETHEUS_PORT}
       - ENABLE_RAG_FOR_JUDGES=${ENABLE_RAG_FOR_JUDGES}
-      - CHROMADB_HOST=${CHROMADB_HOST}
-      - CHROMADB_PORT=${CHROMADB_PORT}
       - JUDGES_MODE=${JUDGES_MODE}
-      - JUDGE_LLM_MODEL=${JUDGE_LLM_MODEL}
-      - JUDGE_LLM_N=${JUDGE_LLM_N}
       - JUDGE_USE_RAG=${JUDGE_USE_RAG}
+      - CHROMA_PATH=/data
     volumes:
       - ./state:/app/state
       - ./data:/app/data
+      - ./chromadb-data:/data
     ports:
       - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
@@ -66,16 +63,6 @@ services:
       - ai_net
       
 
-  chromadb:
-    image: chromadb/chroma:latest
-    container_name: chromadb
-    restart: unless-stopped
-    ports:
-      - "8001:8000"
-    volumes:
-      - ./chromadb-data:/data
-    networks:
-      - ai_net
 
   prometheus:
     image: prom/prometheus:latest
@@ -163,7 +150,10 @@ services:
       retries: 5
 
   worker:
-    build: .
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: llm_worker
     command: celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=2
     depends_on: [redis]
     environment:
