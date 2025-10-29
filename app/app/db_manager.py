@@ -210,49 +210,75 @@ def load_history(limit: int = 1000) -> List[Dict[str, Any]]:
     logger.error("[db] load_history permanently failed; returning empty list.")
     return []
 
-def insert_weights(theta: List[float], fitness_mean: float, generations: int) -> None:
+def insert_weights(theta: List[float], fitness_mean: float, generations: int,
+                   model_name: str = "ollama/deepseek-r1:8b",
+                   model_family: str = "deepseek",
+                   token_key: str = "max_tokens") -> None:
     """
-    Inserts new NSGA-II weights and updates the current best.
+    Insere novos pesos NSGA-II no banco e atualiza a tabela 'nsga_current_weights'.
+    Inclui metadados do modelo: nome, família e tipo de token.
     """
     if not (isinstance(theta, (list, tuple)) and len(theta) == 3):
-        raise ValueError("theta must be a 3-vector [w_q, w_c, w_l]")
+        raise ValueError("theta deve ser uma lista [w_q, w_c, w_l]")
 
-    w_q, w_c, w_l = float(theta[0]), float(theta[1]), float(theta[2])
+    w_q, w_c, w_l = map(float, theta)
+
     insert_sql = """
-        INSERT INTO nsga_weights (created_at, w_q, w_c, w_l, fitness_mean, generations)
-        VALUES (UTC_TIMESTAMP(6), %s, %s, %s, %s, %s)
+        INSERT INTO nsga_weights (
+            created_at, w_q, w_c, w_l, fitness_mean, generations,
+            model_name, model_family, token_key
+        )
+        VALUES (UTC_TIMESTAMP(6), %s, %s, %s, %s, %s, %s, %s, %s)
     """
+
     upsert_sql = """
-        INSERT INTO nsga_current_weights (id, updated_at, w_q, w_c, w_l, fitness_mean, generations)
-        VALUES (1, UTC_TIMESTAMP(6), %s, %s, %s, %s, %s)
+        INSERT INTO nsga_current_weights (
+            id, updated_at, w_q, w_c, w_l, fitness_mean, generations,
+            model_name, model_family, token_key
+        )
+        VALUES (1, UTC_TIMESTAMP(6), %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
           updated_at=VALUES(updated_at),
           w_q=VALUES(w_q),
           w_c=VALUES(w_c),
           w_l=VALUES(w_l),
           fitness_mean=VALUES(fitness_mean),
-          generations=VALUES(generations);
+          generations=VALUES(generations),
+          model_name=VALUES(model_name),
+          model_family=VALUES(model_family),
+          token_key=VALUES(token_key);
     """
 
     for attempt in range(1, DB_MAX_RETRIES + 1):
         try:
             with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(insert_sql, (w_q, w_c, w_l, float(fitness_mean), int(generations)))
-                    cur.execute(upsert_sql, (w_q, w_c, w_l, float(fitness_mean), int(generations)))
-                conn.commit()
-                logger.info(
-                    f"[db] weights persisted θ=({w_q:.3f},{w_c:.3f},{w_l:.3f}) "
-                    f"fit={fitness_mean:.4f} gen={generations}"
-                )
-                _write_fallback_json(theta, fitness_mean, generations)
-                return
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(insert_sql, (
+                            w_q, w_c, w_l, fitness_mean, generations,
+                            model_name, model_family, token_key
+                        ))
+                        cur.execute(upsert_sql, (
+                            w_q, w_c, w_l, fitness_mean, generations,
+                            model_name, model_family, token_key
+                        ))
+                    conn.commit()
+                    logger.info(
+                        f"[db] Pesos NSGA persistidos θ=({w_q:.3f},{w_c:.3f},{w_l:.3f}) | "
+                        f"fit={fitness_mean:.4f} | modelo={model_name} ({model_family}) | token={token_key}"
+                    )
+                    _write_fallback_json(theta, fitness_mean, generations)
+                    return
+                except Exception as tx_err:
+                    conn.rollback()
+                    raise tx_err
         except Exception as e:
-            logger.warning(f"[db] insert_weights attempt {attempt} failed: {e}")
+            logger.warning(f"[db] insert_weights tentativa {attempt}/{DB_MAX_RETRIES} falhou: {e}")
             time.sleep(DB_RETRY_DELAY_S)
 
-    logger.error("[db] insert_weights failed after retries; writing fallback JSON.")
+    logger.error("[db] insert_weights falhou após múltiplas tentativas; escrevendo fallback JSON.")
     _write_fallback_json(theta, fitness_mean, generations)
+
 
 # ------------------------------------------------------------------------------
 # Fallback JSON helpers

@@ -1,6 +1,7 @@
 # providers.py
 import logging
 import requests
+import re
 from time import sleep
 from litellm import completion
 from litellm.exceptions import APIConnectionError, ServiceUnavailableError
@@ -58,68 +59,82 @@ def _ensure_ollama_model(model_name: str):
 def call_model(model: str, prompt: str, temperature: float = 0.7, max_tokens: int = 1024, api_base: str = None):
     """
     Chama modelo com validação e tratamento de falhas.
-    Protege contra uso de embeddings e falhas de rede no Ollama.
+    Agora compatível com modelos GPT-5 / GPT-4o-mini / GPT-5-nano,
+    que usam 'max_completion_tokens' ao invés de 'max_tokens'.
     """
 
-    # 1️⃣ Verificação básica de parâmetros
+    # 1️⃣ Validação básica
     if not model or not isinstance(model, str):
         raise ValueError(f"[providers] Modelo inválido: {model!r}")
 
     if any(model.startswith(prefix) for prefix in EMBED_MODEL_PREFIXES):
         raise ValueError(f"[providers] Modelo '{model}' é de embedding e não suporta geração.")
 
-    # 2️⃣ Corrige nome para LiteLLM
+    # 2️⃣ Identificação do tipo de modelo
     is_ollama = model.startswith("ollama/") or ":" in model
     model_clean = model.replace("ollama/", "")
-
-    # 3️⃣ Define base URL para Ollama
     base_url = api_base or OLLAMA_BASE_URL if is_ollama else None
 
-    # 4️⃣ Re-tentativas automáticas
+    # 3️⃣ Verifica se o modelo é da nova geração OpenAI
+    use_new_param = bool(re.search(r"gpt-5|gpt-4o-mini|nano", model))
+
+    # 4️⃣ Configura parâmetros da chamada
+    params = {
+        "model": f"ollama/{model_clean}" if is_ollama else model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+    }
+
+    if use_new_param:
+        params["max_completion_tokens"] = max_tokens
+    else:
+        params["max_tokens"] = max_tokens
+
+    # 5️⃣ Re-tentativas com fallback
     retries = 3
     delay = 3
     for attempt in range(1, retries + 1):
         try:
-            if is_ollama:
-                resp = completion(
-                    model=f"ollama/{model_clean}",
-                    api_base=base_url,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-            else:
-                resp = completion(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
+            resp = completion(**params)
+            text = resp["choices"][0]["message"]["content"] if "choices" in resp else "[Sem resposta]"
+            meta = {
+                "usage": resp.get("usage", {}),
+                "latency_s": resp.get("latency", 0.0),
+                "provider": "ollama" if is_ollama else "remote",
+            }
+            return text, meta
 
         except Exception as e:
-            # --- Tratamento especial para modelos sem mapeamento de custo ---
+            # Fallback automático para erro de parâmetro inválido
+            if "unsupported_parameter" in str(e) or "max_tokens" in str(e):
+                logger.warning(f"[providers] Parâmetro incompatível detectado para {model}. Retentando com chave alternativa.")
+                if "max_tokens" in params:
+                    params.pop("max_tokens", None)
+                    params["max_completion_tokens"] = max_tokens
+                else:
+                    params.pop("max_completion_tokens", None)
+                    params["max_tokens"] = max_tokens
+                sleep(1)
+                continue
+
+            # Modelos sem custo mapeado
             if "isn't mapped yet" in str(e):
                 logger.warning(
                     f"[LiteLLM] Modelo '{model}' ainda não está mapeado no cost_calculator. "
                     f"Aplicando custo padrão local definido em bandits.py."
                 )
-                resp = {
-                    "choices": [{"message": {"content": "[Aviso] Modelo sem custo mapeado."}}],
-                    "usage": {},
-                    "latency": 0.0,
-                }
-            else:
-                raise
+                return (
+                    "[Aviso] Modelo sem custo mapeado.",
+                    {"usage": {}, "latency_s": 0.0, "provider": "remote"},
+                )
 
-        # --- Interpretação de resposta ---
-        text = resp["choices"][0]["message"]["content"] if "choices" in resp else "[Sem resposta]"
-        meta = {
-            "usage": resp.get("usage", {}),
-            "latency_s": resp.get("latency", 0.0),
-            "provider": "ollama" if is_ollama else "remote",
-        }
-        return text, meta
+            # Erros genéricos
+            logger.error(f"[providers] Falha tentativa {attempt}/{retries} para modelo {model}: {e}")
+            if attempt < retries:
+                sleep(delay)
+                continue
+            raise
 
-
-    # Fallback final — se todos os retries falharem
-    return "[Erro: todas as tentativas falharam]", {"latency_s": 0.0}
+    # 6️⃣ Fallback final
+    logger.error(f"[providers] Todas as tentativas falharam para {model}.")
+    return "[Erro: todas as tentativas falharam]", {"latency_s": 0.0, "provider": "remote"}

@@ -1,24 +1,14 @@
 # app/nsga_weights_updater.py
-"""
-Serviço NSGA-II autônomo para otimização dos pesos de recompensa do router.
-Agora inclui:
-✅ Integração com MariaDB
-✅ Servidor Prometheus embutido (porta 9999)
-✅ Resiliência e logging estruturado
-✅ Atualizações periódicas automáticas
-"""
-
 import os
 import time
+import re
 import json
 import random
 import logging
 import numpy as np
 from datetime import datetime
-from prometheus_client import (
-    Counter, Gauge, Histogram, start_http_server
-)
-from app.db_manager import load_history, insert_weights, get_conn
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+from .db_manager import load_history, insert_weights, get_conn
 
 # ============================================================
 # CONFIGURAÇÃO DE LOGGING
@@ -39,43 +29,67 @@ NSGA_EXECUTION_TIME = Histogram("nsga_execution_time_seconds", "Tempo de execuç
 NSGA_DB_ERRORS = Counter("nsga_db_errors_total", "Número de erros de conexão ou escrita no banco de dados.")
 
 # ============================================================
-# PARÂMETROS DO ALGORITMO NSGA-II
+# PARÂMETROS DO NSGA-II
 # ============================================================
-POP_SIZE = 100
-MAX_GEN = 25
+POP_SIZE = 200         # população ampliada
+MAX_GEN = 50           # número de gerações
 MUT_RATE = 0.15
 CROSS_RATE = 0.6
 EPS = 1e-6
-DEFAULT_THETA = [0.55, 0.25, 0.20]
 RETRY_DELAY = 15
 MAX_DB_RETRIES = 5
-SLEEP_BETWEEN_RUNS = 7200  # 2h
+SLEEP_BETWEEN_RUNS = 7200  # 2 horas entre ciclos
+
+# ============================================================
+# CONFIGURAÇÕES POR FAMÍLIA DE MODELO
+# ============================================================
+MODEL_FAMILIES = {
+    "phi": {"default_weights": [0.65, 0.20, 0.15], "cost_target": 0.002, "latency_target": 1.3, "token_key": "max_tokens"},
+    "deepseek": {"default_weights": [0.55, 0.25, 0.20], "cost_target": 0.005, "latency_target": 1.4, "token_key": "max_tokens"},
+    "llama": {"default_weights": [0.60, 0.25, 0.15], "cost_target": 0.008, "latency_target": 1.5, "token_key": "max_tokens"},
+    "mistral": {"default_weights": [0.58, 0.22, 0.20], "cost_target": 0.006, "latency_target": 1.1, "token_key": "max_tokens"},
+    "qwen": {"default_weights": [0.50, 0.30, 0.20], "cost_target": 0.009, "latency_target": 1.2, "token_key": "max_tokens"},
+    "gemma": {"default_weights": [0.57, 0.23, 0.20], "cost_target": 0.010, "latency_target": 1.0, "token_key": "max_tokens"},
+    "gpt": {"default_weights": [0.45, 0.35, 0.20], "cost_target": 0.12, "latency_target": 0.9, "token_key": "max_completion_tokens"},
+    "gemini": {"default_weights": [0.50, 0.30, 0.20], "cost_target": 0.15, "latency_target": 1.0, "token_key": "max_tokens"},
+    "default": {"default_weights": [0.55, 0.25, 0.20], "cost_target": 0.01, "latency_target": 1.5, "token_key": "max_tokens"},
+}
 
 # ============================================================
 # FUNÇÕES AUXILIARES
 # ============================================================
+def detect_model_family(model_name: str) -> str:
+    """
+    Identifica dinamicamente a família real do modelo (phi, llama, deepseek, gpt, gemini etc.)
+    mesmo quando servido via Ollama ou outro provedor.
+    """
+    if not model_name:
+        return "default"
+    model_name = model_name.lower()
+    for fam in MODEL_FAMILIES.keys():
+        if fam in model_name:
+            return fam
+    return "default"
+
 def _fitness(rewards: list[float]) -> float:
-    """Calcula fitness médio ponderado."""
-    rewards = np.array(rewards, dtype=np.float32)
-    return float(np.mean(rewards))
+    return float(np.mean(np.array(rewards, dtype=np.float32)))
 
 def _mutate(theta: list[float]) -> list[float]:
-    """Aplica mutação leve em um gene e renormaliza."""
-    theta = np.array(theta)
+    theta = np.array(theta, dtype=np.float32)
     i = random.randint(0, len(theta) - 1)
-    theta[i] = max(0, min(1, theta[i] + np.random.uniform(-0.1, 0.1)))
-    theta /= np.sum(theta)
+    theta[i] = max(0, min(1, float(theta[i] + np.random.uniform(-0.1, 0.1))))
+    s = float(np.sum(theta))
+    theta = theta / s if s > 0 else np.array([1/3, 1/3, 1/3], dtype=np.float32)
     return theta.tolist()
 
 def _crossover(p1: list[float], p2: list[float]) -> list[float]:
-    """Cruzamento linear simples entre dois indivíduos."""
-    α = np.random.rand()
-    child = α * np.array(p1) + (1 - α) * np.array(p2)
-    child /= np.sum(child)
+    a = float(np.random.rand())
+    child = a * np.array(p1, dtype=np.float32) + (1 - a) * np.array(p2, dtype=np.float32)
+    s = float(np.sum(child))
+    child = child / s if s > 0 else np.array([1/3, 1/3, 1/3], dtype=np.float32)
     return child.tolist()
 
 def _ensure_db_connection():
-    """Verifica e tenta reconectar ao banco de dados até MAX_DB_RETRIES vezes."""
     for attempt in range(1, MAX_DB_RETRIES + 1):
         try:
             with get_conn() as conn:
@@ -93,94 +107,128 @@ def _ensure_db_connection():
 # ============================================================
 # NÚCLEO DO NSGA-II
 # ============================================================
-def run_nsga():
+def run_nsga(model_name: str = "ollama/deepseek-r1:8b"):
     start_time = time.time()
-    logger.info("[nsga] Iniciando atualização de pesos...")
+    model_family = detect_model_family(model_name)
+    fam_cfg = MODEL_FAMILIES.get(model_family, MODEL_FAMILIES["default"])
 
-    # 1️⃣ Verifica conexão com o banco
+    logger.info(
+        f"[nsga] Iniciando ciclo para '{model_name}' | família={model_family} "
+        f"(token_key={fam_cfg['token_key']}, cost*={fam_cfg['cost_target']}, lat*={fam_cfg['latency_target']})"
+    )
+
+    # 1) Verifica DB
     if not _ensure_db_connection():
         logger.error("[nsga] Abortando ciclo por falta de conexão com o banco.")
         return
 
-    # 2️⃣ Carrega histórico do banco
+    # 2) Coleta de dados (métricas dinâmicas + fallback banco) — ROBUSTO
+    rewards: list[float] = []
     try:
-        history = load_history(limit=1000)
+        live_metrics = {}
+        try:
+            from .metrics_collector import get_snapshot
+            live_metrics = get_snapshot() or {}
+        except Exception as e:
+            logger.warning(f"[nsga] metrics_collector indisponível: {e}")
+
+        if live_metrics:
+            logger.info(f"[nsga] Coletando métricas dinâmicas de {len(live_metrics)} modelos...")
+            for _, m in live_metrics.items():
+                # qualidade alta e custos/latência baixos => reward maior
+                q = float(m.get("quality", 0.0))
+                l = float(m.get("latency", 0.0))
+                c = float(m.get("cost", 0.0))
+                reward = q / (1.0 + l + (c * 10.0))
+                rewards.append(reward)
+        else:
+            logger.warning("[nsga] Nenhuma métrica dinâmica disponível. Tentando histórico no banco...")
+            history = load_history(limit=1000) or []
+            rewards = [float(h["reward"]) for h in history if h and h.get("reward") is not None]
+
     except Exception as e:
         NSGA_DB_ERRORS.inc()
-        logger.error(f"[nsga] Erro ao carregar histórico do banco: {e}")
+        logger.error(f"[nsga] Erro ao coletar métricas ou histórico: {e}")
+        rewards = []
+
+    # 3) Validação de dados
+    if not rewards or len(rewards) < 10:
+        logger.warning(f"[nsga] Dados insuficientes para otimização ({len(rewards)} registros). Encerrando ciclo.")
         return
 
-    if not history:
-        logger.warning("[nsga] Nenhum dado disponível para otimização. Encerrando ciclo.")
-        return
-
-    # 3️⃣ Extrai recompensas válidas
-    rewards = [h["reward"] for h in history if h.get("reward") is not None]
-    if len(rewards) < 10:
-        logger.warning(f"[nsga] Histórico insuficiente ({len(rewards)} registros). Aguardando mais dados.")
-        return
-
-    # 4️⃣ Inicializa população aleatória
+    # 4) Inicialização da população
     population = [np.random.dirichlet(np.ones(3)).tolist() for _ in range(POP_SIZE)]
-    best_theta = DEFAULT_THETA
+    best_theta = fam_cfg["default_weights"]
     best_fit = -float("inf")
 
-    # 5️⃣ Loop de gerações
+    # 5) Loop evolutivo
     for gen in range(MAX_GEN):
         fitness_scores = []
-        for θ in population:
-            sim_rewards = [r * (θ[0] - θ[1]*0.2 - θ[2]*0.1) for r in rewards]
-            fit = _fitness(sim_rewards)
-            fitness_scores.append(fit)
+        for th in population:
+            # proxy simples de utilidade ponderada
+            sim_rewards = [r * (th[0] - th[1]*0.2 - th[2]*0.1) for r in rewards]
+            fitness_scores.append(_fitness(sim_rewards))
 
         mean_fit = float(np.mean(fitness_scores))
         best_idx = int(np.argmax(fitness_scores))
-
         if fitness_scores[best_idx] > best_fit + EPS:
             best_fit = fitness_scores[best_idx]
             best_theta = population[best_idx]
 
         logger.info(f"[nsga] Geração {gen+1}/{MAX_GEN} | Fit médio={mean_fit:.3f} | Melhor={best_fit:.3f}")
-
         NSGA_GENERATIONS.inc()
         NSGA_LAST_FITNESS.set(mean_fit)
 
-        # Evolução
+        # reprodução
         new_pop = []
         for _ in range(POP_SIZE // 2):
             p1, p2 = random.choices(population, k=2)
             c1, c2 = _crossover(p1, p2), _crossover(p2, p1)
-            if random.random() < MUT_RATE: c1 = _mutate(c1)
-            if random.random() < MUT_RATE: c2 = _mutate(c2)
+            if random.random() < MUT_RATE:
+                c1 = _mutate(c1)
+            if random.random() < MUT_RATE:
+                c2 = _mutate(c2)
             new_pop.extend([c1, c2])
         population = new_pop
 
-    # 6️⃣ Persiste pesos no banco
+    # 6) Persistência
     try:
-        insert_weights(best_theta, best_fit, MAX_GEN)
-        logger.info(f"[nsga] Pesos persistidos: θ={best_theta} | Fitness={best_fit:.4f}")
+        insert_weights(
+            best_theta, best_fit, MAX_GEN,
+            model_name=model_name,
+            model_family=model_family,
+            token_key=fam_cfg["token_key"]
+        )
+        logger.info(f"[nsga] Pesos persistidos para {model_name}({model_family}) | θ={best_theta} | Fitness={best_fit:.4f}")
     except Exception as e:
         NSGA_DB_ERRORS.inc()
         logger.error(f"[nsga] Falha ao gravar pesos otimizados: {e}")
-        return
 
-    # 7️⃣ Métricas finais
+    # 7) Métricas de execução
     elapsed = time.time() - start_time
     NSGA_LAST_UPDATE.set(elapsed)
     NSGA_EXECUTION_TIME.observe(elapsed)
     logger.info(f"[nsga] Atualização concluída em {elapsed:.2f}s ✅")
 
 # ============================================================
-# LOOP PRINCIPAL + SERVIDOR PROMETHEUS
+# LOOP PRINCIPAL
 # ============================================================
 if __name__ == "__main__":
-    logger.info("[nsga] Iniciando servidor Prometheus na porta 9999...")
+    logger.info("[nsga] Servidor Prometheus na porta 9999...")
     start_http_server(9999)
-    logger.info("[nsga] Servidor Prometheus ativo. Métricas disponíveis em /metrics")
 
     while True:
         try:
-            run_nsga()
+            # Execute para múltiplos “model identifiers” (provedor ≠ família)
+            for model in [
+                "ollama/deepseek-r1:8b",
+                "ollama/phi4",
+                "ollama/llama3:8b",
+                "openai/gpt-5-nano",
+                "gemini/gemini-2.0-flash",
+            ]:
+                run_nsga(model)
+                time.sleep(5)
         except Exception as e:
             logger.exception(f"[nsga] Erro inesperado no ciclo principal: {e}")
         logger.info(f"[nsga] Aguardando {SLEEP_BETWEEN_RUNS/3600:.1f}h para próxima execução...")

@@ -13,3 +13,4 @@ celery[redis]==5.4.0
 deap
 sentence-transformers
 pymysql
+PyMuPDF
