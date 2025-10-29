@@ -19,15 +19,22 @@ services:
       - JUDGES_MODE=${JUDGES_MODE}
       - JUDGE_USE_RAG=${JUDGE_USE_RAG}
       - CHROMA_TELEMETRY_ENABLED=false
-      - CHROMA_PATH=/data/chroma
-      - OLLAMA_BASE_URL=http://ollama:11434
       - EMBED_MODEL=nomic-embed-text
       - EMBED_DIM=768
       - RAG_TOP_K=3
+      - OLLAMA_SERVERS=http://ollama:11434
+      - OLLAMA_MAX_PARALLEL=2
+      - OLLAMA_TIMEOUT=90
+      - CHROMA_PATH=/data/chroma
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+           
     volumes:
       - ./state:/app/state
       - ./data:/app/data
-      - ./chromadb-data:/data
+      - ./chromadb-data:/data/chroma
+      - ./tmp_prom:/tmp/prom
     ports:
       - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
@@ -43,8 +50,11 @@ services:
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
       - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_NUM_PARALLEL=2          # controla quantas execuções paralelas o modelo aceita
+      - OLLAMA_KEEP_ALIVE=600          # mantém modelos quentes (segundos)
     volumes:
-      - ollama_data:/root/.ollama
+      - ./ollama_data:/root/.ollama     # cache persistente dos modelos
     gpus: all
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -72,9 +82,16 @@ services:
       context: .
       dockerfile: app/Dockerfile.nsga
     container_name: nsga_weights_updater
-    volumes:
-      - ./app:/app
-    restart: unless-stopped
+    command: ["python", "/app/app/nsga_weights_updater.py"]
+    ports:
+      - "8000:8000"  
+    environment:
+      DB_HOST: mariadb
+      DB_USER: router_user
+      DB_PASS: router_pass
+      DB_NAME: routerdb
+    depends_on:
+      - mariadb
     networks:
       - ai_net
 
@@ -178,11 +195,29 @@ services:
     networks:
       - ai_net
 
+  mariadb:
+    image: mariadb:11
+    container_name: mariadb_router
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: routerdb
+      MYSQL_USER: router_user
+      MYSQL_PASSWORD: router_pass
+    volumes:
+      - ./db/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+      - mariadb_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    networks:
+      - ai_net
+
 volumes:
   ollama_data:
   chroma_data:
   bandit_state:
   redis-data:
+  mariadb_data:
 
 networks:
   ai_net:

@@ -42,6 +42,9 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 # ==============================
 FROM deps AS runtime
 
+RUN mkdir -p /tmp/prom && chmod 777 /tmp/prom
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+
 WORKDIR /app
 
 # Define variáveis padrão

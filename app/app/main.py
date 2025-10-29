@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import PlainTextResponse
 
 from .settings import settings
-from .schemas import QueryRequest, QueryResponse, CandidateResult, JudgeScore, RouteDecision
+from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
 from .observability import *
 from .providers import _ensure_ollama_model
 from .router_core import route_and_answer
@@ -33,23 +33,25 @@ def metrics():
     return PlainTextResponse(generate_latest().decode("utf-8"))
 
 # ------------------------------------------------------
-# Warmup: garante modelos Ollama e prepara cache RAG
+# Rotina de warmup assíncrona
 # ------------------------------------------------------
 @app.on_event("startup")
 async def on_startup():
     async def _bg():
         try:
             logger.info("[warmup] Iniciando rotina de inicialização...")
-            # espere o redis ficar pronto (sem travar o processo eternamente)
+
+            # Espera Redis ficar pronto
             r = get_redis(max_wait_s=45)
             if r is None:
-                logger.warning("[warmup] Redis indisponível — seguirei sem cache/fila por enquanto.")
-            # 1️⃣ Garante que os modelos Ollama necessários estão presentes
+                logger.warning("[warmup] Redis indisponível — seguindo sem cache por enquanto.")
+
+            # 1️⃣ Garante modelos disponíveis no Ollama
             ollama_models = [
                 settings.OLLAMA_MODEL,
                 os.getenv("EMBED_MODEL", "nomic-embed-text"),
                 "phi4",
-                "deepseek-r1:8b"
+                "deepseek-r1:8b",
             ]
             for model in ollama_models:
                 try:
@@ -57,13 +59,13 @@ async def on_startup():
                 except Exception as e:
                     logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
 
-            # 2️⃣ Inicializa um pequeno documento base para o RAG local
+            # 2️⃣ Adiciona documento base no RAG
             add_document(
                 "intro",
                 "NSGA-II is a multi-objective evolutionary algorithm used for Pareto optimization."
             )
 
-            # 3️⃣ Faz algumas chamadas de exemplo para aquecer o cache
+            # 3️⃣ Executa requisições de teste (await async)
             samples = [
                 "Explique em 3 tópicos o que é NSGA-II e onde é aplicado.",
                 "Escreva um snippet Python que lê um CSV e calcula a média de uma coluna.",
@@ -71,8 +73,8 @@ async def on_startup():
             ]
             for s in samples:
                 try:
-                    _ = route_and_answer(s)
-                    logger.info(f"[warmup] Execução de teste concluída para: '{s[:40]}...'")
+                    _ = await route_and_answer(s)
+                    logger.info(f"[warmup] Execução de teste concluída: '{s[:40]}...'")
                 except Exception as e:
                     logger.warning(f"[warmup] Falha no teste de prompt: {e}")
 
@@ -93,10 +95,10 @@ async def route_query(req: QueryRequest):
     logger.info(f"[query] Nova requisição recebida: '{req.query[:80]}...'")
 
     try:
-        result = route_and_answer(
+        result = await route_and_answer(
             query=req.query,
-            system_prompt=req.system_prompt,
-            use_rag=req.enable_rag_for_answer,
+            system_prompt=getattr(req, "system_prompt", ""),
+            use_rag=getattr(req, "enable_rag_for_answer", False),
         )
     except Exception as e:
         logger.exception(f"[router] Erro interno durante o roteamento: {e}")
@@ -120,7 +122,7 @@ async def route_query(req: QueryRequest):
     CANDIDATE_COST.observe(cost)
     CANDIDATE_LAT.observe(latency)
 
-    # Monta saída compatível com o schema original
+    # Monta saída compatível
     route = RouteDecision(
         chosen_model=chosen_model or "cached",
         objectives={"cost": cost, "latency": latency, "neg_quality": max(0.0, 10.0 - quality)},
@@ -135,7 +137,7 @@ async def route_query(req: QueryRequest):
         prompt_tokens=0,
         completion_tokens=0,
         estimated_cost_usd=cost,
-        judge_scores=[],  # juízes tratados separadamente
+        judge_scores=[],
         quality_score=quality,
     )
 
@@ -166,7 +168,7 @@ async def update_judges(models: List[str], x_admin_token: str = Header(None)):
     return settings.JUDGE_MODELS
 
 # ------------------------------------------------------
-# Healthcheck simples
+# Healthcheck
 # ------------------------------------------------------
 @app.get("/health")
 def health():

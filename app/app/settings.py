@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------
     OLLAMA_MODEL: str = Field(default="phi4:latest", description="Modelo local via Ollama")
     COMMERCIAL_MODEL_1: str = Field(default="gemini-2.5-flash-lite", description="Modelo comercial 1")
-    COMMERCIAL_MODEL_2: str = Field(default="gemini-2.5-flash", description="Modelo comercial 2")
+    COMMERCIAL_MODEL_2: str = Field(default="openai/gpt-5-nano", description="Modelo comercial 2")
 
     # ------------------------------------------------------
     # Bases de API
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Parâmetros de controle
     # ------------------------------------------------------
     QUALITY_MIN: float = Field(default=6.5, description="Qualidade mínima para considerar um modelo bom")
-    MAX_TOKENS: int = Field(default=2048, description="Limite máximo de tokens por requisição")
+    MAX_TOKENS: int = Field(default=4096, description="Limite máximo de tokens por requisição")
     ENABLE_RAG_FOR_JUDGES: bool = Field(default=True, description="Ativa o uso de contexto RAG nos juízes")
     # ------------------------------------------------------
     # Juízes / avaliação de qualidade

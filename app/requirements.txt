@@ -12,3 +12,4 @@ deap==1.4.1
 celery[redis]==5.4.0
 deap
 sentence-transformers
+pymysql

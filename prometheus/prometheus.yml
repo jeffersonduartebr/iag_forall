@@ -17,3 +17,10 @@ scrape_configs:
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]
+
+  # -----------------------------------
+  # Coleta do NSGA Updater
+  # -----------------------------------
+  - job_name: 'nsga_updater'
+    static_configs:
+      - targets: ['nsga_updater:8000']

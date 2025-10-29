@@ -1,5 +1,21 @@
 import structlog
-from prometheus_client import Counter, Histogram, Gauge, generate_latest
+import os
+
+import os
+from prometheus_client import (
+    Counter,
+    Histogram,
+    Gauge,
+    CollectorRegistry,
+    generate_latest,
+    multiprocess
+)
+
+
+if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+    for f in os.listdir(os.environ["PROMETHEUS_MULTIPROC_DIR"]):
+        os.remove(os.path.join(os.environ["PROMETHEUS_MULTIPROC_DIR"], f))
+
 
 logger = structlog.get_logger()
 
