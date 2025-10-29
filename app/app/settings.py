@@ -42,7 +42,7 @@ class Settings(BaseSettings):
         default_factory=lambda: [
             "phi4:latest",
             "ollama/deepseek-r1:1.5b",
-            "gemini-2.5-flash",
+            "gemini-2.0-flash",
         ],
         description="Lista de modelos LLM usados como juízes"
     )
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     COSTS_USD_PER_1K_DEFAULT: ClassVar[Dict[str, float]] = {
         "phi4:latest": 0.001,
         "gemini-2.5-flash-lite": 0.15,
-        "gemini-2.5-flash": 0.25,
+        "gemini-2.0-flash": 0.15,
         "deepseek-r1:1.5b": 0.002,
         "openai/gpt-5-nano": 0.1,
     }

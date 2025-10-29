@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 CANDIDATE_MODELS = [
     "ollama/deepseek-r1:8b",
     "ollama/phi4",
-    "gemini/gemini-2.5-flash-lite",
+    "ollama/deepseek-r1:1.5b",
 ]
 
 # Modelos proibidos (embedding, não devem ser usados para texto)

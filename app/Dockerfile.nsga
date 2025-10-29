@@ -1,12 +1,27 @@
+# ===========================================================
+# Dockerfile.nsga
+# Serviço autônomo para otimização dos pesos NSGA-II
+# ===========================================================
+
 FROM python:3.11-slim
 
-# Instala dependências essenciais
+# 1️⃣ Dependências básicas
 RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
 
-# Instala pacotes Python necessários
-RUN pip install --no-cache-dir numpy scipy prometheus_client sqlalchemy psycopg2-binary pymysql
+# 2️⃣ Pacotes Python necessários
+RUN pip install --no-cache-dir numpy scipy prometheus_client sqlalchemy psycopg2-binary pymysql --quiet
 
+# 3️⃣ Diretório de trabalho
 WORKDIR /app
-COPY . /app
 
-CMD ["bash", "-c", "while true; do python /app/app/nsga_weights_updater.py; sleep 7200; done"]
+# 4️⃣ Copia código da aplicação
+COPY ./app /app
+
+# 5️⃣ Garante que o pacote Python é válido
+RUN touch /app/__init__.py
+
+# 6️⃣ Apenas para depuração (opcional)
+RUN ls -la /app
+
+# ✅ 7️⃣ Executa o módulo correto (sem .py)
+ENTRYPOINT ["bash", "-c", "while true; do python -m app.nsga_weights_updater; echo '[nsga] Ciclo concluído. Aguardando 2h...'; sleep 7200; done"]

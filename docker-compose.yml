@@ -82,9 +82,9 @@ services:
       context: .
       dockerfile: app/Dockerfile.nsga
     container_name: nsga_weights_updater
-    command: ["python", "/app/app/nsga_weights_updater.py"]
+    #command: ["python", "/app/app/nsga_weights_updater.py"]
     ports:
-      - "8000:8000"  
+      - "9999:9999"  
     environment:
       DB_HOST: mariadb
       DB_USER: router_user
@@ -94,6 +94,7 @@ services:
       - mariadb
     networks:
       - ai_net
+    restart: unless-stopped   
 
   prometheus:
     image: prom/prometheus:latest
