@@ -18,7 +18,12 @@ services:
       - ENABLE_RAG_FOR_JUDGES=${ENABLE_RAG_FOR_JUDGES}
       - JUDGES_MODE=${JUDGES_MODE}
       - JUDGE_USE_RAG=${JUDGE_USE_RAG}
-      - CHROMA_PATH=/data
+      - CHROMA_TELEMETRY_ENABLED=false
+      - CHROMA_PATH=/data/chroma
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - EMBED_MODEL=nomic-embed-text
+      - EMBED_DIM=768
+      - RAG_TOP_K=3
     volumes:
       - ./state:/app/state
       - ./data:/app/data
@@ -56,13 +61,22 @@ services:
         ollama list >/dev/null 2>&1 && break;
         echo '... ainda iniciando';
       done;
-      ollama pull phi4 deepseek-r1:8b || true;
+      ollama pull phi4 ; ollama pull deepseek-r1:8b ; ollama pull nomic-embed-text || true;
       wait
       "
     networks:
       - ai_net
       
-
+  nsga_updater:
+    build:
+      context: .
+      dockerfile: app/Dockerfile.nsga
+    container_name: nsga_weights_updater
+    volumes:
+      - ./app:/app
+    restart: unless-stopped
+    networks:
+      - ai_net
 
   prometheus:
     image: prom/prometheus:latest
@@ -148,6 +162,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - ai_net
 
   worker:
     build:
@@ -159,7 +175,8 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://:SenhaForte@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:SenhaForte@redis:6379/1
-
+    networks:
+      - ai_net
 
 volumes:
   ollama_data:

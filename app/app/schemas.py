@@ -1,5 +1,14 @@
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+
+class QueryRequest(BaseModel):
+    query: str
+    enable_rag_for_answer: bool = False
+    max_tokens: int = 512
+    temperature: float = 0.5
+    system_prompt: Optional[str] = None 
+
 
 class JudgeScore(BaseModel):
     judge_id: str
@@ -21,12 +30,6 @@ class RouteDecision(BaseModel):
     objectives: Dict[str, float]
     pareto_front: List[Dict[str, Any]] = []
     explanation: str = ""
-
-class QueryRequest(BaseModel):
-    query: str
-    enable_rag_for_answer: bool = False
-    max_tokens: int = 256
-    temperature: float = 0.2
 
 class QueryResponse(BaseModel):
     answer: str

@@ -1,76 +1,91 @@
-# app/providers.py
-import time
+# providers.py
 import logging
-from typing import Optional, Tuple, Dict, Any
+import requests
 from litellm import completion
-from .settings import settings
-from .semantic_cache import sem_cache_get, sem_cache_put
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-def _llm_call_kwargs(model: str, prompt: str, *, max_tokens: int, temperature: float, api_base: Optional[str]) -> Dict[str, Any]:
+# Configuração do Ollama local
+OLLAMA_BASE_URL = "http://ollama:11434"
+
+
+# ---------------------------------------------------------
+# Função auxiliar: garantir que o modelo Ollama esteja presente
+# ---------------------------------------------------------
+def _ensure_ollama_model(model_name: str):
     """
-    Monta kwargs para LiteLLM.completion considerando ollama/X e base_url.
+    Garante que o modelo Ollama esteja disponível localmente.
+    Se não existir, realiza automaticamente o 'pull' via API REST.
     """
-    messages = [{"role": "user", "content": prompt}]
-    kwargs: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-
-    # Se for ollama, liteLLM espera `model="ollama/<nome>"`
-    if model == settings.OLLAMA_MODEL or model.startswith("ollama/"):
-        m = model if model.startswith("ollama/") else f"ollama/{model}"
-        kwargs["model"] = m
-        if api_base:  # aponta pro servidor do Ollama
-            kwargs["api_base"] = api_base
-
-    return kwargs
-
-def safe_call_model(model: str, prompt: str, *, max_tokens: int, temperature: float, api_base: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
-    """
-    Chamada robusta:
-      - cache semântico antes/depois
-      - normalização do meta
-      - logs
-    """
-    # Cache semântico
-    cached = sem_cache_get(prompt, model, temperature, max_tokens)
-    if cached is not None:
-        logger.info(f"[providers] Cache HIT para modelo={model}")
-        meta = {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "latency_s": 0.0, "cached": True}
-        return cached, meta
-
-    start = time.time()
     try:
-        kwargs = _llm_call_kwargs(
-            model=model,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            api_base=api_base,
-        )
-        resp = completion(**kwargs)
+        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
+        if resp.status_code == 200:
+            models = resp.json().get("models", [])
+            available = [m["name"] for m in models]
+            if model_name in available:
+                logger.info(f"[Ollama] Modelo '{model_name}' já presente localmente.")
+                return
 
-        # LiteLLM pode retornar dict-like; padroniza extração
-        text = resp.choices[0].message["content"]
-        usage_obj = getattr(resp, "usage", None) or {"prompt_tokens": 0, "completion_tokens": 0}
-        pt = getattr(usage_obj, "prompt_tokens", None) if hasattr(usage_obj, "prompt_tokens") else usage_obj.get("prompt_tokens", 0)
-        ct = getattr(usage_obj, "completion_tokens", None) if hasattr(usage_obj, "completion_tokens") else usage_obj.get("completion_tokens", 0)
+        # Caso o modelo não esteja presente, faz o pull
+        logger.info(f"[Ollama] Modelo '{model_name}' ausente. Iniciando download...")
+        pull = requests.post(f"{OLLAMA_BASE_URL}/api/pull", json={"name": model_name}, timeout=600)
 
-        latency = time.time() - start
-        meta = {"usage": {"prompt_tokens": pt or 0, "completion_tokens": ct or 0}, "latency_s": latency}
+        if pull.status_code == 200:
+            logger.info(f"[Ollama] Pull concluído para '{model_name}'.")
+        else:
+            logger.warning(f"[Ollama] Falha ao baixar '{model_name}': {pull.text}")
+    except Exception as e:
+        logger.error(f"[Ollama] Erro ao verificar/baixar modelo '{model_name}': {e}")
 
-        logger.info(f"[providers] Modelo={kwargs['model']} | Tokens={meta['usage']} | Latência={latency:.2f}s")
 
-        # Cache put
-        sem_cache_put(prompt, text, model, temperature, max_tokens)
+# ---------------------------------------------------------
+# Função principal: chamada segura a modelos LLM
+# ---------------------------------------------------------
+def call_model(
+    model: str,
+    prompt: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    api_base: str = None
+):
+    """
+    Executa chamada segura a um modelo (Ollama ou remoto via LiteLLM).
+    Suporta fallback automático: se o modelo for local e não estiver baixado, faz pull.
+    """
+    try:
+        # Detecta se é um modelo local do Ollama (tem ':' ou corresponde ao modelo local configurado)
+        is_ollama = (":" in model) or (api_base and "ollama" in api_base)
+
+        if is_ollama:
+            _ensure_ollama_model(model)
+            base_url = api_base or OLLAMA_BASE_URL
+
+            resp = completion(
+                model=model,  # exemplo: "phi4", "deepseek-r1:8b", "nomic-embed-text"
+                messages=[{"role": "user", "content": prompt}],
+                api_base=base_url,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        else:
+            # Modelos comerciais (OpenAI, Gemini, etc.)
+            resp = completion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+        text = resp["choices"][0]["message"]["content"]
+
+        meta = {
+            "usage": resp.get("usage", {}),
+            "latency_s": resp.get("latency", 0.0),
+            "provider": "ollama" if is_ollama else "remote",
+        }
+
         return text, meta
 
     except Exception as e:
-        logger.error(f"[providers] Erro ao chamar modelo {model}: {e}")
-        # Resposta controlada
-        return "Desculpe, não consegui gerar uma resposta agora.", {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "latency_s": 0.0}
+        logger.error(f"[providers] Falha ao chamar modelo '{model}': {e}")
+        return f"[Erro ao chamar modelo {model}]", {"usage": {}, "latency_s": 0.0}

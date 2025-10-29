@@ -1,0 +1,17 @@
+{
+  "timestamp": "2025-10-28T23:11:36.388557",
+  "bandit_stats": {
+    "phi4": {
+      "avg_reward": 0.259,
+      "count": 64
+    },
+    "gemini/gemini-2.5-flash-lite": {
+      "avg_reward": -0.5276,
+      "count": 25
+    },
+    "gemini/gemini-2.5-flash": {
+      "avg_reward": 0.2479,
+      "count": 39
+    }
+  }
+}

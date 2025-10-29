@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+# Instala dependências essenciais
+RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+
+# Instala pacotes Python necessários
+RUN pip install --no-cache-dir numpy scipy
+
+WORKDIR /app
+COPY . /app
+
+CMD ["bash", "-c", "while true; do python /app/app/nsga_weights_updater.py; sleep 7200; done"]

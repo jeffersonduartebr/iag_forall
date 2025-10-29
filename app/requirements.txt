@@ -10,4 +10,5 @@ chromadb==0.5.5
 numpy==1.26.4
 deap==1.4.1
 celery[redis]==5.4.0
-
+deap
+sentence-transformers
