@@ -3,7 +3,7 @@
 Serviço NSGA-II autônomo para otimização dos pesos de recompensa do router.
 Agora inclui:
 ✅ Integração com MariaDB
-✅ Servidor Prometheus embutido (porta 8000)
+✅ Servidor Prometheus embutido (porta 9999)
 ✅ Resiliência e logging estruturado
 ✅ Atualizações periódicas automáticas
 """
@@ -174,8 +174,8 @@ def run_nsga():
 # LOOP PRINCIPAL + SERVIDOR PROMETHEUS
 # ============================================================
 if __name__ == "__main__":
-    logger.info("[nsga] Iniciando servidor Prometheus na porta 8000...")
-    start_http_server(8000)
+    logger.info("[nsga] Iniciando servidor Prometheus na porta 9999...")
+    start_http_server(9999)
     logger.info("[nsga] Servidor Prometheus ativo. Métricas disponíveis em /metrics")
 
     while True:

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Modelos
     # ------------------------------------------------------
     OLLAMA_MODEL: str = Field(default="phi4:latest", description="Modelo local via Ollama")
-    COMMERCIAL_MODEL_1: str = Field(default="gemini-2.5-flash-lite", description="Modelo comercial 1")
+    COMMERCIAL_MODEL_1: str = Field(default="deepseek-r1:1.5b", description="Modelo comercial 1")
     COMMERCIAL_MODEL_2: str = Field(default="openai/gpt-5-nano", description="Modelo comercial 2")
 
     # ------------------------------------------------------
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     JUDGE_MODELS: list[str] = Field(
         default_factory=lambda: [
             "phi4:latest",
-            "ollama/deepseek-r1:8b",
+            "ollama/deepseek-r1:1.5b",
             "gemini-2.5-flash",
         ],
         description="Lista de modelos LLM usados como juízes"
@@ -56,6 +56,8 @@ class Settings(BaseSettings):
         "phi4:latest": 0.001,
         "gemini-2.5-flash-lite": 0.15,
         "gemini-2.5-flash": 0.25,
+        "deepseek-r1:1.5b": 0.002,
+        "openai/gpt-5-nano": 0.1,
     }
 
     COSTS_USD_PER_1K: Dict[str, float] = Field(default_factory=dict)

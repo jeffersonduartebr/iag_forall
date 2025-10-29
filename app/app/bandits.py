@@ -49,28 +49,19 @@ def select_model(candidates: List[str], query: str) -> str:
     return choice
 
 def update_model(model: str, query: str, reward: float, **kwargs) -> float:
+    """Atualiza o valor médio estimado do modelo via EMA e salva no banco."""
     prev = _bandit_state.get(model, 0.0)
-    ema = (1 - ALPHA) * prev + ALPHA * reward
-    _bandit_state[model] = ema
+    _bandit_state[model] = (1 - ALPHA) * prev + ALPHA * float(reward)
 
-    entry = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "model": model,
-        "reward": reward,
-        "ema": ema,
-        "latency_s": kwargs.get("latency_s", 0),
-        "quality": kwargs.get("quality", 0),
-        "cost_usd": kwargs.get("cost_usd", 0),
-        "query_sample": query[:80],
-    }
-
+    # Persistência no banco + fallback JSON
     try:
-        insert_history(entry)
-    except Exception as e:
-        logger.error(f"[bandit] Falha ao gravar no banco: {e}")
+        insert_history(model, float(reward), float(_bandit_state[model]), (query or "")[:80])
+    except Exception as db_err:
+        logger.error(f"[bandit] Falha ao gravar no banco: {db_err}")
 
-    logger.info(f"[bandit] Modelo {model} atualizado | reward={reward:.3f} | média={ema:.3f}")
-    return ema
+    logger.info(f"[bandit] Modelo {model} atualizado | reward={reward:.3f} | média={_bandit_state[model]:.3f}")
+    return _bandit_state[model]
+
 
 def bandit_update(model: str, query: str, reward: float, **kwargs) -> float:
     return update_model(model, query, reward, **kwargs)
