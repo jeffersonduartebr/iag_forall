@@ -4,14 +4,43 @@ import requests
 import re
 from time import sleep
 from litellm import completion
-from litellm.exceptions import APIConnectionError, ServiceUnavailableError
+import litellm
 import os
+from prometheus_client import Histogram
+
 logger = logging.getLogger(__name__)
 
-# Base do Ollama
-OLLAMA_BASE_URL = "http://ollama:11434"
+# -------------------------------------------------------------------
+# Configurações globais
+# -------------------------------------------------------------------
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 
-# Modelos válidos (geração de texto)
+try:
+    # Custo de $0.15 / 1k tokens (de settings.py) = $0.00015 / 1 token
+    gemini_cost = 0.00015
+    
+    litellm.register_model({
+        "model_name": "gemini-2.0-flash",
+        "litellm_provider": "gemini", # Informa ao litellm qual API usar
+        "input_cost_per_token": gemini_cost,
+        "output_cost_per_token": gemini_cost,
+        "max_tokens": 8192, # Um valor de fallback seguro
+        "model_info": { # Informações adicionais
+            "base_model": "gemini-2.0-flash"
+        }
+    })
+    logger.info("[providers] Modelo customizado 'gemini-2.0-flash' registrado no LiteLLM.")
+
+except Exception as e:
+    logger.warning(f"[providers] Falha ao registrar modelo customizado no LiteLLM: {e}")
+
+# Métrica Prometheus para custo
+MODEL_COST_USD = Histogram(
+    "model_cost_usd",
+    "Custo estimado por requisição",
+    ["model"],
+)
+
 TEXT_MODEL_WHITELIST = {
     "ollama/phi4",
     "ollama/deepseek-r1:8b",
@@ -20,9 +49,7 @@ TEXT_MODEL_WHITELIST = {
     "ollama/gemma3:4b-it-qat",
 }
 
-# Modelos de embedding (proibidos para geração)
 EMBED_MODEL_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")
-
 
 # -------------------------------------------------------------------
 # Garante que o modelo do Ollama esteja disponível localmente
@@ -53,59 +80,40 @@ def _ensure_ollama_model(model_name: str):
     except Exception as e:
         logger.error(f"[Ollama] Erro durante verificação/pull: {e}")
 
-
 # -------------------------------------------------------------------
 # Chamada segura ao modelo via LiteLLM
 # -------------------------------------------------------------------
-def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: int = 1024, api_base: str = None):
+def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: int = 1024, api_base: str = OLLAMA_BASE_URL):
     """
     Chama modelo com validação e tratamento de falhas.
-    Agora compatível com modelos GPT-5 / GPT-4o-mini / GPT-5-nano,
-    que usam 'max_completion_tokens' ao invés de 'max_tokens'.
+    Compatível com GPT-5 / GPT-4o-mini / GPT-5-nano / Ollama / Gemini.
     """
 
-    # Validação básica
     if not model or not isinstance(model, str):
         raise ValueError(f"[providers] Modelo inválido: {model!r}")
 
     if any(model.startswith(prefix) for prefix in EMBED_MODEL_PREFIXES):
         raise ValueError(f"[providers] Modelo '{model}' é de embedding e não suporta geração.")
 
-    # Identificação do tipo de modelo
     is_ollama = model.startswith("ollama/") or ":" in model
     model_clean = model.replace("ollama/", "")
+    base_url = api_base or OLLAMA_BASE_URL if is_ollama else None
+    logger.debug(f"[providers] Usando base_url={base_url}")
 
-    # Define URL base segura (usa o container "ollama" e não localhost)
-    base_url = None
-    if is_ollama:
-        base_url = api_base or os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    logger.debug(f"[providers] Usando Ollama base_url={base_url}")
-
-
-
-    # 3️⃣ Verifica se o modelo é da nova geração OpenAI
     use_new_param = bool(re.search(r"gpt-5|gpt-4o-mini|nano", model))
 
-    # 4️⃣ Configura parâmetros da chamada
-    if use_new_param:
-        params = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 1,
-        }
-    else:
-        params = {
-            "model": f"ollama/{model_clean}" if is_ollama else model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-        }
+    params = {
+        "model": f"ollama/{model_clean}" if is_ollama else model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 1 if use_new_param else temperature,
+        "api_base": base_url,
+    }
 
     if use_new_param:
         params["max_completion_tokens"] = max_tokens
     else:
         params["max_tokens"] = max_tokens
 
-    # 5️⃣ Re-tentativas com fallback
     retries = 3
     delay = 3
     for attempt in range(1, retries + 1):
@@ -117,12 +125,34 @@ def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: in
                 "latency_s": resp.get("latency", 0.0),
                 "provider": "ollama" if is_ollama else "remote",
             }
+
+            # Exporta métrica Prometheus (quando disponível)
+            if "usage" in meta and "total_tokens" in meta["usage"]:
+                MODEL_COST_USD.labels(model=model).observe(meta["usage"]["total_tokens"] / 1000.0 * 0.001)
+
             return text, meta
 
         except Exception as e:
-            # Fallback automático para erro de parâmetro inválido
+            # Modelos sem custo mapeado
+            if "isn't mapped yet" in str(e):
+                logger.warning(
+                    f"[LiteLLM] Modelo '{model}' ainda não está mapeado no cost_calculator. "
+                    f"Aplicando custo padrão local."
+                )
+                MODEL_COST_USD.labels(model=model).observe(0.00015)  # custo estimado
+                return (
+                    "[Aviso: modelo sem custo mapeado — custo estimado localmente.]",
+                    {
+                        "usage": {},
+                        "latency_s": 6.0,
+                        "provider": "gemini",
+                        "cost_per_1k": 0.15,
+                    },
+                )
+
+            # Erro de parâmetro incompatível
             if "unsupported_parameter" in str(e) or "max_tokens" in str(e):
-                logger.warning(f"[providers] Parâmetro incompatível detectado para {model}. Retentando com chave alternativa.")
+                logger.warning(f"[providers] Parâmetro incompatível para {model}. Retentando com chave alternativa.")
                 if "max_tokens" in params:
                     params.pop("max_tokens", None)
                     params["max_completion_tokens"] = max_tokens
@@ -132,24 +162,11 @@ def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: in
                 sleep(1)
                 continue
 
-            # Modelos sem custo mapeado
-            if "isn't mapped yet" in str(e):
-                logger.warning(
-                    f"[LiteLLM] Modelo '{model}' ainda não está mapeado no cost_calculator. "
-                    f"Aplicando custo padrão local definido em bandits.py."
-                )
-                return (
-                    "[Aviso] Modelo sem custo mapeado.",
-                    {"usage": {}, "latency_s": 0.0, "provider": "remote"},
-                )
-
-            # Erros genéricos
             logger.error(f"[providers] Falha tentativa {attempt}/{retries} para modelo {model}: {e}")
             if attempt < retries:
                 sleep(delay)
                 continue
             raise
 
-    # 6️⃣ Fallback final
     logger.error(f"[providers] Todas as tentativas falharam para {model}.")
     return "[Erro: todas as tentativas falharam]", {"latency_s": 0.0, "provider": "remote"}

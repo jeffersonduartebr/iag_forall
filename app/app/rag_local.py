@@ -4,13 +4,15 @@ import os as _os
 _os.environ.setdefault("CHROMA_TELEMETRY_ENABLED", "false")
 
 import logging
-import requests
+import asyncio  # 👈 Adicionado
 from typing import List, Dict, Any, Optional
 
 # ✦ API NOVA do Chroma
 import chromadb
-from chromadb.api.types import Documents, EmbeddingFunction
+from chromadb.api.types import Documents
 from chromadb import PersistentClient
+
+from app.embeddings import embed_text  # 👈 Adicionado
 
 logger = logging.getLogger(__name__)
 
@@ -20,43 +22,20 @@ EMBED_MODEL = _os.getenv("EMBED_MODEL", "nomic-embed-text")
 TOP_K = int(_os.getenv("RAG_TOP_K", "3"))
 EMBED_DIM_DEFAULT = int(_os.getenv("EMBED_DIM", "768"))
 
-class OllamaEmbeddingFunction(EmbeddingFunction[Documents]):
-    def __init__(self, model: str = EMBED_MODEL, base_url: str = OLLAMA_BASE_URL, timeout: int = 60):
-        self.model = model
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        outputs: List[List[float]] = []
-        for text in input:
-            try:
-                r = requests.post(
-                    f"{self.base_url}/api/embeddings",
-                    json={"model": self.model, "prompt": text},
-                    timeout=self.timeout,
-                )
-                r.raise_for_status()
-                data = r.json()
-                vec = data.get("embedding")
-                if not isinstance(vec, list):
-                    raise ValueError("Ollama embeddings: campo 'embedding' ausente/inesperado.")
-                outputs.append(vec)
-            except Exception as e:
-                logger.error(f"[RAG] Falha ao gerar embedding via Ollama: {e}")
-                outputs.append([0.0] * EMBED_DIM_DEFAULT)
-        return outputs
+# 
+# ❌ CLASSE OllamaEmbeddingFunction REMOVIDA
+#
 
 # --- Inicialização segura do Chroma (API nova) ---
 try:
     _os.makedirs(CHROMA_PATH, exist_ok=True)
-    chroma_client = PersistentClient(path=CHROMA_PATH)   # <<<< API NOVA
-    embed_fn = OllamaEmbeddingFunction()
-
-    # get_or_create_collection com embedding_function
+    chroma_client = PersistentClient(path=CHROMA_PATH)
+    
+    # get_or_create_collection SEM embedding_function
     collection = chroma_client.get_or_create_collection(
         name="docs",
         metadata={"hnsw:space": "cosine"},
-        embedding_function=embed_fn,  # assinatura nova aceita objeto chamável
+        # embedding_function=embed_fn, # 👈 Removido
     )
     logger.info("[RAG] Chroma (PersistentClient) e coleção 'docs' inicializados.")
 except Exception as e:
@@ -64,37 +43,73 @@ except Exception as e:
     chroma_client = None
     collection = None
 
-def add_document(doc_id: str, text: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+# --- Funções auxiliares síncronas para to_thread ---
+
+def _add_document_sync(doc_id: str, text: str, embedding: list, metadata: Optional[Dict[str, Any]] = None):
+    """Função síncrona auxiliar para escrita em disco."""
+    if collection is None:
+        raise RuntimeError("[RAG] Coleção Chroma indisponível.")
+    
+    collection.add(
+        ids=[doc_id],
+        documents=[text],
+        embeddings=[embedding],  # 👈 Passa o embedding manualmente
+        metadatas=[metadata or {"source": "warmup"}],
+    )
+    if hasattr(chroma_client, "persist"):
+        chroma_client.persist()
+
+def _query_sync(embedding: list) -> Optional[dict]:
+    """Função síncrona auxiliar para consulta de disco."""
+    if collection is None:
+        logger.error("[RAG] Coleção Chroma indisponível.")
+        return None
+    
+    # 👈 Usa query_embeddings em vez de query_texts
+    return collection.query(query_embeddings=[embedding], n_results=TOP_K)
+
+# --- Funções públicas assíncronas ---
+
+async def add_document(doc_id: str, text: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    # 👈 Convertido para async def
     if collection is None:
         logger.error("[RAG] Coleção Chroma indisponível (falha de inicialização).")
         return False
     try:
-        collection.add(
-            ids=[doc_id],
-            documents=[text],
-            metadatas=[metadata or {"source": "warmup"}],  # ✅ mínimo: dict não vazio
-        )
+        # 1. Gera embedding de forma assíncrona
+        embedding = await embed_text(text)
 
-        # Persistente no PersistentClient é automático, mas manter é ok:
-        if hasattr(chroma_client, "persist"):
-            chroma_client.persist()
+        # 2. Adiciona ao Chroma em um thread separado (I/O de disco)
+        await asyncio.to_thread(
+            _add_document_sync,
+            doc_id, text, embedding, metadata
+        )
+        
         logger.info(f"[RAG] Documento '{doc_id}' adicionado.")
         return True
     except Exception as e:
         logger.error(f"[RAG] Falha ao adicionar documento '{doc_id}': {e}")
         return False
 
-def build_augmented_prompt(query: str) -> str:
+async def build_augmented_prompt(query: str) -> str:
+    # 👈 Convertido para async def
     if not query:
         return ""
     if collection is None:
         logger.warning("[RAG] Coleção indisponível; retornando query sem contexto.")
         return query
     try:
-        res = collection.query(query_texts=[query], n_results=TOP_K)
+        # 1. Gera embedding de forma assíncrona
+        embedding = await embed_text(query)
+
+        # 2. Consulta o Chroma em um thread separado (I/O de disco)
+        res = await asyncio.to_thread(_query_sync, embedding)
+
+        # 3. Processa resultados (lógica original)
         docs = (res or {}).get("documents", [[]])
         top_docs: List[str] = docs[0] if docs and isinstance(docs[0], list) else []
         context = "\n\n".join(top_docs[:TOP_K])
+        
         if not context.strip():
             return query
         return (
@@ -108,11 +123,8 @@ def build_augmented_prompt(query: str) -> str:
         logger.error(f"[RAG] Falha na consulta de contexto: {e}")
         return query
 
-
 def health() -> Dict[str, Any]:
-    """
-    Retorna informações básicas de saúde do módulo RAG.
-    """
+    # ... (função original está OK) ...
     return {
         "chroma_ready": collection is not None,
         "path": CHROMA_PATH,

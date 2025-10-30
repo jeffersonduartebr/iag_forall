@@ -150,7 +150,7 @@ def gather_documents(folder: str) -> dict[str, list[str]]:
 # ============================================================
 # 🧩 POPULAÇÃO DO VECTORSTORE
 # ============================================================
-def populate_vectorstore():
+async def populate_vectorstore():
     """Gera embeddings e insere documentos no ChromaDB."""
     logger.info(f"[populate] Iniciando população da coleção '{COLLECTION_NAME}'...")
     all_docs = gather_documents(DATA_DIR)
@@ -168,7 +168,7 @@ def populate_vectorstore():
 
         for frag in fragments:
             try:
-                emb = embed_text(frag)
+                emb = await embed_text(frag)
                 doc_id = str(uuid.uuid4())
                 insert_embedding(COLLECTION_NAME, doc_id, frag, emb)
                 total_fragments += 1

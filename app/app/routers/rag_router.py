@@ -125,7 +125,7 @@ async def add_doc(file: UploadFile = File(...)):
 
         for frag in fragments:
             try:
-                emb = embed_text(frag)
+                emb = await embed_text(frag)
                 doc_id = str(uuid.uuid4())
                 insert_embedding(COLLECTION_NAME, doc_id, frag, emb)
                 inserted += 1

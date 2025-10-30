@@ -33,7 +33,7 @@ async def route_and_answer(query: str, system_prompt: str = "", use_rag: bool = 
     start_time = time.time()
 
     # 0️⃣ Verifica cache semântico antes de processar
-    cached = check_cache(query)
+    cached = await check_cache(query)
     if cached:
         logger.info(
             f"[router_core] ✅ Cache HIT — similaridade={cached['similarity']:.2f}. "
@@ -85,7 +85,7 @@ async def route_and_answer(query: str, system_prompt: str = "", use_rag: bool = 
 
     # 6️⃣ Armazena no cache semântico
     try:
-        store_cache(query, text)
+        await store_cache(query, text)
         logger.info("[router_core] 🧠 Resposta armazenada no cache semântico.")
     except Exception as e:
         logger.warning(f"[router_core] Falha ao armazenar no cache: {e}")

@@ -6,7 +6,7 @@ via LiteLLM, sem necessidade de provedores externos.
 Compatível com o fluxo RAG e os juízes LLM.
 """
 
-from litellm import embedding
+from litellm import aembedding
 import os
 import logging
 
@@ -17,7 +17,7 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 
 
-def embed_text(text: str) -> list[float]:
+async def embed_text(text: str) -> list[float]:
     """
     Retorna o vetor de embedding para o texto informado.
     Usa o Ollama local via LiteLLM (api_base definido).
@@ -27,13 +27,13 @@ def embed_text(text: str) -> list[float]:
             raise ValueError("Texto inválido para geração de embedding.")
 
         if EMBED_MODEL.lower() == "nomic-embed-text":
-            resp = embedding(
+            resp = await aembedding(
                 model=f"ollama/{EMBED_MODEL}",
                 input=[text],
                 api_base=OLLAMA_BASE_URL
             )
         else:
-            resp = embedding(
+            resp = aembedding(
             model=EMBED_MODEL,
             input=[text],
             api_base=OLLAMA_BASE_URL

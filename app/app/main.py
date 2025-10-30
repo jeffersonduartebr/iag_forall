@@ -69,10 +69,10 @@ async def on_startup():
                     logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
 
             # 2️⃣ Adiciona documento base no RAG
-            add_document(
-                "intro",
-                "NSGA-II is a multi-objective evolutionary algorithm used for Pareto optimization."
-            )
+            await add_document(
+                            "intro",
+                            "NSGA-II is a multi-objective evolutionary algorithm used for Pareto optimization."
+                        )
 
             # 3️⃣ Executa requisições de teste (await async)
             samples = [

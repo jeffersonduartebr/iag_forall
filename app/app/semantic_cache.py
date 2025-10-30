@@ -46,7 +46,7 @@ def cosine_similarity(a, b):
 # ============================================================
 # 🔍 Consulta ao cache (Redis → Chroma)
 # ============================================================
-def check_cache(query: str) -> dict | None:
+async def check_cache(query: str) -> dict | None:
     """
     Verifica se existe uma resposta semanticamente semelhante.
     1️⃣ Checa Redis (cache rápido).
@@ -64,8 +64,8 @@ def check_cache(query: str) -> dict | None:
             return cached
 
         # 2️⃣ Fallback: consulta ChromaDB
-        emb = embed_text(query)
-        results = query_embedding(COLLECTION_NAME, emb, n_results=MAX_RESULTS)
+        emb = await embed_text(query)
+        results = await query_embedding(COLLECTION_NAME, emb, n_results=MAX_RESULTS)
         if not results or "embeddings" not in results or not results["documents"]:
             CACHE_MISSES.inc()
             return None
@@ -96,12 +96,12 @@ def check_cache(query: str) -> dict | None:
 # ============================================================
 # 💾 Armazenamento (Chroma + Redis)
 # ============================================================
-def store_cache(query: str, answer: str):
+async def store_cache(query: str, answer: str):
     """Armazena uma nova entrada no cache."""
     try:
-        emb = embed_text(query)
+        emb = await embed_text(query)
         get_or_create_collection(COLLECTION_NAME)
-        insert_embedding(COLLECTION_NAME, str(time.time()), answer, emb)
+        await insert_embedding(COLLECTION_NAME, str(time.time()), answer, emb)
 
         redis_client = get_redis()
         redis_key = f"semantic:{hash(query)}"

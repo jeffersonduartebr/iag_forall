@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 # ======================================================
 # 🔹 Recuperação de contexto (RAG dinâmico)
 # ======================================================
-def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500) -> str:
+async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500) -> str:
     """
     Recupera contexto relevante da base vetorial (ChromaDB).
     Retorna um texto concatenado com os melhores trechos.
     Limita o tamanho total para evitar ultrapassar o limite de tokens.
     """
     try:
-        query_vec = embed_text(query)
+        query_vec = await embed_text(query)
         results = query_embedding("knowledge_base", query_vec, n_results=n_results)
 
         if not results or "documents" not in results or not results["documents"]:
