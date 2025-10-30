@@ -55,7 +55,9 @@ def get_or_create_collection(name: str, metadata: dict = None):
             return chroma_client.get_collection(name)
         else:
             logger.info(f"[vectorstore] Criando nova coleção: '{name}'")
-            return chroma_client.create_collection(name=name, metadata=metadata or {})
+            meta = metadata if metadata else {"source": "semantic_cache"}
+            return chroma_client.create_collection(name=os.name, metadata=meta)
+
     except Exception as e:
         logger.error(f"[vectorstore] Erro ao obter/criar coleção '{name}': {e}")
         raise

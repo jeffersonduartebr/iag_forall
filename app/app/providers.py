@@ -5,7 +5,7 @@ import re
 from time import sleep
 from litellm import completion
 from litellm.exceptions import APIConnectionError, ServiceUnavailableError
-
+import os
 logger = logging.getLogger(__name__)
 
 # Base do Ollama
@@ -17,6 +17,7 @@ TEXT_MODEL_WHITELIST = {
     "ollama/deepseek-r1:8b",
     "openai/gpt-5-nano",
     "gemini/gemini-2.0-flash",
+    "ollama/gemma3:4b-it-qat",
 }
 
 # Modelos de embedding (proibidos para geração)
@@ -56,34 +57,48 @@ def _ensure_ollama_model(model_name: str):
 # -------------------------------------------------------------------
 # Chamada segura ao modelo via LiteLLM
 # -------------------------------------------------------------------
-def call_model(model: str, prompt: str, temperature: float = 0.7, max_tokens: int = 1024, api_base: str = None):
+def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: int = 1024, api_base: str = None):
     """
     Chama modelo com validação e tratamento de falhas.
     Agora compatível com modelos GPT-5 / GPT-4o-mini / GPT-5-nano,
     que usam 'max_completion_tokens' ao invés de 'max_tokens'.
     """
 
-    # 1️⃣ Validação básica
+    # Validação básica
     if not model or not isinstance(model, str):
         raise ValueError(f"[providers] Modelo inválido: {model!r}")
 
     if any(model.startswith(prefix) for prefix in EMBED_MODEL_PREFIXES):
         raise ValueError(f"[providers] Modelo '{model}' é de embedding e não suporta geração.")
 
-    # 2️⃣ Identificação do tipo de modelo
+    # Identificação do tipo de modelo
     is_ollama = model.startswith("ollama/") or ":" in model
     model_clean = model.replace("ollama/", "")
-    base_url = api_base or OLLAMA_BASE_URL if is_ollama else None
+
+    # Define URL base segura (usa o container "ollama" e não localhost)
+    base_url = None
+    if is_ollama:
+        base_url = api_base or os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    logger.debug(f"[providers] Usando Ollama base_url={base_url}")
+
+
 
     # 3️⃣ Verifica se o modelo é da nova geração OpenAI
     use_new_param = bool(re.search(r"gpt-5|gpt-4o-mini|nano", model))
 
     # 4️⃣ Configura parâmetros da chamada
-    params = {
-        "model": f"ollama/{model_clean}" if is_ollama else model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-    }
+    if use_new_param:
+        params = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 1,
+        }
+    else:
+        params = {
+            "model": f"ollama/{model_clean}" if is_ollama else model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+        }
 
     if use_new_param:
         params["max_completion_tokens"] = max_tokens

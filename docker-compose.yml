@@ -9,7 +9,7 @@ services:
     env_file:
       - .env
     environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL}
       - COMMERCIAL_MODEL_1=${COMMERCIAL_MODEL_1}
       - COMMERCIAL_MODEL_2=${COMMERCIAL_MODEL_2}
@@ -56,6 +56,8 @@ services:
     volumes:
       - ./ollama_data:/root/.ollama     # cache persistente dos modelos
     gpus: all
+    depends_on:
+      - mariadb
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 5s

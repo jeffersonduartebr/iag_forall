@@ -4,6 +4,10 @@ import random
 import time
 from .providers import call_model, _ensure_ollama_model
 from app.semantic_cache import check_cache, store_cache
+from app.observability import (
+    ROUTER_MODEL_COST, ROUTER_QUALITY_AVG, ROUTER_COST_SAVINGS,
+    ROUTER_LOCAL_USAGE_RATIO, ROUTER_COST_PER_QUERY
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +95,7 @@ async def route_and_answer(query: str, system_prompt: str = "", use_rag: bool = 
         "model": chosen,
         "answer": text,
         "latency_s": round(time.time() - start_time, 2),
-        "cost_per_1k": 0.001 if "ollama" in chosen else 0.12,
+        "cost_per_1k": 0.001 if "ollama" in chosen else 0.15,  # placeholder de custo
         "quality": round(random.uniform(7.0, 9.5), 2),  # placeholder até os juízes entrarem
         "metadata": meta,
     }
@@ -100,4 +104,21 @@ async def route_and_answer(query: str, system_prompt: str = "", use_rag: bool = 
         f"[router_core] Resposta final [{chosen}] | {result['latency_s']:.2f}s | "
         f"Q={result['quality']:.2f}"
     )
+    # --- Atualiza métricas Prometheus ---
+    ROUTER_MODEL_COST.labels(model=chosen).inc(result["cost_per_1k"])
+    ROUTER_QUALITY_AVG.labels(model=chosen).set(result["quality"])
+    ROUTER_COST_PER_QUERY.set(result["cost_per_1k"])
+
+    # Calcula economia simulada (baseline: modelo GPT-5 = 0.12 USD/1k)
+    baseline_cost = 0.12
+    if "ollama" in chosen:
+        saved = baseline_cost - result["cost_per_1k"]
+        if saved > 0:
+            ROUTER_COST_SAVINGS.inc(saved)
+
+    # Calcula % de uso local
+    local_models = sum(1 for m in ["ollama", "local"] if m in chosen)
+    total_models = 1
+    ROUTER_LOCAL_USAGE_RATIO.set(local_models / total_models)
+    
     return result

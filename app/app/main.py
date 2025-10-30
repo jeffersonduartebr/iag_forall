@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import PlainTextResponse
 
 from .settings import settings
-#from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
+from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
 from .observability import *
 from .providers import _ensure_ollama_model
 from .router_core import route_and_answer
@@ -23,6 +23,9 @@ from .routers import rag_router
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 setup_logging()
 logger = logging.getLogger(__name__)
+
+logging.getLogger("chromadb.telemetry").setLevel(logging.ERROR)
+
 
 app = FastAPI(title="LLM Router (Hybrid Bandit + NSGA-II + RAG + Judges)")
 

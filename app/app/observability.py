@@ -34,6 +34,37 @@ BANDIT_SELECT = Counter("bandit_select_total","Bandit selections per model",["mo
 BANDIT_UPDATE = Counter("bandit_update_total","Bandit updates per model",["model"])
 BANDIT_REWARD = Histogram("bandit_reward","Observed reward values")
 
+
+# 💰 Custos e economia
+ROUTER_MODEL_COST = Counter(
+    "router_model_cost_usd_total",
+    "Custo acumulado estimado por modelo (USD)",
+    ["model"]
+)
+
+ROUTER_COST_SAVINGS = Counter(
+    "router_cost_savings_usd_total",
+    "Custo total economizado (USD) pelo uso de modelos locais."
+)
+
+ROUTER_COST_PER_QUERY = Gauge(
+    "router_cost_per_query_usd",
+    "Custo médio por consulta (USD)."
+)
+
+# ⚖️ Qualidade e desempenho
+ROUTER_QUALITY_AVG = Gauge(
+    "router_model_quality_avg",
+    "Qualidade média ponderada por modelo (0–10)",
+    ["model"]
+)
+
+# ⚙️ Distribuição local vs remoto
+ROUTER_LOCAL_USAGE_RATIO = Gauge(
+    "router_local_model_usage_ratio",
+    "Proporção de requisições atendidas por modelos locais (Ollama)."
+)
+
 def setup_logging():
     structlog.configure(processors=[
         structlog.processors.add_log_level,

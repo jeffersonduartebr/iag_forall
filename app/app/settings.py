@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------
     # Modelos
     # ------------------------------------------------------
-    OLLAMA_MODEL: str = Field(default="phi4:latest", description="Modelo local via Ollama")
+    OLLAMA_MODEL: str = Field(default="gemma3:4b-it-qat", description="Modelo local via Ollama")
     COMMERCIAL_MODEL_1: str = Field(default="deepseek-r1:1.5b", description="Modelo comercial 1")
     COMMERCIAL_MODEL_2: str = Field(default="openai/gpt-5-nano", description="Modelo comercial 2")
 

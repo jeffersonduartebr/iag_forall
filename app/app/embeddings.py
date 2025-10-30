@@ -26,7 +26,14 @@ def embed_text(text: str) -> list[float]:
         if not text or not isinstance(text, str):
             raise ValueError("Texto inválido para geração de embedding.")
 
-        resp = embedding(
+        if EMBED_MODEL.lower() == "nomic-embed-text":
+            resp = embedding(
+                model=f"ollama/{EMBED_MODEL}",
+                input=[text],
+                api_base=OLLAMA_BASE_URL
+            )
+        else:
+            resp = embedding(
             model=EMBED_MODEL,
             input=[text],
             api_base=OLLAMA_BASE_URL

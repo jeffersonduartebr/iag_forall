@@ -14,3 +14,4 @@ deap
 sentence-transformers
 pymysql
 PyMuPDF
+python-multipart
