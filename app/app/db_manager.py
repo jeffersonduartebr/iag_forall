@@ -59,21 +59,28 @@ CREATE TABLE IF NOT EXISTS nsga_weights (
   w_l           DOUBLE NOT NULL,
   fitness_mean  DOUBLE NOT NULL,
   generations   INT NOT NULL,
+  model_name    VARCHAR(128) NULL,
+  model_family  VARCHAR(64) NULL,
+  token_key     VARCHAR(64) NULL,
   PRIMARY KEY (id),
-  KEY idx_created (created_at)
+  KEY idx_created (created_at),
+  KEY idx_family_created (model_family, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 """
 
+# ✅ DDL CORRIGIDO: usa model_family como chave primária
 DDL_NSGA_CURRENT = """
 CREATE TABLE IF NOT EXISTS nsga_current_weights (
-  id           TINYINT NOT NULL,
+  model_family  VARCHAR(64) NOT NULL,
   updated_at   DATETIME(6) NOT NULL,
   w_q          DOUBLE NOT NULL,
   w_c          DOUBLE NOT NULL,
   w_l          DOUBLE NOT NULL,
   fitness_mean DOUBLE NOT NULL,
   generations  INT NOT NULL,
-  PRIMARY KEY (id)
+  model_name   VARCHAR(128) NULL,
+  token_key    VARCHAR(64) NULL,
+  PRIMARY KEY (model_family)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 """
 
@@ -109,23 +116,32 @@ def get_conn():
     Context manager with retry + ping-before-use to keep connections healthy.
     """
     last_err: Optional[BaseException] = None
+    
+    # ✅ Inicializa 'conn' como None fora do loop
+    # Isso garante que a variável esteja sempre vinculada
+    conn: Optional[pymysql.connections.Connection] = None
+
     for attempt in range(1, DB_MAX_RETRIES + 1):
         try:
             conn = _connect()
             _ensure_schema(conn)
             conn.ping(reconnect=True)
             yield conn
-            return
+            return # Sai com sucesso
         except Exception as e:
             last_err = e
             logger.warning(f"[db] connection attempt {attempt}/{DB_MAX_RETRIES} failed: {e}")
             time.sleep(DB_RETRY_DELAY_S)
         finally:
+            # Esta verificação agora é segura, pois 'conn'
+            # está vinculado a None ou a um objeto de conexão.
             try:
-                if "conn" in locals() and conn and conn.open:
+                # ✅ Verificação simplificada e segura
+                if conn and conn.open:
                     conn.close()
             except Exception:
-                pass
+                pass # Evita erro de fechamento
+                
     raise RuntimeError(f"[db] unable to obtain DB connection: {last_err}")
 
 # ------------------------------------------------------------------------------
@@ -133,9 +149,7 @@ def get_conn():
 # ------------------------------------------------------------------------------
 
 def insert_history(model: str, reward: float, ema: float, query_sample: str = "") -> None:
-    """
-    Inserts a bandit history record (or fallback to JSON if DB unavailable).
-    """
+    # ... (função síncrona permanece a mesma) ...
     if not model:
         logger.warning("[db] insert_history ignored: empty model")
         return
@@ -155,14 +169,11 @@ def insert_history(model: str, reward: float, ema: float, query_sample: str = ""
         except Exception as e:
             logger.warning(f"[db] insert_history attempt {attempt} failed: {e}")
             time.sleep(DB_RETRY_DELAY_S)
-
-    # Fallback: write to JSON
     _append_fallback_history(model, reward, ema, query_sample)
 
+
 def _append_fallback_history(model: str, reward: float, ema: float, query_sample: str = "") -> None:
-    """
-    Appends a record to the fallback JSON file if DB is unavailable.
-    """
+    # ... (função síncrona permanece a mesma) ...
     record = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "model": model,
@@ -187,6 +198,7 @@ def _append_fallback_history(model: str, reward: float, ema: float, query_sample
     except Exception as fe:
         logger.error(f"[db] failed to write fallback JSON: {fe}")
 
+
 def load_history(limit: int = 1000) -> List[Dict[str, Any]]:
     """
     Reads latest bandit history from DB.
@@ -200,7 +212,8 @@ def load_history(limit: int = 1000) -> List[Dict[str, Any]]:
     for attempt in range(1, DB_MAX_RETRIES + 1):
         try:
             with get_conn() as conn:
-                with conn.cursor() as cur:
+                # ✅ CORREÇÃO: Especifique o DictCursor aqui
+                with conn.cursor(DictCursor) as cur:
                     cur.execute(sql, (int(limit),))
                     rows = cur.fetchall()
                     return rows or []
@@ -210,13 +223,14 @@ def load_history(limit: int = 1000) -> List[Dict[str, Any]]:
     logger.error("[db] load_history permanently failed; returning empty list.")
     return []
 
+
 def insert_weights(theta: List[float], fitness_mean: float, generations: int,
                    model_name: str = "ollama/deepseek-r1:8b",
                    model_family: str = "deepseek",
                    token_key: str = "max_tokens") -> None:
     """
     Insere novos pesos NSGA-II no banco e atualiza a tabela 'nsga_current_weights'.
-    Inclui metadados do modelo: nome, família e tipo de token.
+    Agora usa 'model_family' como chave para o upsert.
     """
     if not (isinstance(theta, (list, tuple)) and len(theta) == 3):
         raise ValueError("theta deve ser uma lista [w_q, w_c, w_l]")
@@ -231,12 +245,13 @@ def insert_weights(theta: List[float], fitness_mean: float, generations: int,
         VALUES (UTC_TIMESTAMP(6), %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
+    # ✅ UPSERT CORRIGIDO: Usa model_family como chave
     upsert_sql = """
         INSERT INTO nsga_current_weights (
-            id, updated_at, w_q, w_c, w_l, fitness_mean, generations,
-            model_name, model_family, token_key
+            model_family, updated_at, w_q, w_c, w_l, fitness_mean, generations,
+            model_name, token_key
         )
-        VALUES (1, UTC_TIMESTAMP(6), %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, UTC_TIMESTAMP(6), %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
           updated_at=VALUES(updated_at),
           w_q=VALUES(w_q),
@@ -245,7 +260,6 @@ def insert_weights(theta: List[float], fitness_mean: float, generations: int,
           fitness_mean=VALUES(fitness_mean),
           generations=VALUES(generations),
           model_name=VALUES(model_name),
-          model_family=VALUES(model_family),
           token_key=VALUES(token_key);
     """
 
@@ -258,9 +272,11 @@ def insert_weights(theta: List[float], fitness_mean: float, generations: int,
                             w_q, w_c, w_l, fitness_mean, generations,
                             model_name, model_family, token_key
                         ))
+                        # ✅ Parâmetros corrigidos para o upsert
                         cur.execute(upsert_sql, (
+                            model_family, # Chave Primária
                             w_q, w_c, w_l, fitness_mean, generations,
-                            model_name, model_family, token_key
+                            model_name, token_key
                         ))
                     conn.commit()
                     logger.info(
@@ -281,9 +297,33 @@ def insert_weights(theta: List[float], fitness_mean: float, generations: int,
 
 
 # ------------------------------------------------------------------------------
+# ✅ NOVA FUNÇÃO: Ler pesos
+# ------------------------------------------------------------------------------
+def get_current_weights(model_family: str) -> Optional[List[float]]:
+    """
+    Carrega os pesos NSGA-II mais recentes para uma família de modelo específica.
+    """
+    sql = "SELECT w_q, w_c, w_l FROM nsga_current_weights WHERE model_family = %s LIMIT 1"
+    try:
+        with get_conn() as conn:
+            # ✅ CORREÇÃO: Especifique o DictCursor aqui
+            with conn.cursor(DictCursor) as cur:
+                cur.execute(sql, (model_family,))
+                row = cur.fetchone()
+                if row:
+                    weights = [float(row['w_q']), float(row['w_c']), float(row['w_l'])]
+                    logger.debug(f"[db] Carregou pesos para '{model_family}': {weights}")
+                    return weights
+    except Exception as e:
+        logger.warning(f"[db] get_current_weights falhou para '{model_family}': {e}")
+        return None
+    return None
+
+# ------------------------------------------------------------------------------
 # Fallback JSON helpers
 # ------------------------------------------------------------------------------
 def _write_fallback_json(theta: List[float], fitness_mean: float, generations: int) -> None:
+    # ... (função síncrona permanece a mesma) ...
     payload = {
         "current_best": [float(theta[0]), float(theta[1]), float(theta[2])],
         "fitness_mean": float(fitness_mean),

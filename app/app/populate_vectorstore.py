@@ -16,10 +16,10 @@ import re
 import uuid
 import logging
 from pathlib import Path
-from app.vectorstore import insert_embedding, get_or_create_collection
+from app.vectorstore import insert_embedding, get_or_create_collection_async
 from app.embeddings import embed_text
 from app.providers import call_model
-
+import asyncio
 import fitz  # PyMuPDF
 
 # ============================================================
@@ -158,7 +158,7 @@ async def populate_vectorstore():
         logger.warning("[populate] Nenhum documento encontrado para indexar.")
         return
 
-    collection = get_or_create_collection(COLLECTION_NAME)
+    collection = await get_or_create_collection_async(COLLECTION_NAME)
     total_fragments = 0
 
     for fname, fragments in all_docs.items():
@@ -170,7 +170,7 @@ async def populate_vectorstore():
             try:
                 emb = await embed_text(frag)
                 doc_id = str(uuid.uuid4())
-                insert_embedding(COLLECTION_NAME, doc_id, frag, emb)
+                await insert_embedding(COLLECTION_NAME, doc_id, frag, emb)
                 total_fragments += 1
             except Exception as e:
                 logger.error(f"[populate] Falha ao inserir fragmento de {fname}: {e}")
@@ -182,4 +182,4 @@ async def populate_vectorstore():
 # ============================================================
 if __name__ == "__main__":
     logger.info("[populate] Script iniciado.")
-    populate_vectorstore()
+    asyncio.run(populate_vectorstore())

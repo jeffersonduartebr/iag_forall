@@ -19,7 +19,7 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
     """
     try:
         query_vec = await embed_text(query)
-        results = query_embedding("knowledge_base", query_vec, n_results=n_results)
+        results = await query_embedding("knowledge_base", query_vec, n_results=n_results)
 
         if not results or "documents" not in results or not results["documents"]:
             logger.info("[Judges] Nenhum contexto RAG recuperado.")
@@ -107,27 +107,27 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
 
         context = ""
         if use_rag:
-            context = get_rag_context(query, n_results=5)
+            context = await get_rag_context(query, n_results=5)
             if context:
                 logger.info("[Judges] Contexto RAG será usado na avaliação LLM.")
 
-        # prompt enxuto mas completo
-        prompt = f"""
-Você é um avaliador de respostas de IA.
-Avalie a resposta abaixo com base nos critérios:
+        # Monta o prompt (sem f-string interna com barra invertida)
+        if context:
+            rag_block = "Contexto adicional (via RAG):\n" + context + "\n"
+        else:
+            rag_block = ""
 
-1️⃣ Correção técnica e factual
-2️⃣ Clareza e coerência textual
-3️⃣ Relevância ao que foi perguntado
-
-Pergunta: {query}
-
-Resposta do modelo: {answer}
-
-{f"Contexto adicional (via RAG):\n{context}\n" if context else ""}
-
-Retorne apenas um número entre 0 e 10.
-""".strip()
+        prompt = (
+            "Você é um avaliador de respostas de IA.\n"
+            "Avalie a resposta abaixo com base nos critérios:\n\n"
+            "1️⃣ Correção técnica e factual\n"
+            "2️⃣ Clareza e coerência textual\n"
+            "3️⃣ Relevância ao que foi perguntado\n\n"
+            f"Pergunta: {query}\n\n"
+            f"Resposta do modelo: {answer}\n\n"
+            f"{rag_block}"
+            "Retorne apenas um número entre 0 e 10."
+        ).strip()
 
         scores = []
         for idx, model in enumerate(judge_models, start=1):

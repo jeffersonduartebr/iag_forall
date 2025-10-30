@@ -13,7 +13,8 @@ import logging
 import fitz  # PyMuPDF
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
-from app.vectorstore import insert_embedding, get_or_create_collection
+# ✅ Importes corrigidos e compatíveis com vectorstore.py
+from app.vectorstore import insert_embedding, _get_or_create_collection_sync as get_or_create_collection
 from app.embeddings import embed_text
 from app.providers import call_model
 
@@ -34,6 +35,7 @@ OVERLAP = 100
 # ✂️ Utilitários
 # ============================================================
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP):
+    """Divide o texto em blocos de tamanho fixo com sobreposição."""
     text = re.sub(r"\s+", " ", text.strip())
     if len(text) <= chunk_size:
         return [text]
@@ -117,17 +119,19 @@ async def add_doc(file: UploadFile = File(...)):
         fragments = chunk_text(text)
         logger.info(f"[rag_router] {filename}: {len(fragments)} fragmentos gerados.")
 
+        # 🔹 Gera título e resumo
         title, summary = await summarize_text(" ".join(fragments[:3]))
         logger.info(f"[rag_router] 📘 {title}\n📝 {summary}")
 
+        # 🔹 Cria ou obtém a coleção de embeddings
         get_or_create_collection(COLLECTION_NAME)
-        inserted = 0
 
+        inserted = 0
         for frag in fragments:
             try:
                 emb = await embed_text(frag)
                 doc_id = str(uuid.uuid4())
-                insert_embedding(COLLECTION_NAME, doc_id, frag, emb)
+                await insert_embedding(COLLECTION_NAME, doc_id, frag, emb)
                 inserted += 1
             except Exception as e:
                 logger.error(f"[rag_router] Falha ao inserir fragmento: {e}")

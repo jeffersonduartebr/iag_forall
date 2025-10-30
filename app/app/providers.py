@@ -16,25 +16,59 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 
 try:
-    # Custo de $0.15 / 1k tokens (de settings.py) = $0.00015 / 1 token
+    # Custo de $0.15 / 1k tokens = $0.00015 / token
     gemini_cost = 0.00015
-    
-    litellm.register_model({
-        "model_name": "gemini-2.0-flash",
-        "litellm_provider": "gemini", # Informa ao litellm qual API usar
-        "input_cost_per_token": gemini_cost,
-        "output_cost_per_token": gemini_cost,
-        "max_tokens": 8192, # Um valor de fallback seguro
-        "model_info": { # Informações adicionais
-            "base_model": "gemini-2.0-flash"
-        }
-    })
-    logger.info("[providers] Modelo customizado 'gemini-2.0-flash' registrado no LiteLLM.")
+
+    # 🔹 Compatível com todas as versões do LiteLLM
+    if hasattr(litellm, "register_model"):
+        try:
+            # Algumas versões usam 'model_name', outras exigem o nome como primeiro argumento
+            litellm.register_model(
+                "gemini-2.0-flash",
+                litellm_provider="gemini",
+                input_cost_per_token=gemini_cost,
+                output_cost_per_token=gemini_cost,
+                max_tokens=8192,
+                model_info={"base_model": "gemini-2.0-flash"},
+            )
+            litellm.register_model(
+                "gemini/gemini-2.0-flash",
+                litellm_provider="gemini",
+                input_cost_per_token=gemini_cost,
+                output_cost_per_token=gemini_cost,
+                max_tokens=8192,
+                model_info={"base_model": "gemini-2.0-flash"},
+            )
+            logger.info("[providers] Modelos 'gemini-2.0-flash' registrados com sucesso no LiteLLM.")
+        except TypeError:
+            # 🔹 Versões antigas (sem keyword arguments)
+            litellm.register_model(
+                "gemini-2.0-flash",
+                "gemini",
+                gemini_cost,
+                gemini_cost,
+                8192,
+                {"base_model": "gemini-2.0-flash"},
+            )
+            litellm.register_model(
+                "gemini/gemini-2.0-flash",
+                "gemini",
+                gemini_cost,
+                gemini_cost,
+                8192,
+                {"base_model": "gemini-2.0-flash"},
+            )
+            logger.info("[providers] Modelos 'gemini-2.0-flash' registrados (modo legacy).")
+    else:
+        logger.warning("[providers] Função register_model ausente; fallback será usado em runtime.")
 
 except Exception as e:
-    logger.warning(f"[providers] Falha ao registrar modelo customizado no LiteLLM: {e}")
+    logger.warning(f"[providers] Falha ao registrar/atualizar modelo no LiteLLM: {e}")
 
+
+# -------------------------------------------------------------------
 # Métrica Prometheus para custo
+# -------------------------------------------------------------------
 MODEL_COST_USD = Histogram(
     "model_cost_usd",
     "Custo estimado por requisição",
@@ -47,6 +81,7 @@ TEXT_MODEL_WHITELIST = {
     "openai/gpt-5-nano",
     "gemini/gemini-2.0-flash",
     "ollama/gemma3:4b-it-qat",
+    "ollama/granite4:1b",
 }
 
 EMBED_MODEL_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")

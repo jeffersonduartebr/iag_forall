@@ -1,7 +1,14 @@
-import structlog
-import os
+"""
+observability.py
+----------------------------------------------------
+Gerencia métricas Prometheus (modo multiprocess) e logging estruturado.
+Compatível com Uvicorn + Gunicorn + Prometheus-client multiprocess.
+Evita FileNotFoundError ao limpar diretórios temporários.
+"""
 
 import os
+import logging
+import structlog
 from prometheus_client import (
     Counter,
     Histogram,
@@ -11,29 +18,49 @@ from prometheus_client import (
     multiprocess
 )
 
+# ============================================================
+# ⚙️ Inicialização do Prometheus multiprocess-safe
+# ============================================================
+logger = structlog.get_logger("observability")
 
-if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
-    for f in os.listdir(os.environ["PROMETHEUS_MULTIPROC_DIR"]):
-        os.remove(os.path.join(os.environ["PROMETHEUS_MULTIPROC_DIR"], f))
+PROM_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR", "/tmp/prom")
 
+# Garante que o diretório exista
+os.makedirs(PROM_DIR, exist_ok=True)
 
-logger = structlog.get_logger()
+# Limpa arquivos antigos, mas ignora ausentes
+try:
+    for f in os.listdir(PROM_DIR):
+        path = os.path.join(PROM_DIR, f)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            continue  # arquivo já foi removido
+        except Exception as e:
+            logger.warning(f"[observability] Falha ao remover {path}: {e}")
+except Exception as e:
+    logger.warning(f"[observability] Falha ao limpar PROMETHEUS_MULTIPROC_DIR: {e}")
 
-API_REQUESTS = Counter("api_requests_total", "Total API requests")
-API_LATENCY = Histogram("api_request_latency_seconds", "Latency of API requests (s)")
+# ============================================================
+# 📈 Métricas principais
+# ============================================================
 
-ROUTER_CHOSEN = Counter("router_chosen_model_total", "Chosen model by router", ["model"])
-FALLBACK_USED = Counter("router_fallback_used_total", "Fallback used", ["first_model","second_model"])
-CANDIDATE_COST = Histogram("candidate_estimated_cost_usd", "Estimated cost per answer (USD)")
-CANDIDATE_LAT = Histogram("candidate_latency_seconds", "Latency per answer (s)")
-JUDGE_SCORE = Histogram("judge_score", "Judge score values", ["judge_id"])
+# 🔹 Requisições de API
+API_REQUESTS = Counter("api_requests_total", "Total de requisições recebidas pela API")
+API_LATENCY = Histogram("api_request_latency_seconds", "Latência das requisições da API (s)")
 
-ROUTER_HISTORY_ENTRIES = Gauge("router_history_entries_total", "Number of models with EMA history entry")
+# 🔹 Decisões do roteador
+ROUTER_CHOSEN = Counter("router_chosen_model_total", "Modelo escolhido pelo roteador", ["model"])
+FALLBACK_USED = Counter("router_fallback_used_total", "Fallback usado", ["first_model", "second_model"])
+CANDIDATE_COST = Histogram("candidate_estimated_cost_usd", "Custo estimado por resposta (USD)")
+CANDIDATE_LAT = Histogram("candidate_latency_seconds", "Latência por resposta (s)")
+JUDGE_SCORE = Histogram("judge_score", "Valores de pontuação dos juízes", ["judge_id"])
 
-BANDIT_SELECT = Counter("bandit_select_total","Bandit selections per model",["model"])
-BANDIT_UPDATE = Counter("bandit_update_total","Bandit updates per model",["model"])
-BANDIT_REWARD = Histogram("bandit_reward","Observed reward values")
-
+# 🔹 Histórico e Bandits
+ROUTER_HISTORY_ENTRIES = Gauge("router_history_entries_total", "Número de modelos com histórico EMA")
+BANDIT_SELECT = Counter("bandit_select_total", "Seleções do bandit por modelo", ["model"])
+BANDIT_UPDATE = Counter("bandit_update_total", "Atualizações de bandit por modelo", ["model"])
+BANDIT_REWARD = Histogram("bandit_reward", "Valores observados de recompensa do bandit")
 
 # 💰 Custos e economia
 ROUTER_MODEL_COST = Counter(
@@ -65,9 +92,20 @@ ROUTER_LOCAL_USAGE_RATIO = Gauge(
     "Proporção de requisições atendidas por modelos locais (Ollama)."
 )
 
+# ============================================================
+# 🪵 Logging estruturado
+# ============================================================
 def setup_logging():
-    structlog.configure(processors=[
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
-    ])
+    """Configura o Structlog para JSON com timestamp e nível de log."""
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer()
+        ]
+    )
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
+    logger.info("[observability] Logging configurado com sucesso.")

@@ -55,16 +55,35 @@ async def on_startup():
             if r is None:
                 logger.warning("[warmup] Redis indisponível — seguindo sem cache por enquanto.")
 
-            # 1️⃣ Garante modelos disponíveis no Ollama
-            ollama_models = [
-                settings.OLLAMA_MODEL,
-                os.getenv("EMBED_MODEL", "nomic-embed-text"),
-                "phi4",
-                "deepseek-r1:8b",
+            # 1️⃣ Garante modelos disponíveis no Ollama (AGORA DINÂMICO)
+            logger.info("[warmup] Iniciando rotina de inicialização...")
+            
+            # Pega todos os modelos candidatos que são do Ollama
+            ollama_models_from_settings = [
+                m.replace("ollama/", "") for m in settings.CANDIDATE_MODELS_LIST 
+                if m.startswith("ollama/")
             ]
-            for model in ollama_models:
+            
+            # Adiciona outros modelos essenciais (embedding, juízes)
+            essentials = [
+                os.getenv("EMBED_MODEL", "nomic-embed-text"),
+            ]
+            for judge_model in settings.JUDGE_MODELS:
+                 if judge_model.startswith("ollama/"):
+                    essentials.append(judge_model.replace("ollama/", ""))
+                 # Heurística para modelos locais sem prefixo
+                 elif ":" in judge_model and not "/" in judge_model:
+                    essentials.append(judge_model)
+
+            # Combina e remove duplicatas
+            all_ollama_models = list(set(ollama_models_from_settings + essentials))
+            
+            logger.info(f"[warmup] Garantindo modelos Ollama: {all_ollama_models}")
+            
+            for model in all_ollama_models:
+                if not model: continue
                 try:
-                    _ensure_ollama_model(model)
+                    await asyncio.to_thread(_ensure_ollama_model, model)
                 except Exception as e:
                     logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
 
@@ -79,6 +98,13 @@ async def on_startup():
                 "Explique em 3 tópicos o que é NSGA-II e onde é aplicado.",
                 "Escreva um snippet Python que lê um CSV e calcula a média de uma coluna.",
                 "Resuma boas práticas para documentação de APIs REST.",
+                "Quem foi Ada Lovelace e qual sua principal contribuição para a computação?",
+                "Descreva o processo de fotossíntese em termos simples para um estudante.",
+                "Qual a diferença entre Docker e uma Máquina Virtual (VM)?",
+                "Crie uma função Javascript que busca dados de uma API usando 'fetch' e trata a resposta.",
+                "O que é 'inflação' e como ela afeta o poder de compra?",
+                "Escreva um parágrafo curto sobre a importância da ética no desenvolvimento de IA.",
+                "Quais são os três principais tipos de machine learning? (Supervisionado, Não Supervisionado, Reforço)"
             ]
             for s in samples:
                 try:
@@ -108,6 +134,8 @@ async def route_query(req: QueryRequest):
             query=req.query,
             system_prompt=getattr(req, "system_prompt", ""),
             use_rag=getattr(req, "enable_rag_for_answer", False),
+            max_tokens=req.max_tokens,
+            temperature=req.temperature
         )
     except Exception as e:
         logger.exception(f"[router] Erro interno durante o roteamento: {e}")
@@ -171,8 +199,20 @@ async def update_judges(models: List[str], x_admin_token: str = Header(None)):
     old = getattr(settings, "JUDGE_MODELS", [])
     settings.JUDGE_MODELS = models
     logger.info(f"[Admin] Juízes atualizados de {old} para {models}")
-    with open(".env", "a") as f:
-        f.write(f"\nJUDGE_MODELS={json.dumps(models)}\n")
+    models_str = ",".join(models)
+    # Função auxiliar síncrona (se não existir, adicione-a)
+    def _write_env_file_sync(models_json: str):
+        """Escreve de forma síncrona no arquivo .env."""
+        try:
+            # Use "w" (write) ou "a" (append) dependendo da sua estratégia
+            # Usar "a" (append) é mais simples
+            with open(".env", "a") as f:
+                # Adiciona aspas ao redor da string
+                f.write(f'\nJUDGE_MODELS="{models_json}"\n')
+        except Exception as e:
+            logger.error(f"[Admin] Falha ao escrever no .env: {e}")
+
+    await asyncio.to_thread(_write_env_file_sync, models_str)
 
     return settings.JUDGE_MODELS
 

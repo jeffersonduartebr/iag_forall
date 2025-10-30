@@ -10,7 +10,7 @@ import json
 import logging
 import numpy as np
 from prometheus_client import Counter, Gauge
-from app.vectorstore import get_or_create_collection, query_embedding, insert_embedding
+from app.vectorstore import get_or_create_collection_async, query_embedding, insert_embedding
 from app.embeddings import embed_text
 from app.utils.redis_client import get_redis
 
@@ -100,7 +100,8 @@ async def store_cache(query: str, answer: str):
     """Armazena uma nova entrada no cache."""
     try:
         emb = await embed_text(query)
-        get_or_create_collection(COLLECTION_NAME)
+        #get_or_create_collection(COLLECTION_NAME)
+        await get_or_create_collection_async(COLLECTION_NAME)
         await insert_embedding(COLLECTION_NAME, str(time.time()), answer, emb)
 
         redis_client = get_redis()

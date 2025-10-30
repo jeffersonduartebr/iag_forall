@@ -1,21 +1,24 @@
 """
 Vectorstore manager — ChromaDB v2+ (modo local persistente)
 -----------------------------------------------------------
+Módulo centralizado para todas as interações com o ChromaDB.
 Compatível com Chroma >= 0.5.0.
-Usa o novo PersistentClient() sem necessidade de API remota.
 """
 
 import os
 import logging
 import chromadb
-import asyncio  # 👈 Import para asyncio
+import asyncio
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
 # ============================================================
 # ⚙️ Configurações
 # ============================================================
-CHROMA_PATH = os.getenv("CHROMA_PATH", "./chromadb-data")
+# ✅ Este é o caminho correto DENTRO do contêiner,
+#    conforme definido no docker-compose.yml
+CHROMA_PATH = os.getenv("CHROMA_PATH", "/data/chroma")
 
 
 # ============================================================
@@ -40,42 +43,70 @@ def _connect_local():
         logger.error(f"[vectorstore] ❌ Falha ao iniciar Chroma local: {e}")
         raise
 
-
 # Cliente global (Criado de forma síncrona na inicialização)
+# Este é o ÚNICO cliente na aplicação.
 chroma_client = _connect_local()
 
 
 # ============================================================
-# 📚 Gerenciamento de Coleções
+# 📚 Gerenciamento de Coleções (Async)
 # ============================================================
-def get_or_create_collection(name: str, metadata: dict = None):
-    """(Função Síncrona) Obtém ou cria uma coleção local persistente."""
+
+def _get_or_create_collection_sync(name: str, metadata: dict = None):
+    """Função síncrona auxiliar."""
     try:
-        for c in chroma_client.list_collections():
-            if c.name == name:
-                return chroma_client.get_collection(name)
-        return chroma_client.create_collection(name=name, metadata=metadata or {"source": "router"})
+        return chroma_client.get_or_create_collection(name=name, metadata=metadata or {"source": "router"})
     except Exception as e:
         if "already exists" in str(e).lower():
             logger.warning(f"[vectorstore] Coleção '{name}' já existia, recuperando...")
             return chroma_client.get_collection(name)
         raise
 
+async def get_or_create_collection_async(name: str, metadata: dict = None):
+    """(Async) Obtém ou cria uma coleção local persistente."""
+    try:
+        return await asyncio.to_thread(
+            _get_or_create_collection_sync, name, metadata
+        )
+    except Exception as e:
+        logger.error(f"[vectorstore] Falha ao obter/criar coleção '{name}': {e}")
+        return None
+
+def _delete_collection_sync(collection_name: str):
+    """Função síncrona auxiliar para deletar coleção."""
+    chroma_client.delete_collection(name=collection_name)
+
+async def delete_collection(collection_name: str):
+    """(Async) Deleta uma coleção do ChromaDB."""
+    try:
+        await asyncio.to_thread(_delete_collection_sync, collection_name)
+        logger.info(f"[vectorstore] Coleção '{collection_name}' deletada.")
+        return True
+    except Exception as e:
+        logger.error(f"[vectorstore] Falha ao deletar '{collection_name}': {e}")
+        return False
+
+
 # ============================================================
 # 💾 Inserção e Consulta (Assíncronas via to_thread)
 # ============================================================
 
-def _insert_embedding_sync(collection_name: str, doc_id: str, text: str, embedding: list):
+def _insert_embedding_sync(collection_name: str, doc_id: str, text: str, embedding: list, metadata: Optional[Dict[str, Any]] = None):
     """Função síncrona auxiliar para ser usada com to_thread."""
-    collection = get_or_create_collection(collection_name)
-    collection.add(ids=[doc_id], documents=[text], embeddings=[embedding])
+    collection = chroma_client.get_collection(collection_name)
+    collection.add(
+        ids=[doc_id],
+        documents=[text],
+        embeddings=[embedding],
+        metadatas=[metadata or {}]  # ✅ Suporte para metadata
+    )
 
-async def insert_embedding(collection_name: str, doc_id: str, text: str, embedding: list):
+async def insert_embedding(collection_name: str, doc_id: str, text: str, embedding: list, metadata: Optional[Dict[str, Any]] = None):
     """(Async) Insere um documento e seu embedding."""
     try:
         await asyncio.to_thread(
             _insert_embedding_sync,
-            collection_name, doc_id, text, embedding
+            collection_name, doc_id, text, embedding, metadata
         )
         logger.debug(f"[vectorstore] Documento '{doc_id}' inserido em '{collection_name}'.")
     except Exception as e:
@@ -84,7 +115,7 @@ async def insert_embedding(collection_name: str, doc_id: str, text: str, embeddi
 
 def _query_embedding_sync(collection_name: str, embedding: list, n_results: int = 3):
     """Função síncrona auxiliar para ser usada com to_thread."""
-    collection = get_or_create_collection(collection_name)
+    collection = chroma_client.get_collection(collection_name)
     return collection.query(query_embeddings=[embedding], n_results=n_results)
 
 async def query_embedding(collection_name: str, embedding: list, n_results: int = 3):
@@ -109,3 +140,11 @@ async def reset_collections():
         logger.info("[vectorstore] Todas as coleções foram removidas com sucesso.")
     except Exception as e:
         logger.error(f"[vectorstore] Falha ao resetar coleções: {e}")
+
+async def health_async() -> bool:
+    """(Async) Verifica se o cliente Chroma está vivo."""
+    try:
+        await asyncio.to_thread(chroma_client.heartbeat)
+        return True
+    except Exception:
+        return False

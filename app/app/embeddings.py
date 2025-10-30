@@ -33,7 +33,7 @@ async def embed_text(text: str) -> list[float]:
                 api_base=OLLAMA_BASE_URL
             )
         else:
-            resp = aembedding(
+            resp = await aembedding(
             model=EMBED_MODEL,
             input=[text],
             api_base=OLLAMA_BASE_URL
