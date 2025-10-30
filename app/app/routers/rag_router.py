@@ -131,7 +131,8 @@ async def add_doc(file: UploadFile = File(...)):
             try:
                 emb = await embed_text(frag)
                 doc_id = str(uuid.uuid4())
-                await insert_embedding(COLLECTION_NAME, doc_id, frag, emb)
+                await insert_embedding(COLLECTION_NAME, doc_id, frag, emb, metadata={"filename": filename, "chunk": idx})
+
                 inserted += 1
             except Exception as e:
                 logger.error(f"[rag_router] Falha ao inserir fragmento: {e}")

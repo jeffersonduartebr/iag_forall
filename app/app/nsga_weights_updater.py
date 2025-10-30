@@ -107,7 +107,8 @@ def _ensure_db_connection():
 # ============================================================
 # NÚCLEO DO NSGA-II
 # ============================================================
-def run_nsga(model_name: str = "ollama/deepseek-r1:8b"):
+def run_nsga(model_name: str = "ollama/deepseek-r1:1.5b"):
+    time.sleep(10)  # breve pausa para evitar sobrecarga
     start_time = time.time()
     model_family = detect_model_family(model_name)
     fam_cfg = MODEL_FAMILIES.get(model_family, MODEL_FAMILIES["default"])
@@ -153,7 +154,7 @@ def run_nsga(model_name: str = "ollama/deepseek-r1:8b"):
 
     # 3) Validação de dados
     if not rewards or len(rewards) < 10:
-        logger.warning(f"[nsga] Dados insuficientes para otimização ({len(rewards)} registros). Encerrando ciclo.")
+        logger.warning(f"[nsga] Dados insuficientes para otimização ({len(rewards)} registros do modelo {model_name}). Encerrando ciclo.")
         return
 
     # 4) Inicialização da população

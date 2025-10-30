@@ -1,26 +1,71 @@
+# ============================================================
+# Prometheus Configuration — LLM Router Stack (Jefferson Duarte)
+# ============================================================
+
 global:
-  scrape_interval: 5s
-  evaluation_interval: 5s
+  scrape_interval: 60s       # tempo entre coletas
+  scrape_timeout: 15s        # tempo máximo de espera por resposta
+  evaluation_interval: 15s   # tempo para reavaliação de regras/alertas
+  external_labels:
+    monitor: 'llm-router-stack'
+
+# ============================================================
+# Scrape Configurations
+# ============================================================
 
 scrape_configs:
-  # -----------------------------------
-  # Coleta do LLM Router API
-  # -----------------------------------
-  - job_name: "llm_router_api"
+  # ---------------------------
+  # Coleta das métricas da API principal
+  # ---------------------------
+  - job_name: 'llm_router_api'
     metrics_path: /metrics
     static_configs:
-      - targets: ["llm_router_api:8000"]
+      - targets: ['llm_router_api:8000']
+        labels:
+          service: 'llm_router_api'
+          env: 'production'
 
-  # -----------------------------------
-  # Coleta do Prometheus (auto-monitoramento)
-  # -----------------------------------
-  - job_name: "prometheus"
-    static_configs:
-      - targets: ["localhost:9090"]
-
-  # -----------------------------------
-  # Coleta do NSGA Updater
-  # -----------------------------------
+  # ---------------------------
+  # Coleta das métricas do NSGA Updater
+  # ---------------------------
   - job_name: 'nsga_updater'
+    metrics_path: /metrics
     static_configs:
-      - targets: ['nsga_updater:9999']
+      - targets: ['nsga_weights_updater:9999']
+        labels:
+          service: 'nsga_updater'
+          env: 'production'
+
+  # ---------------------------
+  # Coleta de métricas do próprio Prometheus (auto-monitoramento)
+  # ---------------------------
+  - job_name: 'prometheus'
+    scrape_interval: 60s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          env: 'internal'
+
+  # ---------------------------
+  # Coleta opcional do Ollama
+  # ---------------------------
+  - job_name: 'ollama'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['ollama:11434']
+        labels:
+          service: 'ollama'
+          env: 'production'
+
+  # ---------------------------
+  # Coleta do Redis (se exposto)
+  # ---------------------------
+  - job_name: 'redis'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['redis:6379']
+        labels:
+          service: 'redis'
+          env: 'production'

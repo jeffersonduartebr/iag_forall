@@ -2,6 +2,7 @@
 -- Estrutura inicial do banco routerdb (versão aprimorada)
 -- =============================================================
 
+
 CREATE DATABASE IF NOT EXISTS routerdb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE routerdb;
 
@@ -48,3 +49,8 @@ CREATE TABLE IF NOT EXISTS nsga_current_weights (
   token_key    VARCHAR(32)  NOT NULL,
   PRIMARY KEY (model_family)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Criação do usuário de acesso ao banco de dados
+CREATE USER IF NOT EXISTS 'router_user'@'%' IDENTIFIED BY 'router_pass';
+GRANT ALL PRIVILEGES ON routerdb.* TO 'router_user'@'%';
+FLUSH PRIVILEGES;

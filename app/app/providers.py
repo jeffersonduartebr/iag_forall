@@ -1,28 +1,38 @@
-# providers.py
+"""
+providers.py
+----------------------------------------------------
+Gerencia chamadas a modelos LLM (Ollama, OpenAI, Gemini, etc.)
+Compatível com múltiplas versões do LiteLLM (novas e legadas).
+Inclui métricas Prometheus e fallback seguro para erros de registro.
+"""
+
 import logging
 import requests
 import re
-from time import sleep
-from litellm import completion
-import litellm
 import os
+from time import sleep
 from prometheus_client import Histogram
+import litellm
+from litellm import completion
+from .settings import settings
 
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------------------------
-# Configurações globais
-# -------------------------------------------------------------------
+# ============================================================
+# ⚙️ Configurações globais
+# ============================================================
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 
+# ------------------------------------------------------------
+# 🔹 Registro seguro do modelo Gemini (com fallback)
+# ------------------------------------------------------------
 try:
-    # Custo de $0.15 / 1k tokens = $0.00015 / token
-    gemini_cost = 0.00015
+    gemini_cost = 0.00015  # $0.15 / 1k tokens
 
-    # 🔹 Compatível com todas as versões do LiteLLM
     if hasattr(litellm, "register_model"):
         try:
-            # Algumas versões usam 'model_name', outras exigem o nome como primeiro argumento
+            # Tentativa 1 — versão moderna (kwargs)
             litellm.register_model(
                 "gemini-2.0-flash",
                 litellm_provider="gemini",
@@ -39,9 +49,9 @@ try:
                 max_tokens=8192,
                 model_info={"base_model": "gemini-2.0-flash"},
             )
-            logger.info("[providers] Modelos 'gemini-2.0-flash' registrados com sucesso no LiteLLM.")
+            logger.info("[providers] Modelos Gemini registrados (modo moderno).")
         except TypeError:
-            # 🔹 Versões antigas (sem keyword arguments)
+            # Tentativa 2 — versão antiga (posicional)
             litellm.register_model(
                 "gemini-2.0-flash",
                 "gemini",
@@ -58,37 +68,31 @@ try:
                 8192,
                 {"base_model": "gemini-2.0-flash"},
             )
-            logger.info("[providers] Modelos 'gemini-2.0-flash' registrados (modo legacy).")
+            logger.info("[providers] Modelos Gemini registrados (modo legacy).")
     else:
-        logger.warning("[providers] Função register_model ausente; fallback será usado em runtime.")
+        logger.warning("[providers] register_model() ausente; registro será ignorado.")
 
 except Exception as e:
     logger.warning(f"[providers] Falha ao registrar/atualizar modelo no LiteLLM: {e}")
 
+# ============================================================
+# 📊 Métricas Prometheus
+# ============================================================
 
-# -------------------------------------------------------------------
-# Métrica Prometheus para custo
-# -------------------------------------------------------------------
 MODEL_COST_USD = Histogram(
     "model_cost_usd",
     "Custo estimado por requisição",
     ["model"],
 )
 
-TEXT_MODEL_WHITELIST = {
-    "ollama/phi4",
-    "ollama/deepseek-r1:8b",
-    "openai/gpt-5-nano",
-    "gemini/gemini-2.0-flash",
-    "ollama/gemma3:4b-it-qat",
-    "ollama/granite4:1b",
-}
+TEXT_MODEL_WHITELIST = settings.CANDIDATE_MODELS_LIST
 
 EMBED_MODEL_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")
 
-# -------------------------------------------------------------------
-# Garante que o modelo do Ollama esteja disponível localmente
-# -------------------------------------------------------------------
+# ============================================================
+# 🧠 Utilitários do Ollama
+# ============================================================
+
 def _ensure_ollama_model(model_name: str):
     """Baixa o modelo via Ollama se ainda não existir localmente."""
     if not model_name or not isinstance(model_name, str):
@@ -115,26 +119,36 @@ def _ensure_ollama_model(model_name: str):
     except Exception as e:
         logger.error(f"[Ollama] Erro durante verificação/pull: {e}")
 
-# -------------------------------------------------------------------
-# Chamada segura ao modelo via LiteLLM
-# -------------------------------------------------------------------
-def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: int = 1024, api_base: str = OLLAMA_BASE_URL):
+# ============================================================
+# 🚀 Função principal de chamada a modelos
+# ============================================================
+
+def call_model(
+    model: str,
+    prompt: str,
+    temperature: float = 0.4,
+    max_tokens: int = 1024,
+    api_base: str = OLLAMA_BASE_URL,
+):
     """
-    Chama modelo com validação e tratamento de falhas.
+    Chama um modelo com validação, fallback e métricas.
     Compatível com GPT-5 / GPT-4o-mini / GPT-5-nano / Ollama / Gemini.
     """
 
     if not model or not isinstance(model, str):
         raise ValueError(f"[providers] Modelo inválido: {model!r}")
 
+    # Impede uso de modelos de embedding para geração
     if any(model.startswith(prefix) for prefix in EMBED_MODEL_PREFIXES):
         raise ValueError(f"[providers] Modelo '{model}' é de embedding e não suporta geração.")
 
+    # Detecta modelo Ollama
     is_ollama = model.startswith("ollama/") or ":" in model
     model_clean = model.replace("ollama/", "")
-    base_url = api_base or OLLAMA_BASE_URL if is_ollama else None
+    base_url = api_base if is_ollama else None
     logger.debug(f"[providers] Usando base_url={base_url}")
 
+    # Detecção para novos parâmetros (OpenAI-like)
     use_new_param = bool(re.search(r"gpt-5|gpt-4o-mini|nano", model))
 
     params = {
@@ -161,9 +175,11 @@ def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: in
                 "provider": "ollama" if is_ollama else "remote",
             }
 
-            # Exporta métrica Prometheus (quando disponível)
+            # Prometheus — custo estimado
             if "usage" in meta and "total_tokens" in meta["usage"]:
-                MODEL_COST_USD.labels(model=model).observe(meta["usage"]["total_tokens"] / 1000.0 * 0.001)
+                MODEL_COST_USD.labels(model=model).observe(
+                    meta["usage"]["total_tokens"] / 1000.0 * 0.001
+                )
 
             return text, meta
 
@@ -171,23 +187,17 @@ def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: in
             # Modelos sem custo mapeado
             if "isn't mapped yet" in str(e):
                 logger.warning(
-                    f"[LiteLLM] Modelo '{model}' ainda não está mapeado no cost_calculator. "
-                    f"Aplicando custo padrão local."
+                    f"[LiteLLM] Modelo '{model}' não mapeado — aplicando custo padrão."
                 )
-                MODEL_COST_USD.labels(model=model).observe(0.00015)  # custo estimado
+                MODEL_COST_USD.labels(model=model).observe(0.00015)
                 return (
                     "[Aviso: modelo sem custo mapeado — custo estimado localmente.]",
-                    {
-                        "usage": {},
-                        "latency_s": 6.0,
-                        "provider": "gemini",
-                        "cost_per_1k": 0.15,
-                    },
+                    {"usage": {}, "latency_s": 6.0, "provider": "gemini", "cost_per_1k": 0.15},
                 )
 
-            # Erro de parâmetro incompatível
+            # Parâmetro incompatível
             if "unsupported_parameter" in str(e) or "max_tokens" in str(e):
-                logger.warning(f"[providers] Parâmetro incompatível para {model}. Retentando com chave alternativa.")
+                logger.warning(f"[providers] Parâmetro incompatível para {model}, ajustando chave.")
                 if "max_tokens" in params:
                     params.pop("max_tokens", None)
                     params["max_completion_tokens"] = max_tokens
@@ -197,6 +207,7 @@ def call_model(model: str, prompt: str, temperature: float = 0.4, max_tokens: in
                 sleep(1)
                 continue
 
+            # Tentativa falhou
             logger.error(f"[providers] Falha tentativa {attempt}/{retries} para modelo {model}: {e}")
             if attempt < retries:
                 sleep(delay)

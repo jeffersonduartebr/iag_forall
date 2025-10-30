@@ -4,6 +4,8 @@ import logging
 import time # 👈 Adicionado
 from datetime import datetime
 from typing import Dict, Tuple, List, Optional
+
+from app.observability import BANDIT_SELECT, BANDIT_UPDATE
 from .db_manager import insert_history, get_current_weights # 👈 Adicionado get_current_weights
 
 logger = logging.getLogger(__name__)
@@ -142,6 +144,10 @@ def update_model(model: str, query: str, reward: float, **kwargs) -> float:
 
 def bandit_update(model: str, query: str, reward: float, **kwargs) -> float:
     """Função wrapper pública para atualização."""
+    
+    BANDIT_SELECT.labels(model=model).inc()
+    BANDIT_UPDATE.labels(model=model).inc()
+
     return update_model(model, query, reward, **kwargs)
 
 def compute_reward(model: str, quality: float, latency: float) -> float:

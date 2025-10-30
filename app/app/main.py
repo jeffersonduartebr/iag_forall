@@ -158,6 +158,18 @@ async def route_query(req: QueryRequest):
     ROUTER_CHOSEN.labels(model=chosen_model or "cached").inc()
     CANDIDATE_COST.observe(cost)
     CANDIDATE_LAT.observe(latency)
+    # Atualiza custos acumulados e economia
+    ROUTER_MODEL_COST.labels(model=chosen_model).inc(cost)
+    ROUTER_COST_PER_QUERY.set(cost)
+    if "ollama" in chosen_model:
+        ROUTER_COST_SAVINGS.inc(cost * 0.8)  # Exemplo: assume 80% de economia
+        ROUTER_LOCAL_USAGE_RATIO.set(1.0)
+    else:
+        ROUTER_LOCAL_USAGE_RATIO.set(0.0)
+
+    # Atualiza qualidade média (EMA simples)
+    ROUTER_QUALITY_AVG.labels(model=chosen_model).set(quality)
+
 
     # Monta saída compatível
     route = RouteDecision(

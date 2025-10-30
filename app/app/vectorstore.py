@@ -92,14 +92,19 @@ async def delete_collection(collection_name: str):
 # ============================================================
 
 def _insert_embedding_sync(collection_name: str, doc_id: str, text: str, embedding: list, metadata: Optional[Dict[str, Any]] = None):
-    """Função síncrona auxiliar para ser usada com to_thread."""
+    """Função síncrona auxiliar para inserção de embeddings no ChromaDB."""
     collection = chroma_client.get_collection(collection_name)
+
+    # ✅ Garante que o metadata nunca seja vazio (Chroma requer dict não-vazio)
+    safe_metadata = metadata if (metadata and isinstance(metadata, dict) and metadata) else {"source": "router"}
+
     collection.add(
         ids=[doc_id],
         documents=[text],
         embeddings=[embedding],
-        metadatas=[metadata or {}]  # ✅ Suporte para metadata
+        metadatas=[safe_metadata]
     )
+
 
 async def insert_embedding(collection_name: str, doc_id: str, text: str, embedding: list, metadata: Optional[Dict[str, Any]] = None):
     """(Async) Insere um documento e seu embedding."""

@@ -15,3 +15,5 @@ sentence-transformers
 pymysql
 PyMuPDF
 python-multipart
+google-cloud-aiplatform
+sqlalchemy

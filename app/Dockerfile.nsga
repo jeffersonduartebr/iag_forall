@@ -24,4 +24,4 @@ RUN touch /app/__init__.py
 RUN ls -la /app
 
 # ✅ 7️⃣ Executa o módulo correto (sem .py)
-ENTRYPOINT ["bash", "-c", "while true; do python -m app.nsga_weights_updater; echo '[nsga] Ciclo concluído. Aguardando 2h...'; sleep 7200; done"]
+ENTRYPOINT ["bash", "-c", "while true; do python -m app.nsga_weights_updater; echo '[nsga] Ciclo concluído. Aguardando 15min...'; sleep 900; done"]
