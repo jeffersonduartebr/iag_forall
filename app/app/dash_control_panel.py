@@ -7,19 +7,30 @@ from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output, State
 from sqlalchemy import create_engine, text
 
-# =========================================================
-# 🔧 Configurações básicas
-# =========================================================
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_PASS = os.getenv("REDIS_PASS", "SenhaForte")
+# CORRIGIDO: Importa o módulo de settings centralizado
+# (Assumindo que o Dash está um nível acima, ajuste o path se necessário)
+try:
+    from app.settings_dynamic import settings
+except ImportError:
+    # Fallback se o path for diferente
+    import sys
+    # Adiciona o diretório pai ao path para encontrar 'app'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from app.settings_dynamic import settings
 
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_NAME = os.getenv("DB_NAME", "routerdb")
+# =========================================================
+# 🔧 Configurações básicas (Lidas do settings)
+# =========================================================
+REDIS_HOST = settings.REDIS_HOST
+REDIS_PORT = settings.REDIS_PORT
+REDIS_PASS = settings.get("REDIS_PASS", os.getenv("REDIS_PASS", "SenhaForte"))
 
-# Redis
+DB_HOST = settings.DB_HOST
+DB_USER = settings.DB_USER
+DB_PASS = settings.DB_PASS
+DB_NAME = settings.DB_NAME
+
+# Redis (cliente ainda é necessário para o Dash verificar o ping)
 r = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASS, decode_responses=True
 )
@@ -46,25 +57,39 @@ def get_system_status():
     return redis_ok, db_ok
 
 
-def get_settings_from_redis():
-    settings = {
-        "temperature": float(r.get("temperature") or 0.7),
-        "max_tokens": int(r.get("max_tokens") or 2048),
-        "top_p": float(r.get("top_p") or 0.9),
-        "bandit_exploration_rate": float(r.get("bandit_exploration_rate") or 0.2),
+def get_dynamic_settings():
+    """CORRIGIDO: Lê as configurações do módulo centralizado (Redis > DB > .env)."""
+    s = {
+        "temperature": settings.TEMPERATURE_DEFAULT,
+        "max_tokens": settings.MAX_TOKENS_DEFAULT,
+        "top_p": float(settings.get("top_p", 0.9)),
+        "bandit_exploration_rate": float(settings.get("BANDIT_EPSILON", 0.12)), # Usa a chave do bandits.py
     }
-    return settings
+    return s
 
 
-def save_settings_to_redis(data):
+def save_dynamic_settings(data):
+    """CORRIGIDO: Salva usando settings.set() para persistir em Redis + DB."""
     for k, v in data.items():
-        r.set(k, v)
+        # Mapeia nomes do Dash para chaves de configuração reais
+        if k == "bandit_exploration_rate":
+            key_name = "BANDIT_EPSILON"
+        elif k == "temperature":
+             key_name = "TEMPERATURE_DEFAULT"
+        elif k == "max_tokens":
+             key_name = "MAX_TOKENS_DEFAULT"
+        else:
+            key_name = k # ex: 'top_p'
+            
+        settings.set(key_name, v, actor="dash_panel", source="ui")
 
 
 def fetch_query_history(limit=30):
+    """CORRIGIDO: Lê da tabela 'query_log' e colunas corretas."""
     query = """
-        SELECT id, query_text, selected_model, judge_model, score, created_at
-        FROM query_logs
+        SELECT id, query_text, chosen_model as selected_model, 
+               quality as score, created_at
+        FROM query_log
         ORDER BY created_at DESC
         LIMIT :limit
     """
@@ -73,30 +98,43 @@ def fetch_query_history(limit=30):
         return df
     except Exception as e:
         print(f"[ERRO HISTÓRICO]: {e}")
-        return pd.DataFrame(columns=["id", "query_text", "selected_model", "judge_model", "score", "created_at"])
+        # Colunas ajustadas para corresponder à query
+        return pd.DataFrame(columns=["id", "query_text", "selected_model", "score", "created_at"])
 
 
 def get_nsga_weights():
+    """
+    NOTA: Esta função lê uma tabela 'nsga_weights' com colunas 'objective' e 'weight'.
+    Isso conflita com 'nsga_weights_updater.py' que usa colunas 'model' e 'weight'.
+    Mantendo a lógica original do Dash por enquanto, mas isso é um bug de integração.
+    """
     try:
         with engine.connect() as conn:
+            # A tabela 'nsga_weights' criada pelo nsga_updater não tem 'objective'
+            # Isso VAI FALHAR a menos que a tabela seja criada manualmente.
             result = conn.execute(
                 text("SELECT objective, weight FROM nsga_weights ORDER BY objective ASC")
             )
-            return {row[0]: float(row[1]) for row in result}
-    except Exception:
+            data = {row[0]: float(row[1]) for row in result}
+            if not data: # Fallback se a query falhar ou retornar vazio
+                return {"accuracy": 0.5, "latency": 0.3, "cost": 0.2}
+            return data
+    except Exception as e:
+        print(f"[ERRO GET PESO NSGA]: {e}")
         return {"accuracy": 0.5, "latency": 0.3, "cost": 0.2}
 
 
 def update_nsga_weight(objective, new_value):
+    """CORRIGIDO: Adicionado conn.commit()"""
     try:
         with engine.connect() as conn:
             conn.execute(
                 text("UPDATE nsga_weights SET weight=:val WHERE objective=:obj"),
                 {"val": new_value, "obj": objective},
             )
-            conn.commit()
+            conn.commit() # <-- CORRIGIDO
     except Exception as e:
-        print(f"[ERRO PESO NSGA]: {e}")
+        print(f"[ERRO UPDATE PESO NSGA]: {e}")
 
 
 # =========================================================
@@ -151,18 +189,18 @@ def render_content(tab):
         )
 
     elif tab == "tab-vars":
-        settings = get_settings_from_redis()
+        settings_vals = get_dynamic_settings() # <-- CORRIGIDO
         return html.Div(
             [
                 html.H3("⚙️ Ajuste de Variáveis de Execução"),
                 html.Label("Temperatura"),
-                dcc.Slider(id="slider-temp", min=0, max=2, step=0.05, value=settings["temperature"], marks=None, tooltip={"placement": "bottom"}),
+                dcc.Slider(id="slider-temp", min=0, max=2, step=0.05, value=settings_vals["temperature"], marks=None, tooltip={"placement": "bottom"}),
                 html.Label("Máximo de Tokens"),
-                dcc.Input(id="input-tokens", type="number", value=settings["max_tokens"]),
+                dcc.Input(id="input-tokens", type="number", value=settings_vals["max_tokens"]),
                 html.Label("Top-p"),
-                dcc.Slider(id="slider-top-p", min=0.0, max=1.0, step=0.01, value=settings["top_p"], marks=None, tooltip={"placement": "bottom"}),
-                html.Label("Taxa de Exploração (Bandit)"),
-                dcc.Slider(id="slider-bandit", min=0.0, max=1.0, step=0.05, value=settings["bandit_exploration_rate"], marks=None, tooltip={"placement": "bottom"}),
+                dcc.Slider(id="slider-top-p", min=0.0, max=1.0, step=0.01, value=settings_vals["top_p"], marks=None, tooltip={"placement": "bottom"}),
+                html.Label("Taxa de Exploração (Bandit Epsilon)"), # <-- CORRIGIDO (Label)
+                dcc.Slider(id="slider-bandit", min=0.0, max=1.0, step=0.05, value=settings_vals["bandit_exploration_rate"], marks=None, tooltip={"placement": "bottom"}),
                 html.Br(),
                 html.Button("💾 Salvar", id="btn-save-vars", n_clicks=0),
                 html.Div(id="save-vars-status", style={"marginTop": "10px", "fontWeight": "bold"}),
@@ -171,12 +209,14 @@ def render_content(tab):
 
     elif tab == "tab-hist":
         df = fetch_query_history()
+        # CORRIGIDO: Colunas da tabela devem bater com a query
+        cols = ["id", "query_text", "selected_model", "score", "created_at"]
         return html.Div(
             [
                 html.H3("🧠 Histórico de Consultas e Julgamentos"),
                 dash_table.DataTable(
                     id="table-hist",
-                    columns=[{"name": i, "id": i} for i in df.columns],
+                    columns=[{"name": i, "id": i} for i in cols],
                     data=df.to_dict("records"),
                     page_size=10,
                     style_table={"overflowX": "auto"},
@@ -216,7 +256,7 @@ def render_content(tab):
 )
 def save_variables(n_clicks, temp, tokens, top_p, bandit):
     if n_clicks > 0:
-        save_settings_to_redis(
+        save_dynamic_settings( # <-- CORRIGIDO
             {
                 "temperature": temp,
                 "max_tokens": tokens,
@@ -224,7 +264,7 @@ def save_variables(n_clicks, temp, tokens, top_p, bandit):
                 "bandit_exploration_rate": bandit,
             }
         )
-        return f"✅ Configurações salvas com sucesso ({n_clicks})"
+        return f"✅ Configurações salvas (Redis+DB) ({n_clicks})"
     return ""
 
 

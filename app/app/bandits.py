@@ -4,7 +4,7 @@ bandits.py
 ----------------------------------------------------
 Bandit contextual dinâmico com persistência:
 - Contextos granulares detectados automaticamente (12+ categorias).
-- Leitura da lista de modelos via Redis → DB → .env (via settings).
+- Leitura da lista de modelos via settings_dynamic (Redis → DB → .env).
 - Exploração ε-greedy adaptativa por contexto (dinâmica, não-estática).
 - Estatísticas por (contexto, modelo) armazenadas em Redis e MariaDB.
 - Métricas Prometheus e logs estruturados.
@@ -30,7 +30,7 @@ import numpy as np
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.settings_dynamic import DynamicSettings  # Redis → DB → .env
+from app.settings_dynamic import settings # <-- CORRIGIDO
 from app.utils.redis_client import get_redis
 from app.observability import BANDIT_SELECT, BANDIT_UPDATE, BANDIT_REWARD
 
@@ -41,23 +41,20 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 # --- Banco ---
-DB_HOST = os.getenv("DB_HOST", "mariadb")
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_NAME = os.getenv("DB_NAME", "routerdb")
+# Lendo do settings para consistência, com fallback para os.getenv
+DB_HOST = settings.get("DB_HOST", os.getenv("DB_HOST", "mariadb"))
+DB_USER = settings.get("DB_USER", os.getenv("DB_USER", "router_user"))
+DB_PASS = settings.get("DB_PASS", os.getenv("DB_PASS", "router_pass"))
+DB_NAME = settings.get("DB_NAME", os.getenv("DB_NAME", "routerdb"))
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
 # --- Redis ---
 rds = get_redis()
 
-# --- Settings dinâmicos (Redis → DB → .env) ---
-dyn = DynamicSettings()
+# --- Settings dinâmicos (instância global 'settings') ---
 
-# Chaves Redis
-R_KEY_MODELS = "router:candidate_models"             # JSON list[str]
-R_KEY_JUDGES  = "router:judge_models"                # JSON list[str]
-R_KEY_BANDIT_EPS = "router:bandit:epsilon"           # float (0..1)
+# Chaves Redis (para estatísticas, não para config)
 R_KEY_BANDIT_CTXT_PREFIX = "bandit:ctx"              # bandit:ctx:<ctx> -> hash {model: json(stats)}
 R_KEY_BANDIT_CTXT_META = "bandit:ctx:meta"           # info geral por contexto
 
@@ -158,25 +155,15 @@ def detect_contexts(query: str) -> List[str]:
 
 def load_candidate_models() -> List[str]:
     """
-    Busca lista de modelos candidate do Redis; se ausente, usa DynamicSettings.
-    Redis key: router:candidate_models (JSON list[str])
+    Busca lista de modelos candidate via settings (Redis → DB → .env).
     """
     try:
-        if rds and rds.exists(R_KEY_MODELS):
-            data = rds.get(R_KEY_MODELS)
-            models = json.loads(data) if data else []
-            if isinstance(models, list) and all(isinstance(m, str) for m in models):
-                return models
-    except Exception as e:
-        logger.warning(f"[bandit] Falha ao ler modelos do Redis: {e}")
-
-    # DynamicSettings (DB → .env)
-    try:
-        models = dyn.get_candidate_models()
-        if models:
+        # CORRIGIDO: Lê diretamente da propriedade centralizada
+        models = settings.CANDIDATE_MODELS_LIST
+        if models and isinstance(models, list):
             return models
     except Exception as e:
-        logger.warning(f"[bandit] Falha ao ler modelos do DynamicSettings: {e}")
+        logger.warning(f"[bandit] Falha ao ler modelos do settings_dynamic: {e}")
 
     # Fallback final (vazio)
     logger.warning("[bandit] Nenhuma lista de modelos encontrada; retornando lista vazia.")
@@ -275,10 +262,16 @@ def _upsert_ctx_model_to_db(ctx: str, model: str, avg: float, count: int) -> Non
 def _dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]]) -> float:
     """
     Ajusta epsilon dinamicamente:
+    - O valor base é lido de settings (Redis > DB > .env)
     - Se existem modelos com count baixo, aumenta ε
     - Se variância média é alta, aumenta ε
     """
-    eps = DEFAULT_EPSILON
+    try:
+        # CORRIGIDO: Lê o valor base do settings, que já checa Redis > DB > .env
+        eps = float(settings.get("BANDIT_EPSILON", DEFAULT_EPSILON))
+    except Exception:
+        eps = DEFAULT_EPSILON
+    
     if not ctx_stats:
         return eps + 0.1  # nada conhecido -> explore mais
 
@@ -290,13 +283,8 @@ def _dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]]) -> float:
     if variances and statistics.mean(variances) > 0.05:  # limiar heurístico
         eps += CONTEXT_VARIANCE_BOOST
 
-    # Permitir override via Redis
-    try:
-        if rds and rds.exists(R_KEY_BANDIT_EPS):
-            eps_ov = float(rds.get(R_KEY_BANDIT_EPS))
-            eps = max(0.0, min(1.0, eps_ov))
-    except Exception:
-        pass
+    # REMOVIDO: A leitura manual do Redis (R_KEY_BANDIT_EPS) foi removida
+    # pois settings.get() já faz isso de forma centralizada.
 
     return max(0.0, min(1.0, eps))
 

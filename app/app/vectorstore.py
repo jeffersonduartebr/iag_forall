@@ -11,14 +11,17 @@ import chromadb
 import asyncio
 from typing import List, Dict, Any, Optional
 
+# ✅ Importa o módulo de settings centralizado
+# (Assumindo que este arquivo está em 'app/vectorstore.py')
+from .settings_dynamic import settings
+
 logger = logging.getLogger(__name__)
 
 # ============================================================
 # ⚙️ Configurações
 # ============================================================
-# ✅ Este é o caminho correto DENTRO do contêiner,
-#    conforme definido no docker-compose.yml
-CHROMA_PATH = os.getenv("CHROMA_PATH", "/data/chroma")
+# CORRIGIDO: Lê do .get() para configuração dinâmica (Redis > DB > .env)
+CHROMA_PATH = settings.get("CHROMA_PATH", "/data/chroma")
 
 
 # ============================================================

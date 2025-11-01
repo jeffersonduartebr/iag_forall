@@ -1,0 +1,13 @@
+# ============================================================
+# 📈 Correlation Metrics — Exportador de correlação e análises estatísticas
+# ============================================================
+
+numpy==1.26.4
+pandas
+sqlalchemy>=2.0
+redis
+prometheus-client==0.21.0
+structlog==24.4.0
+python-dotenv
+requests
+httpx==0.27.2

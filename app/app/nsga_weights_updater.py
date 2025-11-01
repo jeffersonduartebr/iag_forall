@@ -1,9 +1,8 @@
 # nsga_weights_updater.py
 # ------------------------------------------------------------
 # Serviço NSGA-II para cálculo de pesos de seleção entre modelos.
-# Lê modelos de Redis -> DB -> .env; usa logs recentes de consultas
-# para inferir métricas e características; publica pesos em DB/Redis;
-# expõe /metrics e /health.
+# Lê modelos de settings_dynamic (Redis -> DB -> .env); usa logs 
+# recentes de consultas; publica pesos em DB/Redis.
 # ------------------------------------------------------------
 
 import os
@@ -26,9 +25,16 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 try:
+    # CORRIGIDO: Importa o settings central
+    from app.settings_dynamic import settings
     # use o util já existente no projeto, se disponível
     from app.utils.redis_client import get_redis
 except Exception:
+    # Fallback de import (caso o path esteja diferente)
+    import sys
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from app.settings_dynamic import settings
+    
     # fallback minimalista
     import redis
 
@@ -63,25 +69,24 @@ logging.basicConfig(
 logger = logging.getLogger("nsga-updater")
 
 # ------------------------------------------------------------
-# Config / Conexões
+# Config / Conexões (Lidas do settings)
 # ------------------------------------------------------------
-DB_HOST = os.getenv("DB_HOST", "mariadb")
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_NAME = os.getenv("DB_NAME", "routerdb")
+DB_HOST = settings.DB_HOST
+DB_USER = settings.DB_USER
+DB_PASS = settings.DB_PASS
+DB_NAME = settings.DB_NAME
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
-REDIS_KEY_CANDIDATES = "config:candidate_models"      # JSON list
-REDIS_KEY_JUDGES = "config:judge_models"              # JSON list (não usado diretamente aqui, mas mantemos padrão)
-REDIS_KEY_WEIGHTS = "nsga:weights"                    # JSON dict: {model: weight}
+# Chave de escrita (específica deste módulo)
+REDIS_KEY_WEIGHTS = "nsga:weights" # JSON dict: {model: weight}
 
-# NSGA ciclo (em segundos)
-UPDATE_INTERVAL_S = int(os.getenv("NSGA_UPDATE_INTERVAL_S", "300"))  # 5 minutos
+# NSGA ciclo (lido do settings, com fallback)
+UPDATE_INTERVAL_S = int(settings.get("NSGA_UPDATE_INTERVAL_S", "300"))  # 5 minutos
 
-# Quantidade de logs considerados (janela móvel)
-QUERY_LOG_LOOKBACK_MINUTES = int(os.getenv("NSGA_LOOKBACK_MINUTES", "180"))  # 3h
-QUERY_LOG_MAX_ROWS = int(os.getenv("NSGA_LOOKBACK_MAXROWS", "2000"))         # até 2000 linhas
+# Quantidade de logs considerados (lido do settings, com fallback)
+QUERY_LOG_LOOKBACK_MINUTES = int(settings.get("NSGA_LOOKBACK_MINUTES", "180"))  # 3h
+QUERY_LOG_MAX_ROWS = int(settings.get("NSGA_LOOKBACK_MAXROWS", "2000"))         # até 2000 linhas
 
 # ------------------------------------------------------------
 # Prometheus (single-process registry)
@@ -107,63 +112,16 @@ MODEL_ALIGNMENT = Gauge("nsga_model_alignment", "Score de alinhamento (0-1) do m
 # ------------------------------------------------------------
 # Utilidades: leitura dinâmica (Redis -> DB -> .env)
 # ------------------------------------------------------------
-def _parse_models_list(raw: str) -> List[str]:
-    """Aceita JSON list ou CSV."""
-    if not raw:
-        return []
-    raw = raw.strip()
-    try:
-        if raw.startswith("["):
-            data = json.loads(raw)
-            return [m for m in data if isinstance(m, str)]
-    except Exception:
-        pass
-    # CSV
-    return [p.strip() for p in raw.split(",") if p.strip()]
 
-def load_candidate_models() -> List[str]:
-    """Redis -> DB -> .env (CANDIDATE_MODELS_LIST)."""
-    # 1) Redis
-    try:
-        r = get_redis()
-        if r:
-            v = r.get(REDIS_KEY_CANDIDATES)
-            if v:
-                data = json.loads(v)
-                if isinstance(data, list) and all(isinstance(m, str) for m in data):
-                    logger.info(f"[nsga] Modelos (Redis): {data}")
-                    return data
-    except Exception as e:
-        logger.warning(f"[nsga] Falha ao ler candidatos do Redis: {e}")
-
-    # 2) DB (tabela app_config opcional)
-    try:
-        with engine.connect() as conn:
-            rs = conn.execute(text("SELECT `value` FROM app_config WHERE `key` = 'CANDIDATE_MODELS_LIST' LIMIT 1;"))
-            row = rs.fetchone()
-            if row and row[0]:
-                models = _parse_models_list(row[0])
-                if models:
-                    logger.info(f"[nsga] Modelos (DB): {models}")
-                    return models
-    except Exception:
-        pass
-
-    # 3) .env / environment
-    env_val = os.getenv("CANDIDATE_MODELS_LIST", "")
-    models = _parse_models_list(env_val)
-    if models:
-        logger.info(f"[nsga] Modelos (.env): {models}")
-    else:
-        logger.warning("[nsga] Nenhum modelo encontrado; usando fallback ['ollama/gemma3:4b-it-qat'].")
-        models = ["ollama/gemma3:4b-it-qat"]
-    return models
+# REMOVIDO: _parse_models_list
+# REMOVIDO: load_candidate_models
+# (O settings.CANDIDATE_MODELS_LIST substitui ambos)
 
 # ------------------------------------------------------------
 # Esquemas / tabelas necessárias
 # ------------------------------------------------------------
 def ensure_tables():
-    """Cria tabelas necessárias (nsga_weights, query_logs) se não existirem."""
+    """Cria tabelas necessárias (nsga_weights, query_log) se não existirem."""
     ddl_weights = """
     CREATE TABLE IF NOT EXISTS nsga_weights (
         model VARCHAR(255) PRIMARY KEY,
@@ -172,18 +130,20 @@ def ensure_tables():
             ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB;
     """
-    # query_logs é a tabela de auditoria / transparência
+    # CORRIGIDO: DDL para 'query_log' (bate com db_manager.py)
     ddl_qlogs = """
-    CREATE TABLE IF NOT EXISTS query_logs (
+    CREATE TABLE IF NOT EXISTS query_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        query TEXT,
-        model VARCHAR(255),
-        latency_s FLOAT,
+        query_text TEXT NOT NULL,
+        chosen_model VARCHAR(255) NOT NULL,
+        answer TEXT,
         quality FLOAT,
+        latency_s FLOAT,
         cost_per_1k FLOAT,
-        success TINYINT(1) DEFAULT 1,
-        judge_scores JSON NULL
+        reward FLOAT,
+        context_label VARCHAR(50),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_created_at (created_at)
     ) ENGINE=InnoDB;
     """
     try:
@@ -197,16 +157,24 @@ def ensure_tables():
 # Coleta de dados dos logs recentes
 # ------------------------------------------------------------
 def load_recent_query_logs(minutes_back: int, max_rows: int) -> List[Dict[str, Any]]:
-    """Carrega logs recentes (janela móvel)."""
+    """Carrega logs recentes (janela móvel) da tabela 'query_log'."""
     try:
         with engine.connect() as conn:
             since = datetime.utcnow() - timedelta(minutes=minutes_back)
+            # CORRIGIDO: Query ajustada para os nomes de coluna corretos
             rs = conn.execute(
                 text(
                     """
-                    SELECT ts, query, model, latency_s, quality, cost_per_1k, success
-                    FROM query_logs
-                    WHERE ts >= :since
+                    SELECT 
+                        created_at as ts, 
+                        query_text as query, 
+                        chosen_model as model, 
+                        latency_s, 
+                        quality, 
+                        cost_per_1k, 
+                        (reward > 0.3) as success
+                    FROM query_log
+                    WHERE created_at >= :since
                     ORDER BY id DESC
                     LIMIT :lim
                     """
@@ -230,7 +198,7 @@ def load_recent_query_logs(minutes_back: int, max_rows: int) -> List[Dict[str, A
             )
         return out
     except SQLAlchemyError as e:
-        logger.warning(f"[nsga] Falha ao ler query_logs: {e}")
+        logger.warning(f"[nsga] Falha ao ler query_log: {e}")
         return []
 
 # ------------------------------------------------------------
@@ -542,7 +510,10 @@ def persist_weights(weights: Dict[str, float]):
 def one_iteration():
     try:
         ensure_tables()
-        models = load_candidate_models()
+        
+        # CORRIGIDO: Lê diretamente do settings
+        models = settings.CANDIDATE_MODELS_LIST
+        
         if not models:
             logger.warning("[nsga] Sem modelos; interrompendo iteração.")
             return

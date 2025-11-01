@@ -1,7 +1,7 @@
 import random
 import logging
 from typing import List
-from .settings import settings
+from .settings_dynamic import settings
 from .metrics_collector import update_model_metrics, get_snapshot
 from .observability import ROUTER_CHOSEN
 

@@ -16,11 +16,14 @@ import re
 import uuid
 import logging
 from pathlib import Path
+import asyncio
+import fitz  # PyMuPDF
+
+# ✅ Importações centralizadas
 from app.vectorstore import insert_embedding, get_or_create_collection_async
 from app.embeddings import embed_text
 from app.providers import call_model
-import asyncio
-import fitz  # PyMuPDF
+from app.settings_dynamic import settings # ✅ CORRIGIDO: Importa o settings
 
 # ============================================================
 # ⚙️ CONFIGURAÇÃO DE LOGGING
@@ -32,11 +35,14 @@ logging.basicConfig(
 logger = logging.getLogger("populate_vectorstore")
 
 # ============================================================
-# 🧠 PARÂMETROS GERAIS
+# 🧠 PARÂMETROS GERAIS (Lidos do settings)
 # ============================================================
-COLLECTION_NAME = os.getenv("RAG_COLLECTION", "knowledge_base")
-DATA_DIR = os.getenv("RAG_DATA_DIR", "./data/rag_docs")
-SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "ollama/phi4")
+# ✅ CORRIGIDO: Lê do settings (Redis > DB > .env)
+COLLECTION_NAME = settings.get("RAG_COLLECTION", "knowledge_base")
+DATA_DIR = settings.get("RAG_DATA_DIR", "./data/rag_docs")
+SUMMARY_MODEL = settings.get("SUMMARY_MODEL", "ollama/phi4")
+
+# Parâmetros locais
 CHUNK_SIZE = 1000
 OVERLAP = 150
 
@@ -87,6 +93,7 @@ def summarize_text(text: str, model: str = SUMMARY_MODEL) -> tuple[str, str]:
     """
     Gera um título e resumo automático usando um modelo LLM.
     Retorna (título, resumo).
+    (Usa o SUMMARY_MODEL lido dos settings)
     """
     try:
         prompt = f"""
@@ -101,7 +108,7 @@ TÍTULO: ...
 RESUMO: ...
 """
         response, _ = call_model(
-            model=model,
+            model=model, # Usa o modelo lido dos settings
             prompt=prompt,
             max_tokens=256,
             temperature=0.3
@@ -175,7 +182,7 @@ async def populate_vectorstore():
             except Exception as e:
                 logger.error(f"[populate] Falha ao inserir fragmento de {fname}: {e}")
 
-    logger.info(f"[populate] ✅ Concluído: {len(all_docs)} documentos, {total_fragments} fragmentos inseridos.")
+    logger.info(f"[populate] ✅ Concluído: {len(all_docs)} documentos, {total_fragments} inseridos.")
 
 # ============================================================
 # 🚀 EXECUÇÃO DIRETA

@@ -10,11 +10,14 @@ from litellm import aembedding
 import os
 import logging
 
+# ✅ CORRIGIDO: Importa o settings centralizado
+from .settings_dynamic import settings
+
 logger = logging.getLogger(__name__)
 
-# Nome do modelo local de embedding no Ollama
-EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+# ✅ CORRIGIDO: Lê as configurações do settings (Redis > DB > .env)
+EMBED_MODEL = settings.EMBED_MODEL
+OLLAMA_BASE_URL = settings.OLLAMA_BASE_URL
 
 
 async def embed_text(text: str) -> list[float]:

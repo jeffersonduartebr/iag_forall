@@ -1,6 +1,6 @@
 # app/rag_local.py
 from __future__ import annotations
-import os as _os
+import os as _os # Mantido caso 'os' seja usado em outro lugar, mas prefixado
 import logging
 import asyncio
 from typing import List, Dict, Any, Optional
@@ -13,12 +13,16 @@ from app.vectorstore import (
     health_async as chroma_health
 )
 from app.embeddings import embed_text
+# ✅ Importa o módulo de settings centralizado
+from app.settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
 
-# --- Configurações Específicas do RAG ---
-EMBED_MODEL = _os.getenv("EMBED_MODEL", "nomic-embed-text")
-TOP_K = int(_os.getenv("RAG_TOP_K", "3"))
+# --- Configurações Específicas do RAG (Lidas do settings) ---
+# CORRIGIDO: Lê da propriedade centralizada
+EMBED_MODEL = settings.EMBED_MODEL
+# CORRIGIDO: Lê do .get() para configuração dinâmica
+TOP_K = int(settings.get("RAG_TOP_K", 3))
 RAG_COLLECTION_NAME = "docs" # Nome da coleção para documentos RAG
 
 
@@ -64,7 +68,7 @@ async def build_augmented_prompt(query: str) -> str:
         res = await query_embedding(
             collection_name=RAG_COLLECTION_NAME,
             embedding=embedding,
-            n_results=TOP_K
+            n_results=TOP_K # Usa o TOP_K lido do settings
         )
 
         # 3. Processa resultados
@@ -90,7 +94,7 @@ async def health() -> Dict[str, Any]:
     """Retorna informações de saúde do módulo RAG."""
     return {
         "chroma_ready": await chroma_health(), # ✅ Verifica a saúde central
-        "embed_model": EMBED_MODEL,
-        "top_k": TOP_K,
+        "embed_model": EMBED_MODEL, # ✅ Reporta o modelo lido do settings
+        "top_k": TOP_K, # ✅ Reporta o K lido do settings
         "collection_name": RAG_COLLECTION_NAME
     }

@@ -2,10 +2,12 @@
 """
 db_manager.py
 ----------------------------------------------------
-Gerencia a inicialização completa do banco de dados e integração com Redis.
-- Cria e migra todas as tabelas necessárias para o funcionamento da aplicação.
+Gerencia a inicialização do banco de dados (criação de tabelas).
+- Cria e migra todas as tabelas de DADOS necessárias.
 - Executa init_db.sql, se existir.
-- Popular Redis com variáveis críticas (modelos, epsilon, etc.).
+
+NOTA: Este módulo NÃO gerencia mais a configuração do Redis.
+Isso é feito pelo 'settings_dynamic.py' e pelos endpoints de admin.
 """
 
 import os
@@ -15,28 +17,42 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from redis import Redis
 
+# ✅ CORRIGIDO: Importa o settings
+try:
+    from app.settings_dynamic import settings
+except ImportError:
+    # Fallback se o path for diferente
+    import sys
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from app.settings_dynamic import settings
+
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 # ============================================================
-# ⚙️ Configurações do banco e Redis
+# ⚙️ Configurações do banco e Redis (Lidas do settings)
 # ============================================================
 
-DB_HOST = os.getenv("DB_HOST", "mariadb")
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_NAME = os.getenv("DB_NAME", "routerdb")
+# ✅ CORRIGIDO: Lê do settings
+DB_HOST = settings.DB_HOST
+DB_USER = settings.DB_USER
+DB_PASS = settings.DB_PASS
+DB_NAME = settings.DB_NAME
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_PASS = os.getenv("REDIS_PASS", "SenhaForte")
+# ✅ CORRIGIDO: Lê do settings
+REDIS_HOST = settings.REDIS_HOST
+REDIS_PORT = settings.REDIS_PORT
+REDIS_PASS = settings.get("REDIS_PASS", "SenhaForte") # .get() para chaves não-padrão
 
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+# (O cliente Redis é mantido caso seja usado para outras tarefas de
+#  inicialização de DADOS, mas não de CONFIG)
 redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASS, decode_responses=True)
 
 # ============================================================
-# 🧱 Tabelas da aplicação
+# 🧱 Tabelas da aplicação (Tabelas de DADOS)
 # ============================================================
 
 TABLES_DDL = {
@@ -78,7 +94,7 @@ TABLES_DDL = {
             UNIQUE KEY uq_ctx_model (context_type, model)
         ) ENGINE=InnoDB;
     """,
-    # Métricas agregadas por modelo
+    # Métricas agregadas por modelo (Schema antigo, pode ser redundante)
     "model_metrics": """
         CREATE TABLE IF NOT EXISTS model_metrics (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -108,7 +124,7 @@ TABLES_DDL = {
             INDEX idx_created_at (created_at)
         );
     """,
-    # Cache semântico (para evitar reprocessamento)
+    # Cache semântico (Tabela de dados, separada do Chroma)
     "semantic_cache": """
         CREATE TABLE IF NOT EXISTS semantic_cache (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -121,6 +137,20 @@ TABLES_DDL = {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """,
+    # Log dos juízes (criado pelo judges.py, mas definido aqui por centralização)
+    "judge_logs": """
+        CREATE TABLE IF NOT EXISTS judge_logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            query TEXT,
+            answer TEXT,
+            judge_model VARCHAR(255),
+            score_before FLOAT,
+            fallback_model VARCHAR(255),
+            score_after FLOAT,
+            event_type VARCHAR(50)
+        );
+    """
 }
 
 # ============================================================
@@ -150,60 +180,35 @@ def _execute_init_sql():
 # ============================================================
 
 def initialize_tables():
-    """Cria ou atualiza todas as tabelas do sistema."""
-    logger.info("[db_manager] Verificando e criando tabelas necessárias...")
+    """Cria ou atualiza todas as tabelas de DADOS do sistema."""
+    logger.info("[db_manager] Verificando e criando tabelas de dados necessárias...")
     try:
         with engine.begin() as conn:
             for name, ddl in TABLES_DDL.items():
                 conn.execute(text(ddl))
-                logger.info(f"✅ Tabela verificada/criada: {name}")
+                logger.info(f"✅ Tabela de dados verificada/criada: {name}")
     except SQLAlchemyError as e:
         logger.error(f"[db_manager] Erro ao criar tabelas: {e}")
 
 # ============================================================
-# 🧩 Inicialização do Redis
+# 🧩 Inicialização do Redis (Removida)
 # ============================================================
 
-def initialize_redis():
-    """Garante que chaves críticas existam no Redis."""
-    try:
-        # Modelos candidatos e juízes
-        candidate_models = os.getenv("CANDIDATE_MODELS_LIST", "").split(",")
-        judge_models = os.getenv("JUDGE_MODELS", "").split(",")
-        candidate_models = [m.strip() for m in candidate_models if m.strip()]
-        judge_models = [m.strip() for m in judge_models if m.strip()]
-
-        # Fallback se não houver lista
-        if not candidate_models:
-            candidate_models = ["gpt-4o-mini", "mistral", "llama3.1:8b", "phi3.5"]
-        if not judge_models:
-            judge_models = ["gpt-4.1-mini"]
-
-        # Escreve no Redis (JSON)
-        redis_client.set("router:candidate_models", json.dumps(candidate_models))
-        redis_client.set("router:judge_models", json.dumps(judge_models))
-        redis_client.set("router:bandit:epsilon", os.getenv("BANDIT_EPSILON", "0.15"))
-
-        redis_client.set("router:bandit:ctx_version", "v2.0")
-        redis_client.set("router:last_migration", "ok")
-
-        logger.info(f"[redis] Modelos candidatos definidos: {candidate_models}")
-        logger.info(f"[redis] Juízes definidos: {judge_models}")
-        logger.info(f"[redis] Epsilon padrão configurado.")
-    except Exception as e:
-        logger.error(f"[db_manager] Falha ao inicializar Redis: {e}")
+# ❌ REMOVIDO: A função initialize_redis() foi removida.
+# A configuração agora é lida pelo settings_dynamic.py e 
+# escrita pelo admin/settings (main.py).
 
 # ============================================================
 # 🚀 Inicialização completa
 # ============================================================
 
 def initialize_system():
-    """Inicializa todo o backend da aplicação."""
-    logger.info("🚀 Iniciando setup completo do sistema...")
+    """Inicializa o banco de dados (schemas de DADOS)."""
+    logger.info("🚀 Iniciando setup do banco de dados (tabelas de dados)...")
     initialize_tables()
     _execute_init_sql()
-    initialize_redis()
-    logger.info("✅ Banco e Redis inicializados com sucesso.")
+    # ❌ REMOVIDO: Chamada para initialize_redis()
+    logger.info("✅ Banco de dados (tabelas de dados) inicializado com sucesso.")
 
 # ============================================================
 # 🎯 Execução direta

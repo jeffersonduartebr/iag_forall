@@ -15,7 +15,7 @@ import re
 import os
 from typing import List, Dict, Any
 from sqlalchemy import create_engine, text
-from .settings import settings
+from .settings_dynamic import settings
 from .providers import call_model
 from .vectorstore import query_embedding
 from .embeddings import embed_text
@@ -25,10 +25,11 @@ logger = logging.getLogger(__name__)
 # ======================================================
 # 🔧 Banco de dados (para auditoria)
 # ======================================================
-DB_HOST = os.getenv("DB_HOST", "mariadb")
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_NAME = os.getenv("DB_NAME", "routerdb")
+# ✅ CORRIGIDO: Lê as credenciais do settings (Redis > DB > .env)
+DB_HOST = settings.DB_HOST
+DB_USER = settings.DB_USER
+DB_PASS = settings.DB_PASS
+DB_NAME = settings.DB_NAME
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
@@ -39,7 +40,10 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
     """Recupera contexto relevante da base vetorial (ChromaDB)."""
     try:
         query_vec = await embed_text(query)
-        results = await query_embedding("knowledge_base", query_vec, n_results=n_results)
+        # ✅ CORRIGIDO: Lê o nome da coleção RAG do settings
+        collection_name = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
+        results = await query_embedding(collection_name, query_vec, n_results=n_results)
+        
         if not results or "documents" not in results or not results["documents"]:
             logger.info("[Judges] Nenhum contexto RAG recuperado.")
             return ""
@@ -113,9 +117,15 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
     try:
         judge_models = getattr(settings, "JUDGE_MODELS", [])
         if not judge_models:
-            judge_models = [settings.JUDGE_LLM_MODEL] * getattr(settings, "JUDGE_LLM_N", 1)
+            # Fallback para uma propriedade antiga, se existir
+            old_prop = getattr(settings, "JUDGE_LLM_MODEL", None)
+            if old_prop:
+                judge_models = [old_prop] * getattr(settings, "JUDGE_LLM_N", 1)
+            else:
+                judge_models = ["openai/gpt-4o-mini"] # Default seguro
 
-        fallback_model = os.getenv("JUDGE_FALLBACK_MODEL", "openai/gpt-4.1")
+        # ✅ CORRIGIDO: Lê o fallback do settings
+        fallback_model = settings.get("JUDGE_FALLBACK_MODEL", "openai/gpt-4.1")
 
         context = ""
         if use_rag:
@@ -188,6 +198,22 @@ def log_fallback_event(query: str, answer: str, model: str, score_before: float,
     """Registra evento de fallback ou substituição de nota no banco."""
     try:
         with engine.begin() as conn:
+            # ✅ CORRIGIDO: DDL para 'judge_logs'
+            ddl_judge_logs = """
+            CREATE TABLE IF NOT EXISTS judge_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                query TEXT,
+                answer TEXT,
+                judge_model VARCHAR(255),
+                score_before FLOAT,
+                fallback_model VARCHAR(255),
+                score_after FLOAT,
+                event_type VARCHAR(50)
+            );
+            """
+            conn.execute(text(ddl_judge_logs))
+            
             conn.execute(text("""
                 INSERT INTO judge_logs
                 (query, answer, judge_model, score_before, fallback_model, score_after, event_type)
