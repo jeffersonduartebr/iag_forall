@@ -47,8 +47,8 @@ ENV PYTHONUNBUFFERED=1 \
 # ---------------------------------------------------------
 # 🚦 Script de inicialização leve
 # ---------------------------------------------------------
-COPY ./app/prestart_dash.sh /app/prestart_dash.sh
-RUN chmod +x /app/prestart_dash.sh
+COPY ./app/prestart_dash.sh app/prestart_dash.sh
+RUN chmod +x app/prestart_dash.sh
 
 # ---------------------------------------------------------
 # 🚀 Comando principal
