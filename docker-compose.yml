@@ -322,6 +322,19 @@ services:
       - "9104:9104"
     networks:
       - ai_net
+  ollama_exporter:
+    image: ghcr.io/mprezzma/ollama-exporter:latest
+    container_name: ollama_exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"  # Porta padrão do exporter
+    environment:
+      # Diz ao exporter onde encontrar o seu Ollama
+      - OLLAMA_URL=http://ollama:11434 
+    networks:
+      - ai_net
+    depends_on:
+      - ollama
 
 # =========================================================
 # 📦 Volumes persistentes

@@ -21,20 +21,14 @@ COPY ./app/requirements.nsga.txt /app/requirements.nsga.txt
 # =========================================================
 # 📦 Dependências básicas
 # =========================================================
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libmariadb-dev \
-    pkg-config \
-    curl \
-    vim \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libmariadb-dev nc pkg-config curl vim && rm -rf /var/lib/apt/lists/*
 
 # =========================================================
 # 🧩 Instala dependências Python
 # =========================================================
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.nsga.txt && \
-    pip install --no-cache-dir nc python-dotenv
+    pip install --no-cache-dir python-dotenv
 
 # =========================================================
 # ⚙️ Variáveis de ambiente padrão
