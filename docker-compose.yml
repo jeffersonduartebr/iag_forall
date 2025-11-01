@@ -248,8 +248,8 @@ services:
   # =========================================================
   dash-control:
     build:
-      context: ./app
-      dockerfile: app/Dockerfile.dash
+      #context: ./app
+      dockerfile: Dockerfile.dash
     command: python app/dash_control_panel.py
     ports:
       - "8050:8050"
