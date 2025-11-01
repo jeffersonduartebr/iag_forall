@@ -248,7 +248,7 @@ services:
   # =========================================================
   dash-control:
     build:
-      #context: ./app
+      context: ./app
       dockerfile: Dockerfile.dash
     command: python app/dash_control_panel.py
     ports:
