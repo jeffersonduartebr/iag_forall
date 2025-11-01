@@ -16,7 +16,7 @@ WORKDIR /app
 # 📁 Copia os arquivos necessários da aplicação
 # =========================================================
 COPY ./app /app/app
-COPY ./app/requirements.txt /app/requirements.txt
+COPY ./app/requirements.nsga.txt /app/requirements.nsga.txt
 
 # =========================================================
 # 📦 Dependências básicas
@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 🧩 Instala dependências Python
 # =========================================================
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.txt && \
+    pip install --no-cache-dir -r /app/requirements.nsga.txt && \
     pip install --no-cache-dir gunicorn python-dotenv
 
 # =========================================================
