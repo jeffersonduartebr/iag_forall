@@ -45,16 +45,17 @@ ENV PYTHONUNBUFFERED=1 \
     PROMETHEUS_MULTIPROC_DIR=/tmp/prom/dash
 
 # ---------------------------------------------------------
-# 🚦 Script de inicialização leve
+# 🚦 Script de inicialização
 # ---------------------------------------------------------
-COPY ./app/prestart_dash.sh app/prestart_dash.sh
-RUN chmod +x app/prestart_dash.sh
-
+COPY ./app/prestart_dash.sh /app/prestart_dash.sh
+RUN chmod +x /app/prestart_dash.sh
+RUN ls -laht .
+RUN pwd
 # ---------------------------------------------------------
 # 🚀 Comando principal
 # ---------------------------------------------------------
-ENTRYPOINT ["app/prestart_dash.sh"]
-CMD ["python", "app/dash_control_panel.py"]
+ENTRYPOINT ["/app/prestart_dash.sh"]
+CMD ["python", "dash_control_panel.py"]
 
 # ---------------------------------------------------------
 # 🔓 Exposição da porta padrão do Dash
