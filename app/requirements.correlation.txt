@@ -11,3 +11,4 @@ structlog==24.4.0
 python-dotenv
 requests
 httpx==0.27.2
+pymysql

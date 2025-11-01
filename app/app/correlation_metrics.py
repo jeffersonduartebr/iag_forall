@@ -17,20 +17,31 @@ from datetime import datetime
 from prometheus_client import start_http_server, Gauge
 from sqlalchemy import create_engine, text
 
-# ==========================================================
-# 🔧 Configurações de ambiente
-# ==========================================================
-DB_HOST = os.getenv("DB_HOST", "mariadb")
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_NAME = os.getenv("DB_NAME", "routerdb")
+# ✅ CORRIGIDO: Importa o settings centralizado
+try:
+    from app.settings_dynamic import settings
+except ImportError:
+    # Fallback se o path for diferente
+    import sys
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from app.settings_dynamic import settings
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_PASS = os.getenv("REDIS_PASSWORD", "SenhaForte")
+# ==========================================================
+# 🔧 Configurações de ambiente (Lidas do settings)
+# ==========================================================
+# ✅ CORRIGIDO: Lendo do settings (Redis > DB > .env)
+DB_HOST = settings.DB_HOST
+DB_USER = settings.DB_USER
+DB_PASS = settings.DB_PASS
+DB_NAME = settings.DB_NAME
 
-PROM_PORT = int(os.getenv("PROM_PORT", 9105))
-UPDATE_INTERVAL = int(os.getenv("CORR_INTERVAL", 60))
+REDIS_HOST = settings.REDIS_HOST
+REDIS_PORT = settings.REDIS_PORT
+REDIS_PASS = settings.get("REDIS_PASS", "SenhaForte") # .get() para chaves não-padrão
+
+# Configurações operacionais deste serviço (também lidas do settings)
+PROM_PORT = int(settings.get("CORR_PROM_PORT", 9105))
+UPDATE_INTERVAL = int(settings.get("CORR_INTERVAL", 60))
 
 # ==========================================================
 # 📊 Inicialização das métricas Prometheus
@@ -68,23 +79,40 @@ def ensure_table_exists():
         conn.execute(text(ddl))
 
 def fetch_recent_metrics():
-    """Busca as métricas recentes do banco."""
+    """
+    Busca as métricas recentes do banco.
+    NOTA: Esta função assume que existe uma tabela 'model_metrics' 
+    sendo populada por outro processo.
+    """
     query = """
     SELECT model, latency_ms, cost_usd, quality_score, fitness, generation
     FROM model_metrics
     WHERE timestamp > NOW() - INTERVAL 1 DAY;
     """
-    return pd.read_sql(query, db_engine)
+    try:
+        return pd.read_sql(query, db_engine)
+    except Exception as e:
+        print(f"⚠️  Erro ao buscar 'model_metrics': {e}. Esta tabela existe?")
+        return pd.DataFrame()
+
 
 def fetch_nsga_weights():
-    """Busca pesos NSGA-II armazenados."""
+    """
+    Busca pesos NSGA-II armazenados.
+    NOTA: Esta função assume que existe uma tabela 'nsga_weights' 
+    sendo populada pelo 'nsga_weights_updater.py'.
+    """
     query = """
     SELECT model, weight_latency, weight_cost, weight_quality, generation
     FROM nsga_weights
     ORDER BY generation DESC
     LIMIT 300;
     """
-    return pd.read_sql(query, db_engine)
+    try:
+        return pd.read_sql(query, db_engine)
+    except Exception as e:
+        print(f"⚠️  Erro ao buscar 'nsga_weights': {e}. Esta tabela existe?")
+        return pd.DataFrame()
 
 def compute_correlations(df):
     """Calcula as correlações entre latência, custo, qualidade e fitness."""
@@ -161,7 +189,7 @@ def main():
         try:
             df = fetch_recent_metrics()
             if df.empty:
-                print("⚠️ Nenhum dado recente encontrado.")
+                print(f"⚠️  Nenhum dado recente encontrado. Aguardando {UPDATE_INTERVAL}s.")
                 time.sleep(UPDATE_INTERVAL)
                 continue
 
@@ -172,6 +200,7 @@ def main():
             print(f"✅ Correlações publicadas e salvas — {len(corr)} modelos ({datetime.now()})")
         except Exception as e:
             print(f"❌ Erro ao calcular correlações: {e}")
+        
         time.sleep(UPDATE_INTERVAL)
 
 if __name__ == "__main__":
