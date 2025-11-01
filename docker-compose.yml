@@ -1,11 +1,14 @@
+version: "3.9"
+
 services:
   # =========================================================
   # ⚙️ Inicialização do banco e Redis (migração automática)
   # =========================================================
   db_init:
-    build: ./app
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     container_name: db_initializer
-    dockerfile: Dockerfile
     depends_on:
       mariadb:
         condition: service_healthy
@@ -22,10 +25,11 @@ services:
   # 🌐 API principal de roteamento de LLMs
   # =========================================================
   api:
-    build: ./app
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     container_name: llm_router_api
     restart: unless-stopped
-    dockerfile: Dockerfile
     depends_on:
       db_init:
         condition: service_completed_successfully
@@ -73,6 +77,8 @@ services:
       - DB_USER=router_user
       - DB_PASS=router_pass
       - DB_NAME=routerdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom/nsga_updater
     volumes:
       - ./tmp_prom/nsga_updater:/tmp/prom/nsga_updater
@@ -87,7 +93,6 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
-    
     ports:
       - "11434:11434"
     environment:
@@ -146,7 +151,7 @@ services:
       - ai_net
 
   # =========================================================
-  # 🪵 Loki e Promtail
+  # 🪵 Loki e Promtail (logs estruturados)
   # =========================================================
   loki:
     image: grafana/loki:2.9.2
@@ -205,7 +210,7 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "SenhaForte", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -242,8 +247,9 @@ services:
   # 🎛 Painel Dash de Controle
   # =========================================================
   dash-control:
-    build: .
-    dockerfile: Dockerfile
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     command: python app/dash_control_panel.py
     ports:
       - "8050:8050"
