@@ -1,0 +1,62 @@
+# =========================================================
+# 🎛 Dockerfile.dash — Painel de Controle Dash + Redis + DB
+# =========================================================
+
+FROM python:3.11-slim
+
+LABEL maintainer="Jefferson Igor Duarte Silva <jefferson.duarte@academico.ifrn.edu.br>"
+LABEL description="Painel Dash de Controle do Roteador de LLMs"
+
+# ---------------------------------------------------------
+# 🧰 Dependências básicas do sistema
+# ---------------------------------------------------------
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    netcat-traditional \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------
+# 📦 Criação da estrutura da aplicação
+# ---------------------------------------------------------
+WORKDIR /app
+COPY ./app /app
+COPY ./requirements.txt /app/requirements.txt
+
+# ---------------------------------------------------------
+# 🔧 Instalação de dependências Python
+# ---------------------------------------------------------
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install -r /app/requirements.txt \
+    && pip install dash==2.17.1 dash-bootstrap-components==1.6.0 \
+    && pip install redis pymysql sqlalchemy
+
+# ---------------------------------------------------------
+# 🧠 Variáveis de ambiente padrão
+# ---------------------------------------------------------
+ENV PYTHONUNBUFFERED=1 \
+    REDIS_HOST=redis \
+    REDIS_PORT=6379 \
+    DB_HOST=mariadb \
+    DB_USER=router_user \
+    DB_PASS=router_pass \
+    DB_NAME=routerdb \
+    DASH_DEBUG_MODE=False \
+    PROMETHEUS_MULTIPROC_DIR=/tmp/prom/dash
+
+# ---------------------------------------------------------
+# 🚦 Script de inicialização leve
+# ---------------------------------------------------------
+COPY ./app/prestart_dash.sh /app/prestart_dash.sh
+RUN chmod +x /app/prestart_dash.sh
+
+# ---------------------------------------------------------
+# 🚀 Comando principal
+# ---------------------------------------------------------
+ENTRYPOINT ["app/prestart_dash.sh"]
+CMD ["python", "app/dash_control_panel.py"]
+
+# ---------------------------------------------------------
+# 🔓 Exposição da porta padrão do Dash
+# ---------------------------------------------------------
+EXPOSE 8050

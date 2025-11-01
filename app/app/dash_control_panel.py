@@ -1,274 +1,261 @@
-"""
-dash_control_panel.py
-----------------------------------------------------
-Painel de Controle do Router Core
- - Aba 1: Controle e parâmetros do sistema
- - Aba 2: Histórico e métricas com gráficos interativos
-----------------------------------------------------
-Integra Redis, Banco de Dados (settings_current, settings_history, query_logs)
-e coleta métricas para visualização em tempo real.
-"""
-
+import os
+import redis
 import dash
-from dash import html, dcc, Input, Output, State
-import plotly.express as px
 import pandas as pd
 import sqlalchemy
-from sqlalchemy import text
-import redis
-import os
-import json
-from datetime import datetime
-from dotenv import load_dotenv
+from dash import dcc, html, dash_table
+from dash.dependencies import Input, Output, State
+from sqlalchemy import create_engine, text
 
-# =====================================================
-# 🔧 Inicialização e conexões
-# =====================================================
-load_dotenv()
+# =========================================================
+# 🔧 Configurações básicas
+# =========================================================
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_PASS = os.getenv("REDIS_PASS", "SenhaForte")
 
-DB_HOST = os.getenv("DB_HOST", "mariadb")
+DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_USER = os.getenv("DB_USER", "router_user")
 DB_PASS = os.getenv("DB_PASS", "router_pass")
 DB_NAME = os.getenv("DB_NAME", "routerdb")
-DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 
-engine = sqlalchemy.create_engine(DB_URL, pool_pre_ping=True)
-r = redis.Redis(host=os.getenv("REDIS_HOST", "redis"), port=6379, db=0, decode_responses=True)
+# Redis
+r = redis.Redis(
+    host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASS, decode_responses=True
+)
 
-app = dash.Dash(__name__, title="Router Core Dashboard", suppress_callback_exceptions=True)
+# SQLAlchemy
+engine = create_engine(f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}")
+
+# =========================================================
+# 🧠 Funções auxiliares
+# =========================================================
+def get_system_status():
+    try:
+        redis_ok = r.ping()
+    except Exception:
+        redis_ok = False
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    return redis_ok, db_ok
+
+
+def get_settings_from_redis():
+    settings = {
+        "temperature": float(r.get("temperature") or 0.7),
+        "max_tokens": int(r.get("max_tokens") or 2048),
+        "top_p": float(r.get("top_p") or 0.9),
+        "bandit_exploration_rate": float(r.get("bandit_exploration_rate") or 0.2),
+    }
+    return settings
+
+
+def save_settings_to_redis(data):
+    for k, v in data.items():
+        r.set(k, v)
+
+
+def fetch_query_history(limit=30):
+    query = """
+        SELECT id, query_text, selected_model, judge_model, score, created_at
+        FROM query_logs
+        ORDER BY created_at DESC
+        LIMIT :limit
+    """
+    try:
+        df = pd.read_sql(text(query), engine, params={"limit": limit})
+        return df
+    except Exception as e:
+        print(f"[ERRO HISTÓRICO]: {e}")
+        return pd.DataFrame(columns=["id", "query_text", "selected_model", "judge_model", "score", "created_at"])
+
+
+def get_nsga_weights():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT objective, weight FROM nsga_weights ORDER BY objective ASC")
+            )
+            return {row[0]: float(row[1]) for row in result}
+    except Exception:
+        return {"accuracy": 0.5, "latency": 0.3, "cost": 0.2}
+
+
+def update_nsga_weight(objective, new_value):
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("UPDATE nsga_weights SET weight=:val WHERE objective=:obj"),
+                {"val": new_value, "obj": objective},
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"[ERRO PESO NSGA]: {e}")
+
+
+# =========================================================
+# 🎨 Inicialização do app Dash
+# =========================================================
+app = dash.Dash(__name__, title="Painel de Controle LLM Router", suppress_callback_exceptions=True)
+app.title = "LLM Router Control Panel"
 server = app.server
 
-# =====================================================
-# 🔹 Utilitários auxiliares
-# =====================================================
-def get_db_value(key):
-    try:
-        with engine.connect() as conn:
-            res = conn.execute(text("SELECT svalue FROM settings_current WHERE sk = :k"), {"k": key}).fetchone()
-            return json.loads(res[0]) if res else None
-    except Exception:
-        return None
-
-
-def get_env_value(key, default=None):
-    val = os.getenv(key, default)
-    try:
-        return json.loads(val)
-    except Exception:
-        return val
-
-
-def get_config():
-    """Obtém configuração atual (prioridade Redis → BD → .env)."""
-    return {
-        "OLLAMA_MODEL": r.get("router:ollama_model") or get_db_value("OLLAMA_MODEL") or get_env_value("OLLAMA_MODEL", "ollama/gemma3:4b-it-qat"),
-        "TEMPERATURE": float(r.get("router:temperature") or get_db_value("TEMPERATURE") or 0.4),
-        "MAX_TOKENS": int(r.get("router:max_tokens") or get_db_value("MAX_TOKENS") or 512),
-        "OLLAMA_MAX_PARALLEL": int(r.get("router:ollama_max_parallel") or get_db_value("OLLAMA_MAX_PARALLEL") or 2),
-    }
-
-
-def persist_change(key, value, actor="dash_panel"):
-    """Atualiza Redis e banco, registrando histórico."""
-    try:
-        r.set(f"router:{key.lower()}", value)
-        sval = json.dumps(value)
-        with engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO settings_current (sk, svalue)
-                VALUES (:k, :v)
-                ON DUPLICATE KEY UPDATE svalue=:v, updated_at=NOW()
-            """), {"k": key, "v": sval})
-            conn.execute(text("""
-                INSERT INTO settings_history (sk, svalue, source, actor)
-                VALUES (:k, :v, 'dash', :a)
-            """), {"k": key, "v": sval, "a": actor})
-    except Exception as e:
-        print(f"[dash_control_panel] Erro ao persistir {key}: {e}")
-
-
-# =====================================================
-# 🎨 Layout principal (Tabs)
-# =====================================================
-app.layout = html.Div([
-    html.H2("🧠 Painel de Controle - Router Core", style={"textAlign": "center"}),
-    html.Hr(),
-
-    dcc.Tabs(
-        id="tabs",
-        value="tab-config",
-        colors={"border": "#ccc", "primary": "#0b5394", "background": "#e6f2ff"},
-        children=[
-            dcc.Tab(label="⚙️ Configurações", value="tab-config"),
-            dcc.Tab(label="📈 Histórico e Métricas", value="tab-metrics"),
-        ]
-    ),
-    html.Div(id="tabs-content")
-])
-
-# =====================================================
-# 🧩 Aba 1 — Controle e parâmetros
-# =====================================================
-def render_config_tab():
-    config = get_config()
-    return html.Div([
-        html.Br(),
-        html.H4("⚙️ Parâmetros de Execução"),
-        html.Label("Modelo ativo"),
-        dcc.Dropdown(
-            id="model-dropdown",
-            options=[
-                {"label": "Gemma 3 4B QAT", "value": "ollama/gemma3:4b-it-qat"},
-                {"label": "Granite 1B", "value": "ollama/granite4:1b"},
-                {"label": "DeepSeek R1 1.5B", "value": "ollama/deepseek-r1:1.5b"},
-                {"label": "OpenAI GPT-5", "value": "openai/gpt-5"},
+# =========================================================
+# 📑 Layout com abas
+# =========================================================
+app.layout = html.Div(
+    [
+        html.H1("🧭 Painel de Controle — LLM Router", style={"textAlign": "center"}),
+        dcc.Tabs(
+            id="tabs",
+            value="tab-sys",
+            children=[
+                dcc.Tab(label="📊 Sistema", value="tab-sys"),
+                dcc.Tab(label="⚙️ Variáveis", value="tab-vars"),
+                dcc.Tab(label="🧠 Histórico", value="tab-hist"),
+                dcc.Tab(label="🎯 Pesos NSGA-II", value="tab-nsga"),
             ],
-            value=config["OLLAMA_MODEL"],
-            clearable=False,
-            style={"width": "50%"}
         ),
-        html.Br(),
-
-        html.Label("Temperatura"),
-        dcc.Slider(0, 1, 0.05, value=config["TEMPERATURE"], id="temp-slider", tooltip={"placement": "bottom"}),
-        html.Div(id="temp-value", style={"marginBottom": "10px"}),
-
-        html.Label("Máx. Tokens por resposta"),
-        dcc.Input(id="max-tokens", type="number", value=config["MAX_TOKENS"], min=64, max=8192, step=64),
-        html.Br(), html.Br(),
-
-        html.Label("Execuções paralelas (OLLAMA_MAX_PARALLEL)"),
-        dcc.Slider(1, 4, 1, value=config["OLLAMA_MAX_PARALLEL"], id="parallel-slider", marks={i: str(i) for i in range(1, 5)}),
-        html.Br(),
-
-        html.Button("Salvar alterações", id="save-btn", n_clicks=0,
-                    style={"background": "#2b7", "color": "white", "padding": "8px 16px"}),
-
-        html.Div(id="save-msg", style={"marginTop": "15px", "color": "green"}),
-
-        html.Hr(),
-        html.H4("📊 Status e Monitoramento"),
-        html.Div(id="status-info"),
-        dcc.Interval(id="interval-refresh", interval=10_000, n_intervals=0)
-    ])
-
-# =====================================================
-# 📈 Aba 2 — Histórico e Métricas
-# =====================================================
-def render_metrics_tab():
-    return html.Div([
-        html.Br(),
-        html.H4("📈 Histórico de Configurações e Custos"),
-        dcc.Dropdown(
-            id="metric-type",
-            options=[
-                {"label": "Alterações de Parâmetros", "value": "settings"},
-                {"label": "Custos por Modelo (LLM)", "value": "costs"},
-                {"label": "Desempenho do Cache", "value": "cache"},
-            ],
-            value="settings",
-            style={"width": "40%"}
-        ),
-        html.Br(),
-        dcc.Graph(id="metric-graph", style={"height": "600px"}),
-        dcc.Interval(id="interval-metrics", interval=30_000, n_intervals=0)
-    ])
-
-# =====================================================
-# Callbacks — Tabs
-# =====================================================
-@app.callback(Output("tabs-content", "children"), Input("tabs", "value"))
-def render_tab(tab):
-    if tab == "tab-config":
-        return render_config_tab()
-    return render_metrics_tab()
-
-# =====================================================
-# Callbacks — Aba Configurações
-# =====================================================
-@app.callback(
-    Output("save-msg", "children"),
-    Input("save-btn", "n_clicks"),
-    State("model-dropdown", "value"),
-    State("temp-slider", "value"),
-    State("max-tokens", "value"),
-    State("parallel-slider", "value"),
+        html.Div(id="tabs-content", style={"margin": "20px"}),
+    ]
 )
-def save_changes(n, model, temp, tokens, parallel):
-    if n > 0:
-        persist_change("OLLAMA_MODEL", model)
-        persist_change("TEMPERATURE", temp)
-        persist_change("MAX_TOKENS", tokens)
-        persist_change("OLLAMA_MAX_PARALLEL", parallel)
-        return "✅ Configurações atualizadas com sucesso!"
+
+# =========================================================
+# 🧩 Conteúdo das Abas
+# =========================================================
+@app.callback(Output("tabs-content", "children"), [Input("tabs", "value")])
+def render_content(tab):
+    if tab == "tab-sys":
+        redis_ok, db_ok = get_system_status()
+        color_r = "green" if redis_ok else "red"
+        color_d = "green" if db_ok else "red"
+        return html.Div(
+            [
+                html.H3("📡 Monitoramento do Sistema"),
+                html.Div(
+                    [
+                        html.P(f"Redis: {'✅ Online' if redis_ok else '❌ Offline'}",
+                               style={"color": color_r, "fontWeight": "bold"}),
+                        html.P(f"Banco de Dados: {'✅ Online' if db_ok else '❌ Offline'}",
+                               style={"color": color_d, "fontWeight": "bold"}),
+                    ]
+                ),
+                html.Button("🔄 Atualizar Status", id="btn-refresh-sys", n_clicks=0),
+            ]
+        )
+
+    elif tab == "tab-vars":
+        settings = get_settings_from_redis()
+        return html.Div(
+            [
+                html.H3("⚙️ Ajuste de Variáveis de Execução"),
+                html.Label("Temperatura"),
+                dcc.Slider(id="slider-temp", min=0, max=2, step=0.05, value=settings["temperature"], marks=None, tooltip={"placement": "bottom"}),
+                html.Label("Máximo de Tokens"),
+                dcc.Input(id="input-tokens", type="number", value=settings["max_tokens"]),
+                html.Label("Top-p"),
+                dcc.Slider(id="slider-top-p", min=0.0, max=1.0, step=0.01, value=settings["top_p"], marks=None, tooltip={"placement": "bottom"}),
+                html.Label("Taxa de Exploração (Bandit)"),
+                dcc.Slider(id="slider-bandit", min=0.0, max=1.0, step=0.05, value=settings["bandit_exploration_rate"], marks=None, tooltip={"placement": "bottom"}),
+                html.Br(),
+                html.Button("💾 Salvar", id="btn-save-vars", n_clicks=0),
+                html.Div(id="save-vars-status", style={"marginTop": "10px", "fontWeight": "bold"}),
+            ]
+        )
+
+    elif tab == "tab-hist":
+        df = fetch_query_history()
+        return html.Div(
+            [
+                html.H3("🧠 Histórico de Consultas e Julgamentos"),
+                dash_table.DataTable(
+                    id="table-hist",
+                    columns=[{"name": i, "id": i} for i in df.columns],
+                    data=df.to_dict("records"),
+                    page_size=10,
+                    style_table={"overflowX": "auto"},
+                ),
+                html.Button("🔄 Atualizar Histórico", id="btn-refresh-hist", n_clicks=0),
+            ]
+        )
+
+    elif tab == "tab-nsga":
+        weights = get_nsga_weights()
+        return html.Div(
+            [
+                html.H3("🎯 Ajuste de Pesos Multiobjetivo (NSGA-II)"),
+                html.Label("Acurácia"),
+                dcc.Slider(id="w-acc", min=0, max=1, step=0.01, value=weights.get("accuracy", 0.5)),
+                html.Label("Latência"),
+                dcc.Slider(id="w-lat", min=0, max=1, step=0.01, value=weights.get("latency", 0.3)),
+                html.Label("Custo"),
+                dcc.Slider(id="w-cost", min=0, max=1, step=0.01, value=weights.get("cost", 0.2)),
+                html.Br(),
+                html.Button("💾 Atualizar Pesos", id="btn-update-nsga", n_clicks=0),
+                html.Div(id="nsga-update-status", style={"marginTop": "10px", "fontWeight": "bold"}),
+            ]
+        )
+
+
+# =========================================================
+# 🔄 Callbacks
+# =========================================================
+@app.callback(
+    Output("save-vars-status", "children"),
+    Input("btn-save-vars", "n_clicks"),
+    State("slider-temp", "value"),
+    State("input-tokens", "value"),
+    State("slider-top-p", "value"),
+    State("slider-bandit", "value"),
+)
+def save_variables(n_clicks, temp, tokens, top_p, bandit):
+    if n_clicks > 0:
+        save_settings_to_redis(
+            {
+                "temperature": temp,
+                "max_tokens": tokens,
+                "top_p": top_p,
+                "bandit_exploration_rate": bandit,
+            }
+        )
+        return f"✅ Configurações salvas com sucesso ({n_clicks})"
     return ""
 
-@app.callback(Output("status-info", "children"), Input("interval-refresh", "n_intervals"))
-def refresh_status(_):
-    """Exibe resumo operacional."""
-    try:
-        with engine.connect() as conn:
-            total_queries = conn.execute(text("SELECT COUNT(*) FROM query_logs")).scalar() if conn.dialect.has_table(conn, "query_logs") else 0
-            last_update = conn.execute(text("SELECT MAX(updated_at) FROM settings_current")).scalar()
-        hits = r.get("semantic_cache_hits_total") or 0
-        misses = r.get("semantic_cache_misses_total") or 0
-        return html.Div([
-            html.P(f"🧠 Consultas registradas: {total_queries}"),
-            html.P(f"📅 Última atualização de configuração: {last_update or 'N/A'}"),
-            html.P(f"💾 Cache Hits: {hits} | Misses: {misses}"),
-            html.P(f"⏰ Atualizado em: {datetime.now().strftime('%H:%M:%S')}"),
-        ])
-    except Exception as e:
-        return html.P(f"Erro ao carregar status: {e}")
 
-# =====================================================
-# Callbacks — Aba Métricas
-# =====================================================
 @app.callback(
-    Output("metric-graph", "figure"),
-    Input("metric-type", "value"),
-    Input("interval-metrics", "n_intervals")
+    Output("table-hist", "data"),
+    Input("btn-refresh-hist", "n_clicks"),
 )
-def update_metrics_graph(metric_type, _):
-    try:
-        with engine.connect() as conn:
-            if metric_type == "settings":
-                df = pd.read_sql(text("""
-                    SELECT sk AS parametro, svalue, updated_at
-                    FROM settings_history
-                    WHERE updated_at > NOW() - INTERVAL 7 DAY
-                """), conn)
-                df["updated_at"] = pd.to_datetime(df["updated_at"])
-                fig = px.scatter(df, x="updated_at", y="svalue", color="parametro",
-                                 title="Alterações recentes de parâmetros (últimos 7 dias)")
-                return fig
+def refresh_history(n_clicks):
+    df = fetch_query_history()
+    return df.to_dict("records")
 
-            elif metric_type == "costs":
-                df = pd.read_sql(text("""
-                    SELECT model, SUM(cost_usd) AS custo_total, DATE(created_at) AS data
-                    FROM model_costs
-                    GROUP BY model, DATE(created_at)
-                    ORDER BY data DESC
-                """), conn)
-                fig = px.bar(df, x="data", y="custo_total", color="model",
-                             title="Custos acumulados por modelo")
-                return fig
 
-            elif metric_type == "cache":
-                hits = int(r.get("semantic_cache_hits_total") or 0)
-                misses = int(r.get("semantic_cache_misses_total") or 0)
-                df = pd.DataFrame({
-                    "Tipo": ["Hits", "Misses"],
-                    "Valor": [hits, misses]
-                })
-                fig = px.pie(df, names="Tipo", values="Valor", title="Desempenho do Cache")
-                return fig
+@app.callback(
+    Output("nsga-update-status", "children"),
+    Input("btn-update-nsga", "n_clicks"),
+    State("w-acc", "value"),
+    State("w-lat", "value"),
+    State("w-cost", "value"),
+)
+def update_nsga_weights_callback(n, w_acc, w_lat, w_cost):
+    if n > 0:
+        update_nsga_weight("accuracy", w_acc)
+        update_nsga_weight("latency", w_lat)
+        update_nsga_weight("cost", w_cost)
+        return "✅ Pesos NSGA-II atualizados com sucesso"
+    return ""
 
-    except Exception as e:
-        return px.scatter(title=f"Erro ao carregar métricas: {e}")
 
-# =====================================================
-# Execução
-# =====================================================
+# =========================================================
+# 🚀 Execução
+# =========================================================
 if __name__ == "__main__":
-    app.run_server(host="0.0.0.0", port=8050, debug=True)
+    print("🚀 Painel Dash iniciado em http://0.0.0.0:8050/")
+    app.run_server(host="0.0.0.0", port=8050, debug=os.getenv("DASH_DEBUG_MODE", "False") == "True")
