@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # =========================================================
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.nsga.txt && \
-    pip install --no-cache-dir gunicorn python-dotenv
+    pip install --no-cache-dir nc python-dotenv
 
 # =========================================================
 # ⚙️ Variáveis de ambiente padrão

@@ -310,7 +310,14 @@ services:
     container_name: mariadb_exporter
     restart: unless-stopped
     environment:
+      # Esta variável está correta e será usada
       - DATA_SOURCE_NAME=router_user:router_pass@(mariadb:3306)/routerdb
+    
+    # 👇 ADICIONE ESTA LINHA:
+    # Isto força o exporter a ignorar os arquivos .my.cnf 
+    # e usar *apenas* a variável DATA_SOURCE_NAME.
+    command: ["--config.my-cnf="]
+    
     ports:
       - "9104:9104"
     networks:
