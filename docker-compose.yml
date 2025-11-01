@@ -289,6 +289,29 @@ services:
     networks:
       - ai_net
 
+  correlation_metrics:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: correlation_metrics
+    command: ["python", "app/correlation_metrics.py"]
+    depends_on:
+      - mariadb
+      - redis
+    environment:
+      - DB_HOST=mariadb
+      - DB_USER=router_user
+      - DB_PASS=router_pass
+      - DB_NAME=routerdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=SenhaForte
+      - PROM_PORT=9105
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+
 
 # =========================================================
 # 📦 Volumes persistentes

@@ -92,3 +92,11 @@ scrape_configs:
         labels:
           service: 'mariadb'
           env: 'production'
+
+  - job_name: 'correlation_metrics'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['correlation_metrics:9105']
+        labels:
+          service: 'correlation_metrics'
+          env: 'production'

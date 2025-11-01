@@ -1,0 +1,130 @@
+{
+  "id": null,
+  "uid": "llm-router-correlation",
+  "title": "LLM Router — Correlação Multiobjetivo (NSGA-II)",
+  "tags": ["llm", "nsga", "correlation", "pareto"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "label": "Modelo",
+        "type": "query",
+        "datasource": "Prometheus",
+        "refresh": 1,
+        "query": "label_values(model_latency_seconds_avg, model)",
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "judge",
+        "label": "Juiz",
+        "type": "query",
+        "datasource": "Prometheus",
+        "refresh": 1,
+        "query": "label_values(judge_quality_score_mean, judge)",
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "📊 Análise de Correlação — NSGA-II",
+      "collapsed": false
+    },
+    {
+      "type": "heatmap",
+      "title": "🔥 Matriz de Correlação (Latência × Custo × Qualidade)",
+      "targets": [
+        {
+          "expr": "model_correlation_matrix",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "color": {
+          "mode": "scheme",
+          "scheme": "RdYlGn",
+          "steps": 10
+        }
+      },
+      "gridPos": { "x": 0, "y": 1, "w": 18, "h": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "📈 Correlação Temporal (Latência vs Qualidade)",
+      "targets": [
+        {
+          "expr": "correlation_latency_quality{model=~\"$model\"}",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "gridPos": { "x": 0, "y": 9, "w": 9, "h": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "📉 Correlação Temporal (Custo vs Qualidade)",
+      "targets": [
+        {
+          "expr": "correlation_cost_quality{model=~\"$model\"}",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "gridPos": { "x": 9, "y": 9, "w": 9, "h": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "⚙️ Correlação NSGA-II (Fitness vs Pesos)",
+      "targets": [
+        {
+          "expr": "correlation_fitness_weights{model=~\"$model\"}",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "gridPos": { "x": 0, "y": 15, "w": 18, "h": 6 }
+    },
+    {
+      "type": "scatter",
+      "title": "🌈 Fronteira de Pareto (Latência × Custo × Qualidade)",
+      "targets": [
+        {
+          "expr": "model_latency_seconds_avg{model=~\"$model\"}",
+          "legendFormat": "Latência"
+        },
+        {
+          "expr": "model_cost_usd{model=~\"$model\"}",
+          "legendFormat": "Custo"
+        },
+        {
+          "expr": "judge_quality_score_mean{model=~\"$model\"}",
+          "legendFormat": "Qualidade"
+        }
+      ],
+      "options": {
+        "xaxis": "Latência (s)",
+        "yaxis": "Custo (USD/1k tokens)",
+        "series": {
+          "color": "Qualidade média",
+          "symbol": "circle"
+        }
+      },
+      "gridPos": { "x": 0, "y": 21, "w": 18, "h": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "🧮 Evolução do R² (Correlação Global NSGA-II)",
+      "targets": [
+        {
+          "expr": "nsga_correlation_r2_mean",
+          "legendFormat": "R² médio global"
+        }
+      ],
+      "gridPos": { "x": 0, "y": 29, "w": 18, "h": 6 }
+    }
+  ]
+}
