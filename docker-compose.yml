@@ -5,7 +5,7 @@ services:
   db_init:
     build:
       context: ./app
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.db-init
     container_name: db_initializer
     depends_on:
       mariadb:
