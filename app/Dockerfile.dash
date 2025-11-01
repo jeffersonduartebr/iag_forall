@@ -54,7 +54,7 @@ RUN pwd
 # ---------------------------------------------------------
 # 🚀 Comando principal
 # ---------------------------------------------------------
-ENTRYPOINT ["/app/prestart_dash.sh"]
+ENTRYPOINT ["prestart_dash.sh"]
 CMD ["python", "dash_control_panel.py"]
 
 # ---------------------------------------------------------
