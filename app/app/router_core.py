@@ -1,6 +1,5 @@
 # router_core.py
 import logging
-import random
 import time
 import asyncio
 import numpy as np
@@ -13,17 +12,17 @@ from app.observability import (
     ROUTER_MODEL_COST, ROUTER_QUALITY_AVG, ROUTER_COST_SAVINGS,
     ROUTER_LOCAL_USAGE_RATIO, ROUTER_COST_PER_QUERY, ROUTER_HISTORY_ENTRIES
 )
-from .settings import settings
+from .settings_dynamic import settings
 from app.bandits import select_model
 from app.judges import judge_answer
-from app.metrics_collector import update_model_metrics  
+from app.metrics_collector import update_model_metrics
 
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# ⚙️ Configurações globais e conexão com o banco
+# ⚙️ Conexão com o banco (para EMA persistente)
 # ============================================================
-DB_URL = "mysql+pymysql://router_user:router_pass@mariadb:3306/routerdb"
+DB_URL = f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:3306/{settings.DB_NAME}"
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
 CANDIDATE_MODELS = settings.CANDIDATE_MODELS_LIST
@@ -31,10 +30,9 @@ BLOCKED_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")
 EMA_HISTORY = {}
 
 # ============================================================
-# 🧱 Inicialização das tabelas de EMA
+# 🧱 Tabelas de EMA
 # ============================================================
 def _init_ema_tables():
-    """Cria tabelas de EMA persistente e de log temporal."""
     ddl_main = """
     CREATE TABLE IF NOT EXISTS ema_history (
         model VARCHAR(255) PRIMARY KEY,
@@ -46,7 +44,6 @@ def _init_ema_tables():
             ON UPDATE CURRENT_TIMESTAMP
     );
     """
-
     ddl_log = """
     CREATE TABLE IF NOT EXISTS ema_history_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -59,18 +56,15 @@ def _init_ema_tables():
         INDEX idx_model_created_at (model, created_at)
     );
     """
-
     try:
         with engine.begin() as conn:
             conn.execute(text(ddl_main))
             conn.execute(text(ddl_log))
-        logger.info("[EMA] Tabelas ema_history e ema_history_log verificadas/criadas com sucesso.")
+        logger.info("[EMA] Tabelas EMA criadas/verificadas.")
     except SQLAlchemyError as e:
         logger.warning(f"[EMA] Falha ao criar tabelas: {e}")
 
-
 def _load_ema_from_db():
-    """Carrega histórico EMA do banco para a memória."""
     global EMA_HISTORY
     try:
         with engine.connect() as conn:
@@ -80,12 +74,9 @@ def _load_ema_from_db():
     except SQLAlchemyError as e:
         logger.warning(f"[EMA] Falha ao carregar histórico EMA: {e}")
 
-
 def _persist_ema_to_db(model, ema):
-    """Insere ou atualiza o histórico EMA principal e grava no log."""
     try:
         with engine.begin() as conn:
-            # Atualiza a tabela principal (estado atual)
             conn.execute(
                 text("""
                 INSERT INTO ema_history (model, ema_latency, ema_quality, ema_cost, updates)
@@ -97,37 +88,22 @@ def _persist_ema_to_db(model, ema):
                     updates = :upd,
                     last_updated = CURRENT_TIMESTAMP;
                 """),
-                dict(
-                    model=model,
-                    lat=ema["ema_latency"],
-                    qual=ema["ema_quality"],
-                    cost=ema["ema_cost"],
-                    upd=ema["updates"]
-                )
+                dict(model=model, lat=ema["ema_latency"], qual=ema["ema_quality"],
+                     cost=ema["ema_cost"], upd=ema["updates"])
             )
-
-            # Insere log temporal (para séries históricas)
             conn.execute(
                 text("""
                 INSERT INTO ema_history_log (model, ema_latency, ema_quality, ema_cost, update_num)
                 VALUES (:model, :lat, :qual, :cost, :upd);
                 """),
-                dict(
-                    model=model,
-                    lat=ema["ema_latency"],
-                    qual=ema["ema_quality"],
-                    cost=ema["ema_cost"],
-                    upd=ema["updates"]
-                )
+                dict(model=model, lat=ema["ema_latency"], qual=ema["ema_quality"],
+                     cost=ema["ema_cost"], upd=ema["updates"])
             )
     except SQLAlchemyError as e:
         logger.warning(f"[EMA] Falha ao persistir EMA de {model}: {e}")
 
-
-# Executa na importação do módulo
 _init_ema_tables()
 _load_ema_from_db()
-
 
 # ============================================================
 # 🚀 Função principal de roteamento + cache + EMA persistente
@@ -136,42 +112,22 @@ async def route_and_answer(
     query: str, 
     system_prompt: str = "", 
     use_rag: bool = False,
-    max_tokens: int = 1024,
-    temperature: float = 0.5
+    max_tokens: int = None,
+    temperature: float = None
 ):
-    """
-    Decide qual modelo usar e gera resposta via call_model().
-    Agora com cache semântico híbrido (Redis + ChromaDB)
-    e EMA persistente com log histórico no banco MariaDB.
-    """
     start_time = time.time()
 
-    # Sanitiza entradas (evita erro 'NoneType.strip')
-    if query is None or not isinstance(query, str) or query.strip() == "":
-        logger.error("[router_core] Erro: parâmetro 'query' ausente ou inválido.")
-        return {
-            "model": "router_error",
-            "answer": "[Erro] Nenhuma consulta fornecida para roteamento.",
-            "latency_s": 0.0,
-            "cost_per_1k": 0.0,
-            "quality": 0.0,
-            "metadata": {"error": "invalid_query"},
-        }
+    if max_tokens is None:
+        max_tokens = settings.MAX_TOKENS_DEFAULT
+    if temperature is None:
+        temperature = settings.TEMPERATURE_DEFAULT
 
-    system_prompt = (system_prompt or "").strip()
-    query = query.strip()
-
-    # 0️⃣ Verifica cache semântico
-    try:
-        cached = await check_cache(query)
-    except Exception as e:
-        logger.warning(f"[router_core] Falha ao consultar cache: {e}")
-        cached = None
-
+    # 0️⃣ Cache semântico
+    cached = await check_cache(query)
     if cached:
         logger.info(
-            f"[router_core] ✅ Cache HIT — similaridade={cached['similarity']:.2f}. "
-            f"Retornando resposta do cache sem chamar modelo."
+            f"[router_core] ✅ Cache HIT — sim={cached['similarity']:.2f}. "
+            f"Retornando resposta do cache."
         )
         return {
             "model": "semantic_cache",
@@ -182,28 +138,26 @@ async def route_and_answer(
             "metadata": {"cached": True, "similarity": cached["similarity"]},
         }
 
-    # 1️⃣ Filtra modelos válidos
+    # 1️⃣ Modelos válidos (dinâmico)
+    candidate_models = settings.CANDIDATE_MODELS_LIST
     valid_models = [
-        m for m in CANDIDATE_MODELS
+        m for m in candidate_models
         if isinstance(m, str) and not any(m.startswith(prefix) for prefix in BLOCKED_PREFIXES)
     ]
     if not valid_models:
-        logger.error("[router_core] Nenhum modelo válido disponível para geração.")
         raise RuntimeError("Nenhum modelo válido disponível para geração.")
 
-    # 2️⃣ Seleção via Bandit/NSGA-II
+    # 2️⃣ Seleção via Bandit/NSGA (externo)
     chosen = select_model(valid_models, query)
     logger.info(f"[router_core] Modelo selecionado (via bandit): {chosen}")
 
     # 3️⃣ Garante modelo local (Ollama)
     if chosen.startswith("ollama/"):
-        try:
-            await asyncio.to_thread(_ensure_ollama_model, chosen.replace("ollama/", ""))
-        except Exception as e:
-            logger.warning(f"[router_core] Falha ao verificar/baixar modelo '{chosen}': {e}")
+        await asyncio.to_thread(_ensure_ollama_model, chosen.replace("ollama/", ""))
 
-    # 4️⃣ Monta prompt final de forma segura
-    prompt = f"{system_prompt}\n\nUsuário: {query}".strip()
+    # 4️⃣ Prompt final
+    sp = (system_prompt or "").strip()
+    prompt = f"{sp}\n\nUsuário: {query.strip()}".strip()
 
     # 5️⃣ Chama o modelo LLM
     try:
@@ -217,9 +171,9 @@ async def route_and_answer(
         logger.exception(f"[router_core] Erro ao chamar modelo '{chosen}': {e}")
         text, meta = f"[Erro ao processar com modelo {chosen}: {e}]", {"latency_s": 0.0}
 
-    # 6️⃣ Avaliação de qualidade via juízes
+    # 6️⃣ Avaliação de qualidade
     try:
-        judge_scores = await judge_answer(query, text, use_rag)
+        judge_scores = await judge_answer(query, text, use_rag and settings.ENABLE_RAG_FOR_JUDGES)
         valid_scores = [s["score"] for s in judge_scores if "score" in s]
         quality_score = float(np.mean(valid_scores)) if valid_scores else 0.0
         final_quality = round(quality_score * 10.0, 2)
@@ -227,40 +181,43 @@ async def route_and_answer(
         logger.error(f"[router_core] Falha ao avaliar resposta: {e}")
         final_quality = 0.0
 
-    # 7️⃣ Cache semântico
+    # 7️⃣ Cache semântico (grava)
     try:
         await store_cache(query, text)
     except Exception as e:
         logger.warning(f"[router_core] Falha ao armazenar no cache: {e}")
 
-    # 8️⃣ Monta resultado
+    # 8️⃣ Resultado
     result = {
         "model": chosen,
         "answer": text,
         "latency_s": round(time.time() - start_time, 2),
-        "cost_per_1k": 0.001 if "ollama" in chosen else 0.15,
+        "cost_per_1k": 0.001 if "ollama" in chosen else 0.15,  # placeholder
         "quality": final_quality,
         "metadata": meta,
     }
 
-    # ============================================================
-    # 📊 Métricas Prometheus
-    # ============================================================
-    try:
-        ROUTER_MODEL_COST.labels(model=chosen).inc(result["cost_per_1k"])
-        ROUTER_QUALITY_AVG.labels(model=chosen).set(result["quality"])
-        ROUTER_COST_PER_QUERY.set(result["cost_per_1k"])
-        if "ollama" in chosen:
-            ROUTER_COST_SAVINGS.inc(0.12 - result["cost_per_1k"])
-            ROUTER_LOCAL_USAGE_RATIO.set(1.0)
-        else:
-            ROUTER_LOCAL_USAGE_RATIO.set(0.0)
-    except Exception as e:
-        logger.warning(f"[router_core] Falha ao atualizar métricas Prometheus: {e}")
+    # Métricas Prometheus
+    ROUTER_MODEL_COST.labels(model=chosen).inc(result["cost_per_1k"])
+    ROUTER_QUALITY_AVG.labels(model=chosen).set(result["quality"])
+    ROUTER_COST_PER_QUERY.set(result["cost_per_1k"])
+    if "ollama" in chosen:
+        ROUTER_COST_SAVINGS.inc(max(0.0, 0.12 - result["cost_per_1k"]))
+        ROUTER_LOCAL_USAGE_RATIO.set(1.0)
+    else:
+        ROUTER_LOCAL_USAGE_RATIO.set(0.0)
 
-    # ============================================================
-    # 🧮 EMA com persistência e logging temporal
-    # ============================================================
+    try:
+        update_model_metrics(
+            model_name=chosen,
+            latency=result["latency_s"],
+            quality=result["quality"],
+            cost=result["cost_per_1k"]
+        )
+    except Exception as e:
+        logger.warning(f"[router_core] Falha ao atualizar métricas dinâmicas: {e}")
+
+    # 9️⃣ EMA persistente
     try:
         global EMA_HISTORY
         alpha = 0.3
@@ -280,12 +237,9 @@ async def route_and_answer(
             EMA_HISTORY[model_key]["ema_cost"] = alpha * result["cost_per_1k"] + (1 - alpha) * prev["ema_cost"]
             EMA_HISTORY[model_key]["updates"] = prev.get("updates", 0) + 1
 
-        # Persiste no banco + log histórico
         _persist_ema_to_db(model_key, EMA_HISTORY[model_key])
 
-        # Atualiza métricas Prometheus
         ROUTER_HISTORY_ENTRIES.set(len(EMA_HISTORY))
-
         ema = EMA_HISTORY[model_key]
         logger.info(
             f"[EMA] {model_key} → "
@@ -294,7 +248,6 @@ async def route_and_answer(
             f"custo={ema['ema_cost']:.4f}) "
             f"({ema['updates']} updates)"
         )
-
     except Exception as e:
         logger.warning(f"[EMA] Falha ao atualizar histórico: {e}")
 

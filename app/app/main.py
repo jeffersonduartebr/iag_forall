@@ -3,11 +3,12 @@ import os
 import time
 import asyncio
 import logging
-from typing import List
-from fastapi import FastAPI, HTTPException, Header
-from fastapi.responses import PlainTextResponse
+from typing import List, Dict, Any, Optional
 
-from .settings import settings
+from fastapi import FastAPI, HTTPException, Header, Body
+from fastapi.responses import PlainTextResponse, JSONResponse
+
+from .settings_dynamic import settings
 from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
 from .observability import *
 from .providers import _ensure_ollama_model
@@ -23,9 +24,7 @@ from .routers import rag_router
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 setup_logging()
 logger = logging.getLogger(__name__)
-
 logging.getLogger("chromadb.telemetry").setLevel(logging.ERROR)
-
 
 app = FastAPI(title="LLM Router (Hybrid Bandit + NSGA-II + RAG + Judges)")
 
@@ -50,61 +49,42 @@ async def on_startup():
         try:
             logger.info("[warmup] Iniciando rotina de inicialização...")
 
-            # Espera Redis ficar pronto
+            # Espera Redis ficar pronto (não falha a inicialização)
             r = get_redis(max_wait_s=45)
             if r is None:
                 logger.warning("[warmup] Redis indisponível — seguindo sem cache por enquanto.")
 
-            # 1️⃣ Garante modelos disponíveis no Ollama (AGORA DINÂMICO)
-            logger.info("[warmup] Iniciando rotina de inicialização...")
-            
-            # Pega todos os modelos candidatos que são do Ollama
+            # 1️⃣ Garante modelos disponíveis no Ollama
             ollama_models_from_settings = [
-                m.replace("ollama/", "") for m in settings.CANDIDATE_MODELS_LIST 
-                if m.startswith("ollama/")
+                m.replace("ollama/", "") for m in settings.CANDIDATE_MODELS_LIST
+                if isinstance(m, str) and m.startswith("ollama/")
             ]
-            
-            # Adiciona outros modelos essenciais (embedding, juízes)
-            essentials = [
-                os.getenv("EMBED_MODEL", "nomic-embed-text"),
-            ]
-            for judge_model in settings.JUDGE_MODELS:
-                 if judge_model.startswith("ollama/"):
-                    essentials.append(judge_model.replace("ollama/", ""))
-                 # Heurística para modelos locais sem prefixo
-                 elif ":" in judge_model and not "/" in judge_model:
-                    essentials.append(judge_model)
+            essentials = [settings.EMBED_MODEL]
+            for j in settings.JUDGE_MODELS:
+                if isinstance(j, str) and j.startswith("ollama/"):
+                    essentials.append(j.replace("ollama/", ""))
+                elif isinstance(j, str) and (":" in j and "/" not in j):
+                    essentials.append(j)
 
-            # Combina e remove duplicatas
-            all_ollama_models = list(set(ollama_models_from_settings + essentials))
-            
+            all_ollama_models = list({*ollama_models_from_settings, *essentials})
             logger.info(f"[warmup] Garantindo modelos Ollama: {all_ollama_models}")
-            
             for model in all_ollama_models:
-                if not model: continue
-                try:
-                    await asyncio.to_thread(_ensure_ollama_model, model)
-                except Exception as e:
-                    logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
+                if model:
+                    try:
+                        await asyncio.to_thread(_ensure_ollama_model, model)
+                    except Exception as e:
+                        logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
 
-            # 2️⃣ Adiciona documento base no RAG
+            # 2️⃣ Documento base no RAG (exemplo)
             await add_document(
-                            "intro",
-                            "NSGA-II is a multi-objective evolutionary algorithm used for Pareto optimization."
-                        )
+                "intro",
+                "NSGA-II is a multi-objective evolutionary algorithm used for Pareto optimization."
+            )
 
-            # 3️⃣ Executa requisições de teste (await async)
+            # 3️⃣ Requisições de teste
             samples = [
                 "Explique em 3 tópicos o que é NSGA-II e onde é aplicado.",
-                "Escreva um snippet Python que lê um CSV e calcula a média de uma coluna.",
-                "Resuma boas práticas para documentação de APIs REST.",
-                "Quem foi Ada Lovelace e qual sua principal contribuição para a computação?",
-                "Descreva o processo de fotossíntese em termos simples para um estudante.",
-                "Qual a diferença entre Docker e uma Máquina Virtual (VM)?",
-                "Crie uma função Javascript que busca dados de uma API usando 'fetch' e trata a resposta.",
-                "O que é 'inflação' e como ela afeta o poder de compra?",
-                "Escreva um parágrafo curto sobre a importância da ética no desenvolvimento de IA.",
-                "Quais são os três principais tipos de machine learning? (Supervisionado, Não Supervisionado, Reforço)"
+                "Escreva um snippet Python que lê um CSV e calcula a média de uma coluna."
             ]
             for s in samples:
                 try:
@@ -127,15 +107,17 @@ async def on_startup():
 async def route_query(req: QueryRequest):
     start = time.time()
     API_REQUESTS.inc()
+    if not req or not isinstance(req.query, str) or not req.query.strip():
+        raise HTTPException(status_code=400, detail="Campo 'query' é obrigatório.")
     logger.info(f"[query] Nova requisição recebida: '{req.query[:80]}...'")
 
     try:
         result = await route_and_answer(
             query=req.query,
-            system_prompt=getattr(req, "system_prompt", ""),
+            system_prompt=(getattr(req, "system_prompt", "") or ""),
             use_rag=getattr(req, "enable_rag_for_answer", False),
-            max_tokens=req.max_tokens,
-            temperature=req.temperature
+            max_tokens=(req.max_tokens or settings.MAX_TOKENS_DEFAULT),
+            temperature=(req.temperature or settings.TEMPERATURE_DEFAULT),
         )
     except Exception as e:
         logger.exception(f"[router] Erro interno durante o roteamento: {e}")
@@ -150,33 +132,22 @@ async def route_query(req: QueryRequest):
     text = result["answer"]
 
     # Recompensa acoplada ao NSGA-II
-    reward = compute_reward(chosen_model or "unknown", quality, latency)
-    bandit_update(chosen_model or "unknown", req.query, reward)
+    try:
+        reward = compute_reward(chosen_model or "unknown", quality, latency)
+        bandit_update(chosen_model or "unknown", req.query, reward)
+        BANDIT_REWARD.observe(reward)
+    except Exception as e:
+        logger.warning(f"[bandit] Falha ao calcular/atualizar recompensa: {e}")
 
-    # Atualiza métricas Prometheus
-    BANDIT_REWARD.observe(reward)
     ROUTER_CHOSEN.labels(model=chosen_model or "cached").inc()
     CANDIDATE_COST.observe(cost)
     CANDIDATE_LAT.observe(latency)
-    # Atualiza custos acumulados e economia
-    ROUTER_MODEL_COST.labels(model=chosen_model).inc(cost)
-    ROUTER_COST_PER_QUERY.set(cost)
-    if "ollama" in chosen_model:
-        ROUTER_COST_SAVINGS.inc(cost * 0.8)  # Exemplo: assume 80% de economia
-        ROUTER_LOCAL_USAGE_RATIO.set(1.0)
-    else:
-        ROUTER_LOCAL_USAGE_RATIO.set(0.0)
 
-    # Atualiza qualidade média (EMA simples)
-    ROUTER_QUALITY_AVG.labels(model=chosen_model).set(quality)
-
-
-    # Monta saída compatível
     route = RouteDecision(
         chosen_model=chosen_model or "cached",
         objectives={"cost": cost, "latency": latency, "neg_quality": max(0.0, 10.0 - quality)},
         pareto_front=[],
-        explanation=f"reward={reward:.3f}, q={quality:.2f}, c={cost:.4f}, l={latency:.2f}",
+        explanation=f"q={quality:.2f}, c={cost:.4f}, l={latency:.2f}",
     )
 
     candidate = CandidateResult(
@@ -193,39 +164,40 @@ async def route_query(req: QueryRequest):
     return QueryResponse(answer=text, model=chosen_model, route=route, candidates=[candidate])
 
 # ------------------------------------------------------
-# Administração: gerenciamento de juízes
+# Administração: SETTINGS dinâmicos (Redis+DB)
 # ------------------------------------------------------
+def _require_admin(token: Optional[str]):
+    if token != settings.ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Token inválido.")
+
+@app.get("/admin/settings")
+def get_all_settings(x_admin_token: Optional[str] = Header(None)):
+    _require_admin(x_admin_token)
+    return settings.snapshot(only_known=False)
+
+@app.put("/admin/settings")
+def set_settings(
+    payload: Dict[str, Any] = Body(...),
+    x_admin_token: Optional[str] = Header(None),
+):
+    _require_admin(x_admin_token)
+    if not isinstance(payload, dict) or not payload:
+        raise HTTPException(status_code=400, detail="Payload inválido.")
+    for k, v in payload.items():
+        settings.set(k, v, actor="api", source="admin")
+    return {"ok": True, "applied": sorted(payload.keys())}
+
+# Retém compat com endpoints antigos
 @app.get("/admin/judges", response_model=List[str])
 async def get_judges():
     return settings.JUDGE_MODELS
 
-
 @app.post("/admin/judges", response_model=List[str])
 async def update_judges(models: List[str], x_admin_token: str = Header(None)):
-    if x_admin_token != settings.ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Token inválido.")
-
+    _require_admin(x_admin_token)
     if not models or not all(isinstance(m, str) for m in models):
         raise HTTPException(status_code=400, detail="A lista de juízes deve conter strings válidas.")
-
-    old = getattr(settings, "JUDGE_MODELS", [])
-    settings.JUDGE_MODELS = models
-    logger.info(f"[Admin] Juízes atualizados de {old} para {models}")
-    models_str = ",".join(models)
-    # Função auxiliar síncrona (se não existir, adicione-a)
-    def _write_env_file_sync(models_json: str):
-        """Escreve de forma síncrona no arquivo .env."""
-        try:
-            # Use "w" (write) ou "a" (append) dependendo da sua estratégia
-            # Usar "a" (append) é mais simples
-            with open(".env", "a") as f:
-                # Adiciona aspas ao redor da string
-                f.write(f'\nJUDGE_MODELS="{models_json}"\n')
-        except Exception as e:
-            logger.error(f"[Admin] Falha ao escrever no .env: {e}")
-
-    await asyncio.to_thread(_write_env_file_sync, models_str)
-
+    settings.set("JUDGE_MODELS", models, actor="api", source="admin")
     return settings.JUDGE_MODELS
 
 # ------------------------------------------------------
@@ -237,5 +209,5 @@ def health():
         "status": "ok",
         "ollama_base": settings.OLLAMA_BASE_URL,
         "models_preloaded": True,
+        "dynamic_settings": settings.snapshot(only_known=True),
     }
-

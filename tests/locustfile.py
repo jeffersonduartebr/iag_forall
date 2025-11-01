@@ -2,14 +2,15 @@ from locust import HttpUser, task, between
 import random
 
 # ==========================================================
-# 475 CONSULTAS DIVERSIFICADAS — 19 TEMAS
+# 855 CONSULTAS DIVERSIFICADAS — 19 TEMAS
 # ==========================================================
 
 QUERIES = [
 
     # ======================================================
-    # 🏛️ História (25)
+    # 🏛️ História (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique as causas da Primeira Guerra Mundial."},
     {"query": "O que foi a Revolução Francesa e seus efeitos políticos?"},
     {"query": "Quem foi Napoleão Bonaparte e qual seu impacto histórico?"},
@@ -35,10 +36,34 @@ QUERIES = [
     {"query": "O que foi o imperialismo europeu?"},
     {"query": "Quais foram os principais navegadores das Grandes Navegações?"},
     {"query": "O que foi a Revolução Cubana?"},
+    # Novas (10)
+    {"query": "Analise o impacto de longo prazo do Tratado de Tordesilhas nas Américas."},
+    {"query": "Discuta as consequências econômicas e sociais da Guerra do Paraguai para os países envolvidos."},
+    {"query": "Qual foi o papel da 'política do café com leite' na República Velha e como ela entrou em colapso?"},
+    {"query": "Avalie o impacto cultural e político da 'Reconquista' na Península Ibérica."},
+    {"query": "Compare as estratégias de colonização portuguesa, espanhola e inglesa nas Américas."},
+    {"query": "Explique o conceito de 'Destino Manifesto' e seu impacto na expansão dos EUA."},
+    {"query": "O que foi a Restauração Meiji no Japão e como ela modernizou o país?"},
+    {"query": "Discuta o papel das mulheres na Revolução Francesa e os direitos que elas buscavam."},
+    {"query": "O que foi a 'Guerra do Ópio' e quais suas consequências para a China?"},
+    {"query": "Analise as causas do genocídio em Ruanda em 1994."},
+    # Novas 2 (10)
+    {"query": "O que foi a 'Primavera dos Povos' de 1848?"},
+    {"query": "Analise o impacto da Guerra Civil Americana na economia e sociedade dos EUA."},
+    {"query": "O que foi a 'Guerra dos Cem Anos' e suas consequências para França e Inglaterra?"},
+    {"query": "Explique a 'Unificação Italiana' e o 'Risorgimento'."},
+    {"query": "O que foi a 'Unificação Alemã' e o papel de Otto von Bismarck?"},
+    {"query": "Discuta o 'Ciclo do Ouro' no Brasil colonial e suas implicações."},
+    {"query": "Quem foi 'Joana d'Arc' e qual seu papel histórico?"},
+    {"query": "O que foi a 'Revolução Gloriosa' na Inglaterra?"},
+    {"query": "Explique o 'Império Otomano' e seu lento declínio."},
+    {"query": "O que foi o 'Holocausto' e sua importância para os direitos humanos?"},
+
 
     # ======================================================
-    # 💻 Programação (25)
+    # 💻 Programação (45)
     # ======================================================
+    # Originais (25)
     {"query": "Escreva um código Python que inverte uma string."},
     {"query": "Explique o conceito de função lambda."},
     {"query": "O que é uma classe em Python?"},
@@ -64,10 +89,33 @@ QUERIES = [
     {"query": "O que é uma expressão regular e como usá-la?"},
     {"query": "Como usar o módulo logging em Python?"},
     {"query": "Explique o conceito de CI/CD."},
+    # Novas (10)
+    {"query": "Explique o padrão de design 'Singleton' e discuta seus prós e contras."},
+    {"query": "O que é 'Injeção de Dependência' (Dependency Injection) e por que é útil em grandes aplicações?"},
+    {"query": "Descreva o 'Global Interpreter Lock' (GIL) em Python e seu impacto na concorrência real."},
+    {"query": "Compare 'gRPC' com 'REST' em termos de performance, payload e casos de uso."},
+    {"query": "O que é arquitetura de 'microsserviços' e quais os desafios de comunicação e consistência de dados?"},
+    {"query": "Explique o conceito de 'programação reativa' (Reactive Programming) e o padrão 'Observer'."},
+    {"query": "O que é 'Test-Driven Development' (TDD)? Descreva o ciclo 'Red-Green-Refactor'."},
+    {"query": "Explique o que é 'compilação JIT' (Just-In-Time) e como ela difere da compilação AOT (Ahead-Of-Time)."},
+    {"query": "O que é 'gRPC-Web' e como ele permite a comunicação gRPC em navegadores?"},
+    {"query": "Descreva o padrão 'Saga' para gerenciar transações distribuídas em microsserviços."},
+    # Novas 2 (10)
+    {"query": "O que é 'Property-Based Testing' e como difere do 'Example-Based Testing'?"},
+    {"query": "Explique o conceito de 'programação funcional' e 'funções puras'."},
+    {"query": "O que é 'ACID' em bancos de dados transacionais?"},
+    {"query": "Compare 'SQL' e 'NoSQL' (ex: MongoDB) em termos de esquema, escalabilidade e consistência."},
+    {"query": "O que é 'CAP Theorem' (Consistência, Disponibilidade, Tolerância a Partição)?"},
+    {"query": "Descreva o padrão de arquitetura 'Event Sourcing'."},
+    {"query": "O que é 'WebAssembly' (WASM) e por que é importante para a web?"},
+    {"query": "Explique 'metaprogramação' em Python usando decoradores e metaclasses."},
+    {"query": "O que é 'gRPC Streaming' (unary, server, client, bidirectional)?"},
+    {"query": "Como funciona o 'garbage collection' em linguagens como Python ou Java?"},
 
     # ======================================================
-    # ⚛️ Física (25)
+    # ⚛️ Física (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique a lei da gravitação universal."},
     {"query": "O que é a teoria da relatividade?"},
     {"query": "Explique o conceito de energia cinética."},
@@ -93,10 +141,33 @@ QUERIES = [
     {"query": "Explique o funcionamento de um transformador elétrico."},
     {"query": "O que é energia potencial gravitacional?"},
     {"query": "Explique o conceito de pressão e como é medida."},
+    # Novas (10)
+    {"query": "O que é a 'dualidade onda-partícula' e qual experimento famoso a demonstra?"},
+    {"query": "Explique o 'Paradoxo dos Gêmeos' na relatividade especial."},
+    {"query": "O que é 'computação quântica' e o que é um 'qubit'?"},
+    {"query": "Descreva as 'quatro forças fundamentais' da natureza e suas partículas mediadoras."},
+    {"query": "O que é a 'radiação de Hawking' e como ela teoricamente se relaciona com buracos negros?"},
+    {"query": "Explique o conceito de 'supercondutividade' e suas potenciais aplicações."},
+    {"query": "O que é o 'Modelo Padrão' da física de partículas?"},
+    {"query": "Descreva o 'Efeito Hall' e sua aplicação em sensores."},
+    {"query": "O que é 'antimatéria' e o que acontece quando ela encontra a matéria?"},
+    {"query": "Explique o que é 'emaranhamento quântico' (quantum entanglement)."},
+    # Novas 2 (10)
+    {"query": "O que é 'fissão nuclear' e 'fusão nuclear'? Compare-as."},
+    {"query": "Explique o 'Princípio da Incerteza de Heisenberg'."},
+    {"query": "O que é o 'Bóson de Higgs' e por que é chamado de 'partícula de Deus'?"},
+    {"query": "Descreva o 'Efeito Doppler' e suas aplicações em astronomia e medicina."},
+    {"query": "O que é 'matéria escura' e quais as evidências de sua existência?"},
+    {"query": "Explique o 'Efeito Casimir' e sua relação com o vácuo quântico."},
+    {"query": "O que é 'termodinâmica' e suas leis (primeira, segunda, terceira)?"},
+    {"query": "O que é 'ressonância magnética nuclear' (RMN) e como é usada em imagens médicas (MRI)?"},
+    {"query": "Explique o conceito de 'momento angular' e sua conservação."},
+    {"query": "O que é 'spintronics'?"},
 
     # ======================================================
-    # 🧪 Química (25)
+    # 🧪 Química (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique o conceito de ligação covalente."},
     {"query": "O que é um átomo e suas partículas?"},
     {"query": "Explique a diferença entre ácido e base."},
@@ -122,10 +193,33 @@ QUERIES = [
     {"query": "Explique o conceito de solubilidade."},
     {"query": "O que é o número atômico?"},
     {"query": "Explique a diferença entre elemento e composto químico."},
+    # Novas (10)
+    {"query": "Explique o mecanismo de uma 'reação SN1' versus 'SN2' em química orgânica."},
+    {"query": "O que é 'ressonância' em estruturas moleculares e como ela afeta a estabilidade e reatividade?"},
+    {"query": "Descreva o processo 'Haber-Bosch' e sua importância socioeconômica para a agricultura mundial."},
+    {"query": "O que é 'estereoisomeria' e qual a diferença entre 'enantiômeros' e 'diastereoisômeros'?"},
+    {"query": "Explique o funcionamento de uma 'célula de combustível' de hidrogênio."},
+    {"query": "O que é 'cromatografia gasosa' e como ela é usada para separar compostos?"},
+    {"query": "Descreva a 'química verde' e seus 12 princípios."},
+    {"query": "O que é 'entalpia' e 'entropia' em uma reação química?"},
+    {"query": "Explique o que é um 'polímero' e como a 'polimerização' ocorre."},
+    {"query": "O que é a 'Lei de Lambert-Beer' e como ela é usada em espectrofotometria?"},
+    # Novas 2 (10)
+    {"query": "O que é 'isomeria óptica' e o conceito de 'quiralidade'?"},
+    {"query": "Explique a 'equação de Nernst' e seu uso em eletroquímica."},
+    {"query": "O que é 'catálise enzimática' e o modelo 'chave-fechadura'?"},
+    {"query": "Descreva o 'método de titulação' para determinar a concentração."},
+    {"query": "O que é 'hibridização de orbitais' (sp, sp2, sp3)?"},
+    {"query": "Explique o 'ponto de ebulição' e 'ponto de fusão' em nível molecular."},
+    {"query": "O que é 'osmose' e 'pressão osmótica'?"},
+    {"query": "Descreva a 'Lei de Hess' em termoquímica."},
+    {"query": "O que é 'espectrometria de massa' e como é usada para identificar moléculas?"},
+    {"query": "Explique o 'estado de transição' em uma reação química."},
 
     # ======================================================
-    # 📊 Matemática (25)
+    # 📊 Matemática (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique o teorema de Pitágoras."},
     {"query": "O que é uma progressão aritmética?"},
     {"query": "Explique o conceito de função exponencial."},
@@ -151,10 +245,34 @@ QUERIES = [
     {"query": "Explique o conceito de área e volume."},
     {"query": "O que é análise combinatória?"},
     {"query": "Explique o conceito de estatística descritiva."},
+    # Novas (10)
+    {"query": "O que é a 'Hipótese de Riemann' e por que ela é um dos problemas do milênio?"},
+    {"query": "Explique o 'Último Teorema de Fermat' e a importância da prova de Andrew Wiles."},
+    {"query": "O que é a 'Transformada de Fourier' e onde ela é aplicada em processamento de sinais?"},
+    {"query": "Descreva os 'Axiomas de Zermelo-Fraenkel' (ZF) na teoria dos conjuntos."},
+    {"query": "O que é 'geometria não-euclidiana' e qual sua relação com a relatividade geral?"},
+    {"query": "Explique o que é um 'fractal' e dê o exemplo do 'Conjunto de Mandelbrot'."},
+    {"query": "O que é a 'Conjectura de Poincaré' e quem a provou?"},
+    {"query": "Descreva o 'Teorema de Gödel da Incompletude'."},
+    {"query": "O que é 'Teoria dos Jogos' e o 'Equilíbrio de Nash'?"},
+    {"query": "Explique o 'método de Monte Carlo' e suas aplicações em finanças e ciência."},
+    # Novas 2 (10)
+    {"query": "O que são 'Equações Diferenciais Parciais' (EDPs)? Dê um exemplo (ex: Equação do Calor)."},
+    {"query": "Explique o que é 'espaço vetorial' e 'transformação linear'."},
+    {"query": "O que é a 'Sequência de Fibonacci' e sua relação com a 'proporção áurea'?"},
+    {"query": "Descreva o 'Teorema Fundamental do Cálculo'."},
+    {"query": "O que é 'Teoria dos Grafos' e o 'Problema das Sete Pontes de Königsberg'?"},
+    {"query": "Explique o 'Teorema do Limite Central' e sua importância em estatística."},
+    {"query": "O que são 'números complexos' e o 'plano de Argand-Gauss'?"},
+    {"query": "O que é 'topologia' e o 'Problema da Garrafa de Klein'?"},
+    {"query": "Explique 'regressão logística' e como é usada em classificação."
+    },
+    {"query": "O que é 'criptografia de chave pública' (ex: RSA) e a matemática por trás dela?"},
 
     # ======================================================
-    # 🌾 Agronegócio e IoT (25)
+    # 🌾 Agronegócio e IoT (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique o conceito de automação agrícola."},
     {"query": "O que é um sensor de umidade do solo?"},
     {"query": "Explique como funciona um sistema de irrigação automática."},
@@ -180,10 +298,33 @@ QUERIES = [
     {"query": "Explique o conceito de telemetria agrícola."},
     {"query": "O que é um sensor de amônia?"},
     {"query": "Explique o conceito de manutenção preditiva no campo."},
+    # Novas (10)
+    {"query": "Descreva a arquitetura de um sistema 'Digital Twin' (Gêmeo Digital) para um pivô de irrigação."},
+    {"query": "Quais são os desafios de 'interoperabilidade' em plataformas de 'Smart Farming'?"},
+    {"query": "Compare 'LoRaWAN', 'NB-IoT' e 'Sigfox' para aplicações de sensoriamento agrícola de longa distância."},
+    {"query": "O que é 'agricultura de precisão' e como ela difere da 'agricultura 4.0'?"},
+    {"query": "Discuta os desafios de cibersegurança em dispositivos IoT no campo (OT Security)."},
+    {"query": "Explique o conceito de 'rede mesh' (mesh network) e sua aplicação em fazendas inteligentes."},
+    {"query": "O que é 'edge computing' (computação de borda) em IoT e por que é útil na agricultura?"},
+    {"query": "Como a análise de imagens de drone com IA pode ser usada para detecção de estresse hídrico?"},
+    {"query": "O que é um 'barramento CAN' e como ele é usado em máquinas agrícolas modernas?"},
+    {"query": "Descreva um sistema de 'blockchain' para rastreabilidade de alimentos (da fazenda à mesa)."},
+    # Novas 2 (10)
+    {"query": "Descreva um sistema de 'geofencing' para monitoramento de gado."},
+    {"query": "O que é 'VRT' (Variable Rate Technology) em aplicadores de insumos?"},
+    {"query": "Como 'ESPs' (ESP32-CAM) podem ser usados para monitoramento visual de cochos ou tanques?"},
+    {"query": "Descreva um 'data logger' para monitoramento da cadeia de frio no transporte de frutas."},
+    {"query": "O que é o protocolo 'Modbus' e como ele é usado para integrar sensores industriais (ex: medidores de vazão)?"},
+    {"query": "Explique a automação da 'fertirrigação' baseada em sensores de pH e condutividade elétrica."},
+    {"query": "O que é 'hidroponia' e como a IoT pode otimizar o controle da solução nutritiva?"},
+    {"query": "Desafios de 'alimentação de energia' (bateria, solar) para sensores IoT em locais remotos."},
+    {"query": "O que é 'aquaponia'? Explique a simbiose entre peixes e plantas."},
+    {"query": "Como a IA em 'edge devices' pode detectar padrões anômalos (ex: doença em folhas) localmente?"},
 
     # ======================================================
-    # 🌎 Geografia (25)
+    # 🌎 Geografia (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique o processo de desertificação."},
     {"query": "O que é o efeito estufa?"},
     {"query": "Explique as causas do aquecimento global."},
@@ -209,10 +350,33 @@ QUERIES = [
     {"query": "Explique o conceito de latitude."},
     {"query": "O que é um terremoto e como é medido?"},
     {"query": "Explique o impacto das mudanças climáticas."},
+    # Novas (10)
+    {"query": "Explique o fenômeno 'El Niño' e 'La Niña' (ENSO) e seus impactos globais."},
+    {"query": "O que é a 'Zona de Convergência Intertropical' (ZCIT) e como ela afeta o clima no Nordeste do Brasil?"},
+    {"query": "Discuta o conceito de 'Antropoceno' e as evidências geológicas que o suportam."},
+    {"query": "O que são 'ilhas de calor' urbanas e quais são as soluções de planejamento urbano para mitigá-las?"},
+    {"query": "Explique o que é 'deriva continental' e a 'tectônica de placas'."},
+    {"query": "O que é o 'Cinturão de Fogo do Pacífico'?"},
+    {"query": "Discuta os desafios da gestão de 'bacias hidrográficas' transfronteiriças."},
+    {"query": "O que é 'gentrificação' e quais são seus impactos sociais e espaciais nas cidades?"},
+    {"query": "Explique o que são 'refugiados climáticos' e os desafios legais associados a eles."},
+    {"query": "O que é a 'Corrente Termoalina' (Circulação Meridional de Capotamento do Atlântico) e por que seu enfraquecimento é preocupante?"},
+    # Novas 2 (10)
+    {"query": "O que é 'geopolítica' e qual a importância dos 'choke points' marítimos (ex: Estreito de Ormuz)?"},
+    {"query": "Explique o 'Ciclo das Rochas' (ígneas, sedimentares, metamórficas)."},
+    {"query": "O que é o 'Acordo de Paris' e quais são suas metas?"},
+    {"query": "Descreva o processo de 'laterização' do solo, comum em climas tropicais."},
+    {"query": "O que é 'desenvolvimento sustentável'?"},
+    {"query": "Explique as 'pirâmides etárias' e o que elas indicam sobre a demografia de um país."},
+    {"query": "O que são 'correntes marítimas' (ex: Corrente do Golfo) e como elas regulam o clima?"},
+    {"query": "Discuta a 'questão hídrica' no Oriente Médio."},
+    {"query": "O que é 'cartografia digital' e 'SIG' (Sistema de Informação Geográfica)?"},
+    {"query": "Analise a 'Guerra Fria' sob uma perspectiva geopolítica de disputa por zonas de influência."},
 
     # ======================================================
-    # 📡 Redes e Infraestrutura (25)
+    # 📡 Redes e Infraestrutura (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique o que é o protocolo TCP/IP."},
     {"query": "O que é DNS e como ele funciona?"},
     {"query": "Explique o conceito de sub-rede."},
@@ -238,10 +402,33 @@ QUERIES = [
     {"query": "Explique o conceito de DNS local."},
     {"query": "O que é IPv4 e por que está se esgotando?"},
     {"query": "Explique o que é tunneling em redes."},
+    # Novas (10)
+    {"query": "O que é 'Software-Defined Networking' (SDN) e como desacopla o plano de controle do plano de dados?"},
+    {"query": "Explique o 'handshake' trifásico (three-way handshake) do TCP."},
+    {"query": "O que é 'BGP (Border Gateway Protocol)' e por que ele é essencial para a internet?"},
+    {"query": "Compare 'IPv4' e 'IPv6' em termos de endereçamento, segurança e fragmentação."},
+    {"query": "O que é 'MPLS (Multiprotocol Label Switching)' e por que é usado por provedores de serviço?"},
+    {"query": "Descreva a arquitetura 'Zero Trust Security Model' (Confiança Zero) em redes."},
+    {"query": "O que é 'DNSSEC' e como ele ajuda a prevenir ataques de 'cache poisoning'?"},
+    {"query": "Explique o funcionamento do 'Kubernetes' para orquestração de containers."},
+    {"query": "O que é 'Infraestrutura como Código' (IaC) e quais ferramentas são usadas (ex: Terraform, Ansible)?"},
+    {"query": "Discuta os desafios de latência em redes 5G para aplicações de 'ultra-reliable low-latency communication' (URLLC)."},
+    # Novas 2 (10)
+    {"query": "O que é 'VXLAN' e como ele ajuda a superar as limitações das 'VLANs' em datacenters?"},
+    {"query": "Explique o 'OSPF' (Open Shortest Path First) e como ele difere do 'BGP'."},
+    {"query": "O que é 'Zero-Day Exploit' e como as defesas de rede tentam mitigá-lo?"},
+    {"query": "Compare 'load balancing' L4 (TCP/UDP) com L7 (HTTP/HTTPS)."},
+    {"query": "O que é 'Anycast' e como é usado por CDNs e servidores DNS?"},
+    {"query": "Descreva o 'WAF' (Web Application Firewall) e como ele protege contra 'SQL Injection' e 'XSS'."},
+    {"query": "O que é 'HTTP/3' e como o 'QUIC' melhora a performance em relação ao 'HTTP/2'?"},
+    {"query": "Explique o conceito de 'resiliência' e 'failover' em design de infraestrutura."},
+    {"query": "O que é 'Provisionamento Bare Metal' e como se compara a 'Máquinas Virtuais'?"},
+    {"query": "Descreva a 'autenticação 802.1X' para controle de acesso à rede (NAC)."},
 
     # ======================================================
-    # ⚙️ Inteligência Artificial e Machine Learning (25)
+    # ⚙️ Inteligência Artificial e Machine Learning (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique o que é aprendizado supervisionado."},
     {"query": "O que é uma rede neural convolucional?"},
     {"query": "Explique o conceito de overfitting."},
@@ -267,10 +454,33 @@ QUERIES = [
     {"query": "Explique o conceito de clustering."},
     {"query": "O que é PCA?"},
     {"query": "Explique o que é gradient descent."},
+    # Novas (10)
+    {"query": "O que é 'MLOps' e qual o ciclo de vida de um modelo de machine learning em produção?"},
+    {"query": "Explique a arquitetura de um 'Autoencoder Variacional' (VAE) e sua diferença para um Autoencoder padrão."},
+    {"query": "O que são 'Redes Adversariais Generativas' (GANs) e como funciona seu treinamento 'minimax'?"},
+    {"query": "O que é 'quantização' de modelos de IA (como INT8) e por que é crucial para 'edge devices'?"},
+    {"query": "Compare 'BERT', 'GPT-3' e 'T5' em termos de arquitetura (encoder/decoder) e pré-treinamento."},
+    {"query": "O que é 'Federated Learning' (Aprendizado Federado) e quais seus benefícios de privacidade?"},
+    {"query": "Explique o 'dilema do viés-variância' (bias-variance tradeoff) em machine learning."},
+    {"query": "O que é 'XAI' (Explainable AI) e por que é importante em setores regulados?"},
+    {"query": "Descreva o algoritmo 'DQN' (Deep Q-Network) em aprendizado por reforço."},
+    {"query": "O que é 'transfer learning' e como o fine-tuning difere do 'feature extraction'?"},
+    # Novas 2 (10)
+    {"query": "O que é 'Retrieval-Augmented Generation' (RAG) em LLMs?"},
+    {"query": "Explique a 'arquitetura do Transformer' (self-attention, positional encoding)."},
+    {"query": "O que é 'reinforcement learning from human feedback' (RLHF)?"},
+    {"query": "Compare 'métricas de avaliação' para classificação (Acurácia, Precisão, Recall, F1-Score)."},
+    {"query": "O que é 'YOLO' (You Only Look Once) e por que é rápido para detecção de objetos?"},
+    {"query": "Descreva o 'processamento de linguagem natural' (NLP) e tarefas como 'NER' e 'Análise de Sentimento'."},
+    {"query": "O que é 'data augmentation' em visão computacional?"},
+    {"query": "Explique 'algoritmos genéticos' e sua aplicação em otimização."},
+    {"query": "O que é 'overfitting' e 'underfitting'? Como 'regularização' (L1, L2, Dropout) ajuda?"},
+    {"query": "O que é 'Word2Vec' (Skip-gram, CBOW) e 'embeddings' de palavras?"},
 
     # ======================================================
-    # 🧬 Biologia e Saúde (25)
+    # 🧬 Biologia e Saúde (45)
     # ======================================================
+    # Originais (25)
     {"query": "Explique a estrutura de uma célula eucariótica."},
     {"query": "O que é o DNA e qual sua função?"},
     {"query": "Diferencie mitose de meiose."},
@@ -296,10 +506,33 @@ QUERIES = [
     {"query": "Diferencie bactérias de vírus."},
     {"query": "O que é uma dieta balanceada?"},
     {"query": "Quais os riscos do sedentarismo para a saúde?"},
+    # Novas (10)
+    {"query": "O que é 'CRISPR-Cas9' e quais são suas implicações éticas na edição genética humana?"},
+    {"query": "Explique o 'dogma central' da biologia molecular (replicação, transcrição, tradução)."},
+    {"query": "O que são 'células-tronco' e qual seu potencial terapêutico?"},
+    {"query": "Descreva o processo de 'apoptose' (morte celular programada) e sua importância."},
+    {"query": "O que é 'epigenética' e como ela influencia a expressão gênica sem alterar o DNA?"},
+    {"query": "Como funciona o 'ciclo de Krebs' (ciclo do ácido cítrico) na respiração celular?"},
+    {"query": "O que é 'microbiota intestinal' e qual sua relação com o sistema imunológico e a saúde mental?"},
+    {"query": "Explique a diferença entre 'imunidade inata' e 'imunidade adaptativa'."},
+    {"query": "O que é um 'príon' e como ele causa doenças neurodegenerativas?"},
+    {"query": "Descreva o mecanismo de ação das vacinas de 'mRNA' (como as da COVID-19)."},
+    # Novas 2 (10)
+    {"query": "O que é o 'sistema endócrino' e a função dos 'hormônios'?"},
+    {"query": "Descreva o 'ciclo menstrual' e sua regulação hormonal."},
+    {"query": "O que é 'autofagia' e seu papel na renovação celular?"},
+    {"query": "Como funciona a 'sinapse' neural e o papel dos 'neurotransmissores'?"},
+    {"query": "O que é 'resistência a antibióticos' e por que é uma crise de saúde pública?"},
+    {"query": "Explique o processo de 'digestão' (mecânica e química)."},
+    {"query": "O que é 'inflamação' (aguda vs. crônica)?"},
+    {"query": "Descreva a 'estrutura e função' dos rins e do 'néfron'."},
+    {"query": "O que é 'taxonomia' e o sistema de classificação de Lineu?"},
+    {"query": "Explique o que é 'PCR' (Reação em Cadeia da Polimerase) e como é usada em diagnósticos."},
 
     # ======================================================
-    # 📈 Economia e Finanças (25)
+    # 📈 Economia e Finanças (45)
     # ======================================================
+    # Originais (25)
     {"query": "O que é inflação e quais suas causas?"},
     {"query": "Defina PIB (Produto Interno Bruto)."},
     {"query": "Explique o que é política monetária."},
@@ -325,10 +558,33 @@ QUERIES = [
     {"query": "Explique o que é taxa de câmbio."},
     {"query": "O que é o Tesouro Direto?"},
     {"query": "Quais os diferentes tipos de impostos?"},
+    # Novas (10)
+    {"query": "Explique a 'Curva de Phillips' e a relação entre inflação e desemprego."},
+    {"query": "O que é 'flexibilização quantitativa' (Quantitative Easing) e como os bancos centrais a utilizam?"},
+    {"query": "Descreva o 'Modelo Black-Scholes' para precificação de opções."},
+    {"query": "O que é 'vantagem comparativa' de David Ricardo e sua importância no comércio internacional?"},
+    {"query": "Discuta o 'Paradoxo de Giffen' e o que é um 'bem de Giffen'."},
+    {"query": "O que é 'Finanças Comportamentais' (Behavioral Finance) e o 'viés de aversão à perda'?"},
+    {"query": "Explique o que é 'ESG' (Environmental, Social, and Governance) no contexto de investimentos."},
+    {"query": "O que é 'DeFi' (Finanças Descentralizadas) e como funciona um 'Automated Market Maker' (AMM)?"},
+    {"query": "Analise o 'Trilema Impossível' (ou Trindade Impossível) na economia internacional."},
+    {"query": "O que é 'High-Frequency Trading' (HFT) e quais são seus impactos na estabilidade do mercado?"},
+    # Novas 2 (10)
+    {"query": "O que é 'estagflação' (estagnação com inflação)?"},
+    {"query": "Explique o 'Índice de Gini' e como ele mede a desigualdade."},
+    {"query": "O que é 'derivativo' financeiro? Dê exemplos (futuros, opções)."},
+    {"query": "Descreva o 'padrão-ouro' e o 'Sistema de Bretton Woods'."},
+    {"query": "O que é 'dumping' e 'antidumping' no comércio internacional?"},
+    {"query": "Explique o que é 'risco sistêmico' no mercado financeiro."},
+    {"query": "O que é 'arbitragem' financeira?"},
+    {"query": "Compare 'investimento de valor' (Value Investing) e 'investimento de crescimento' (Growth Investing)."},
+    {"query": "O que é 'tokenização' de ativos usando blockchain?"},
+    {"query": "Explique o que é 'Taxa Selic' e como o 'COPOM' a utiliza para controlar a inflação."},
 
     # ======================================================
-    # 📚 Literatura e Gramática (25)
+    # 📚 Literatura e Gramática (45)
     # ======================================================
+    # Originais (25)
     {"query": "Quem foi William Shakespeare e qual sua principal obra?"},
     {"query": "Faça um breve resumo do livro 'Dom Quixote'."},
     {"query": "O que é uma metáfora? Dê exemplos."},
@@ -354,10 +610,34 @@ QUERIES = [
     {"query": "Diferencie voz ativa, voz passiva e voz reflexiva."},
     {"query": "O que é coesão e coerência textual?"},
     {"query": "Quem foi Camões e qual sua obra mais famosa?"},
+    # Novas (10)
+    {"query": "Discuta o conceito de 'intertextualidade' na literatura, dando exemplos."},
+    {"query": "O que é o 'fluxo de consciência' (stream of consciousness) como técnica narrativa? Cite James Joyce."},
+    {"query": "Analise a obra 'Grande Sertão: Veredas' de Guimarães Rosa e sua inovação linguística."},
+    {"query": "O que é um 'narrador não confiável' (unreliable narrator)? Dê exemplos literários."},
+    {"query": "Explique a 'Jornada do Herói' de Joseph Campbell e sua aplicação na literatura e cinema."},
+    {"query": "O que é 'regência verbal' e 'regência nominal' em português? Dê exemplos de erros comuns."},
+    {"query": "Diferencie 'período composto por coordenação' e 'período composto por subordinação'."},
+    {"query": "O que é 'semântica' e 'pragmática' no estudo da linguagem?"},
+    {"query": "Analise o papel da 'metalinguagem' no poema 'Autopsicografia' de Fernando Pessoa."},
+    {"query": "Quem foi Franz Kafka e o que significa o termo 'kafkiano'?"},
+    # Novas 2 (10)
+    {"query": "O que é 'Arcadismo' (ou Neoclassicismo) na literatura?"},
+    {"query": "Analise o movimento 'Naturalismo' e a obra 'O Cortiço' de Aluísio Azevedo."},
+    {"query": "O que é 'análise sintática'? Diferencie 'sujeito', 'predicado', 'objeto direto' e 'indireto'."},
+    {"query": "Explique o 'uso dos porquês' (por que, por quê, porque, porquê)."},
+    {"query": "O que é o 'Gênero Lírico', 'Épico' e 'Dramático'?"},
+    {"query": "Quem foi 'Fernando Pessoa' e seus principais heterônimos?"},
+    {"query": "O que é 'ironia' e como ela difere de 'sarcasmo'?"},
+    {"query": "Explique o 'Novo Acordo Ortográfico' da Língua Portuguesa (mudanças principais)."},
+    {"query": "O que é 'parnasianismo' no Brasil? Cite Olavo Bilac."
+    },
+    {"query": "Discuta a 'Semana de Arte Moderna de 22' e seu impacto na literatura."},
 
     # ======================================================
-    # 🧠 Filosofia e Sociologia (25)
+    # 🧠 Filosofia e Sociologia (45)
     # ======================================================
+    # Originais (25)
     {"query": "O que é o 'Mito da Caverna' de Platão?"},
     {"query": "Explique o método socrático."},
     {"query": "Quem foi Aristóteles e o que é a 'ética a Nicômaco'?"},
@@ -383,10 +663,33 @@ QUERIES = [
     {"query": "Quem foi Simone de Beauvoir e qual sua principal ideia?"},
     {"query": "O que é o conceito de 'alienação' em Marx?"},
     {"query": "Explique o que é a 'ação social' para Weber."},
+    # Novas (10)
+    {"query": "Discuta o conceito de 'biopoder' em Michel Foucault e sua aplicação na sociedade contemporânea."},
+    {"query": "O que é 'desconstrução' em Jacques Derrida?"},
+    {"query": "Analise a 'Crítica da Razão Pura' de Kant e a revolução copernicana na filosofia."},
+    {"query": "O que é 'solidariedade mecânica' e 'solidariedade orgânica' em Émile Durkheim?"},
+    {"query": "Discuta o conceito de 'necropolítica' de Achille Mbembe."},
+    {"query": "O que é a 'Escola de Frankfurt' e sua crítica à 'razão instrumental'?"},
+    {"query": "Explique o 'niilismo' em Nietzsche e a 'transvaloração de todos os valores'."},
+    {"query": "O que é 'violência simbólica' em Pierre Bourdieu?"},
+    {"query": "Discuta o 'Paradoxo da Tolerância' de Karl Popper."},
+    {"query": "O que é 'interseccionalidade' (Kimberlé Crenshaw) e por que é importante para a sociologia?"},
+    # Novas 2 (10)
+    {"query": "O que é 'pós-modernismo' na filosofia? Cite Lyotard ou Baudrillard."},
+    {"query": "Explique o 'feminismo' e suas diferentes 'ondas' (primeira, segunda, terceira)."},
+    {"query": "O que é a 'Dialética Hegeliana' (tese, antítese, síntese)?"},
+    {"query": "Discuta o 'conceito de poder' em Foucault (poder disciplinar, biopoder)."},
+    {"query": "O que é o 'Estado de Natureza' em Hobbes, Locke e Rousseau? Compare-os."},
+    {"query": "Explique o 'conceito de anomia' em Durkheim."},
+    {"query": "O que é 'fenomenologia' em Edmund Husserl?"},
+    {"query": "Discuta a 'globalização' e o conceito de 'aldeia global' de Marshall McLuhan."},
+    {"query": "O que é 'A Ética Protestante e o Espírito do Capitalismo' de Max Weber?"},
+    {"query": "O que é 'apartheid' e como a sociologia analisa a 'segregação racial'?"},
 
     # ======================================================
-    # 🎨 Arte e Música (25)
+    # 🎨 Arte e Música (45)
     # ======================================================
+    # Originais (25)
     {"query": "O que foi o Renascimento Italiano na arte?"},
     {"query": "Quem foi Michelangelo e qual sua obra mais famosa?"},
     {"query": "O que é o Impressionismo? Cite 3 artistas."},
@@ -412,10 +715,33 @@ QUERIES = [
     {"query": "Diferencie música erudita de música popular."},
     {"query": "O que é um 'riff' na música?"},
     {"query": "O que é 'harmonia' e 'melodia'?"},
+    # Novas (10)
+    {"query": "O que é 'dodecafonismo' (música de doze tons) criado por Arnold Schoenberg?"},
+    {"query": "Analise a importância do 'ready-made' de Marcel Duchamp para a arte conceitual."},
+    {"query": "O que é a 'proporção áurea' (número de ouro) e como ela foi aplicada na arte e arquitetura renascentista?"},
+    {"query": "Discuta o 'método' de Stanislavski e seu impacto na atuação teatral e cinematográfica."},
+    {"query": "O que foi o 'Expressionismo Abstrato' e a 'action painting' de Jackson Pollock?"},
+    {"query": "Explique o que é 'contraponto' na música, citando a obra de J.S. Bach."},
+    {"query": "O que é o 'Kintsugi', a arte japonesa de reparar cerâmica com ouro, e qual sua filosofia?"},
+    {"query": "Analise o uso da 'luz e sombra' (chiaroscuro) na pintura barroca de Caravaggio."},
+    {"query": "O que é 'sampling' na música (especialmente no Hip Hop) e quais as implicações legais de direitos autorais?"},
+    {"query": "Quem foi Pina Bausch e qual sua contribuição para a 'dança-teatro' (Tanztheater)?"},
+    # Novas 2 (10)
+    {"query": "O que é 'música atonal' e como ela rompeu com a harmonia tradicional?"},
+    {"query": "Explique o 'Dadaísmo' e sua crítica radical à arte e à sociedade."},
+    {"query": "O que é 'Land Art' (Arte da Terra)? Cite Robert Smithson."},
+    {"query": "Descreva a 'forma sonata' na música clássica."},
+    {"query": "O que é 'Minimalismo' na arte (Donald Judd) e na música (Steve Reich)?"},
+    {"query": "Analise o 'Neoconcretismo' no Brasil (Lygia Clark, Hélio Oiticica)."},
+    {"query": "O que é 'fotografia de rua' (street photography)? Cite Henri Cartier-Bresson."},
+    {"query": "Explique o 'movimento 'Stuckism'' e sua oposição à 'arte conceitual'."},
+    {"query": "O que é 'ópera'? Diferencie 'ária' de 'recitativo'."},
+    {"query": "O que foi o 'Tropicália' (Tropicalismo) no Brasil e sua fusão cultural?"},
 
     # ======================================================
-    # ⚖️ Direito e Política (25)
+    # ⚖️ Direito e Política (45)
     # ======================================================
+    # Originais (25)
     {"query": "O que é uma Constituição?"},
     {"query": "Explique os Três Poderes: Executivo, Legislativo e Judiciário."},
     {"query": "O que é o Supremo Tribunal Federal (STF) no Brasil?"},
@@ -441,10 +767,33 @@ QUERIES = [
     {"query": "O que é um 'inquérito policial'?"},
     {"query": "Diferencie 'acusado' de 'condenado'."},
     {"query": "O que é o 'trânsito em julgado'?"},
+    # Novas (10)
+    {"query": "O que é 'lawfare' e como ele é debatido no contexto político contemporâneo?"},
+    {"query": "Diferencie 'controle de constitucionalidade difuso' e 'controle concentrado' no sistema brasileiro."},
+    {"query": "O que é a 'Teoria da Separação dos Poderes' de Montesquieu e como ela se aplica hoje?"},
+    {"query": "Explique o que é 'soberania' no direito internacional e o princípio da 'não-intervenção'."},
+    {"query": "O que é um 'mandado de injunção' no direito brasileiro?"},
+    {"query": "Discuta o 'ativismo judicial' e suas críticas no contexto do STF."},
+    {"query": "O que é 'federalismo' e como ele se difere do 'unitarismo'? Cite exemplos."},
+    {"query": "Explique o conceito de 'accountability' (horizontal e vertical) na ciência política."},
+    {"query": "O que é o 'princípio da insignificância' (bagatela) no direito penal?"},
+    {"query": "Descreva o processo legislativo de uma 'Medida Provisória' no Brasil."},
+    # Novas 2 (10)
+    {"query": "O que é 'jus cogens' no direito internacional?"},
+    {"query": "Explique o 'princípio da legalidade' e 'anterioridade' no direito penal."},
+    {"query": "O que é 'lobby' e como ele é regulamentado (ou não) no Brasil?"},
+    {"query": "Diferencie 'dolo' e 'culpa' no direito penal."},
+    {"query": "O que é 'excludente de ilicitude' (ex: legítima defesa)?"},
+    {"query": "Explique o 'sistema eleitoral proporcional' (voto em lista aberta) usado para deputados no Brasil."},
+    {"query": "O que é 'nepotismo' e 'nepotismo cruzado' na administração pública?"},
+    {"query": "O que é 'Ação Direta de Inconstitucionalidade' (ADI)?"},
+    {"query": "Explique o 'Foro por Prerrogativa de Função' (foro privilegiado)."},
+    {"query": "O que é 'guerra fiscal' entre os estados no Brasil?"},
 
     # ======================================================
-    # 🎬 Cinema e Cultura Pop (25)
+    # 🎬 Cinema e Cultura Pop (45)
     # ======================================================
+    # Originais (25)
     {"query": "Quem é considerado o 'pai do cinema'?"},
     {"query": "O que foi o movimento 'Nouvelle Vague' no cinema francês?"},
     {"query": "Quem é o diretor Martin Scorsese? Cite 3 filmes dele."},
@@ -470,10 +819,33 @@ QUERIES = [
     {"query": "O que é 'streaming' de vídeo? Cite 3 plataformas."},
     {"query": "O que é um 'anime' e um 'mangá'?"},
     {"query": "Resuma a série 'Game of Thrones'."},
+    # Novas (10)
+    {"query": "O que é o 'Teste de Bechdel' e o que ele revela sobre a representação feminina no cinema?"},
+    {"query": "Explique a técnica cinematográfica do 'plano-sequência' (long take) e cite exemplos famosos."},
+    {"query": "O que é 'mise-en-scène' e quais elementos o compõem?"},
+    {"query": "Discuta o impacto cultural e o subtexto filosófico da trilogia 'Matrix'."},
+    {"query": "O que foi o 'Expressionismo Alemão' no cinema e como ele influenciou filmes posteriores (como o 'Film Noir')?"},
+    {"query": "Analise o conceito de 'monomito' (Jornada do Herói) aplicado à saga 'Star Wars'."},
+    {"query": "O que é 'quebrar a quarta parede' (breaking the fourth wall)? Dê exemplos no cinema e na TV."},
+    {"query": "Discuta o papel do 'som diegético' e 'não diegético' na construção da narrativa de um filme."},
+    {"query": "O que é o 'vale da estranheza' (uncanny valley) e como ele se aplica ao CGI e animação?"},
+    {"query": "Analise o sucesso global do 'K-Pop' (como BTS e Blackpink) como um fenômeno de 'soft power' cultural."},
+    # Novas 2 (10)
+    {"query": "O que é 'Neorrealismo Italiano' e quais suas características?"},
+    {"query": "Analise o 'suspense' em Alfred Hitchcock e o conceito de 'MacGuffin'."},
+    {"query": "O que é 'stop-motion'? Cite 'O Estranho Mundo de Jack'."},
+    {"query": "Discuta o 'culto ao herói' na cultura pop e o 'monomito' de Campbell."},
+    {"query": "O que é um 'anti-herói'? Dê exemplos (ex: Walter White)."},
+    {"query": "Explique o 'found footage' como gênero de filme (ex: 'A Bruxa de Blair')."},
+    {"query": "O que é 'fandom' e 'cultura de fãs' (fan fiction, cosplay)?"},
+    {"query": "Analise o subtexto social e político em filmes de 'zumbi' (ex: George Romero)."},
+    {"query": "O que é 'worldbuilding' em ficção científica e fantasia (ex: 'Duna')?"},
+    {"query": "Discuta a ascensão dos 'e-sports' como fenômeno cultural e econômico."},
 
     # ======================================================
-    # 🍳 Culinária e Gastronomia (25)
+    # 🍳 Culinária e Gastronomia (45)
     # ======================================================
+    # Originais (25)
     {"query": "Como fazer um molho bechamel básico?"},
     {"query": "O que é 'refogar' na culinária?"},
     {"query": "Quais são os 5 sabores básicos do paladar humano?"},
@@ -499,10 +871,33 @@ QUERIES = [
     {"query": "O que é 'mise en place' e qual sua importância?"},
     {"query": "O que é 'sous-vide'?"},
     {"query": "Como clarificar manteiga?"},
+    # Novas (10)
+    {"query": "Explique a 'Reação de Maillard' e sua diferença para a 'caramelização'."},
+    {"query": "O que é 'gastronomia molecular'? Cite técnicas como 'esferificação' e 'espumas'."},
+    {"query": "Descreva o processo de 'fermentação natural' (levain) na panificação e seus benefícios."},
+    {"query": "O que é 'nixtamalização' do milho e sua importância nutricional na culinária mesoamericana?"},
+    {"query": "Explique os cinco 'molhos mãe' (sauces mères) da culinária francesa clássica."},
+    {"query": "O que é o processo de 'cura' (como em presunto cru ou salmão gravlax)?"},
+    {"query": "Como funciona a 'pasteurização' e a 'ultrapasteurização' (UHT)?"},
+    {"query": "O que é 'terroir' e como esse conceito se aplica ao vinho, café e queijo?"},
+    {"query": "Descreva a técnica de 'cocção a vácuo' (sous-vide) e suas vantagens."},
+    {"query": "O que é 'charcutaria' e quais os principais métodos de preservação envolvidos?"},
+    # Novas 2 (10)
+    {"query": "O que é 'cozinha de vanguarda' (ex: El Bulli) e o 'desconstrutivismo'?"},
+    {"query": "Explique o processo de 'maturação' (dry-aging) de carne."},
+    {"query": "O que é 'glúten' e qual seu papel na panificação?"},
+    {"query": "Descreva a 'técnica de picles' (conserva em vinagre)."},
+    {"query": "O que é 'cozinha Nikkei' (fusão peruana-japonesa)?"},
+    {"query": "Como fazer 'caldo de ossos' (bone broth) e por que ele é gelatinoso?"},
+    {"query": "O que é 'temperagem' de chocolate e por que é necessária?"},
+    {"query": "Explique o 'processo de produção' da cerveja (mostura, fervura, fermentação)."},
+    {"query": "O que é 'comida de rua' (street food) e sua importância cultural?"},
+    {"query": "Descreva o 'método de extração' de café 'espresso' vs 'coado' (V60)."},
 
     # ======================================================
-    # 🌌 Astronomia e Exploração Espacial (25)
+    # 🌌 Astronomia e Exploração Espacial (45)
     # ======================================================
+    # Originais (25)
     {"query": "Qual a diferença entre um planeta e uma estrela?"},
     {"query": "Descreva o Sistema Solar, listando os planetas."},
     {"query": "O que é um buraco negro?"},
@@ -528,10 +923,33 @@ QUERIES = [
     {"query": "O que é a 'SpaceX' e quem é Elon Musk?"},
     {"query": "O que é a 'gravidade zero' (microgravidade)?"},
     {"query": "Qual a importância de Júpiter para o Sistema Solar?"},
+    # Novas (10)
+    {"query": "O que é o 'Paradoxo de Fermi' e quais são algumas das hipóteses para resolvê-lo?"},
+    {"query": "Explique o 'Diagrama de Hertzsprung-Russell' (Diagrama H-R) e como ele classifica as estrelas."},
+    {"query": "O que são 'ondas gravitacionais' e como o 'LIGO' as detecta?"},
+    {"query": "Descreva o 'ciclo de vida' de uma estrela (da nebulosa à anã branca ou supernova)."},
+    {"query": "O que é 'lente gravitacional' e como ela é usada para detectar matéria escura?"},
+    {"query": "Quais são os principais desafios (fisiológicos e psicológicos) de uma viagem tripulada a Marte?"},
+    {"query": "O que é a 'Síndrome de Kessler' e por que o lixo espacial é uma ameaça?"},
+    {"query": "Explique a 'Escala de Kardashev' para classificar civilizações tecnológicas."},
+    {"query": "O que é a 'Heliopausa' e onde fica a fronteira do Sistema Solar?"},
+    {"query": "Descreva o 'Problema dos Três Corpos' e por que ele é tão complexo de resolver."},
+    # Novas 2 (10)
+    {"query": "O que é 'colonização espacial' e os desafios de 'terraformação' de Marte?"},
+    {"query": "Explique a 'Esfera de Dyson' como conceito de megaestrutura alienígena."},
+    {"query": "O que é 'propulsão a íons' e como ela funciona?"},
+    {"query": "Descreva a 'Missão Voyager' e o 'Golden Record'."},
+    {"query": "O que são 'Raios Cósmicos' e de onde eles vêm?"},
+    {"query": "Explique o 'Modelo Geocêntrico' de Ptolomeu e o 'Heliocêntrico' de Copérnico."},
+    {"query": "O que é 'astronomia de raios-gama' e o que ela estuda?"},
+    {"query": "O que é o 'Grande Filtro' (Great Filter) em relação ao Paradoxo de Fermi?"},
+    {"query": "Descreva o 'cinturão de asteroides' e a 'Nuvem de Oort'."},
+    {"query": "O que é 'turismo espacial' e quais empresas estão liderando (SpaceX, Blue Origin)?"},
 
     # ======================================================
-    # 🔁 Questões Transversais (Complexas) (25)
+    # 🔁 Questões Transversais (Complexas) (45)
     # ======================================================
+    # Originais (25)
     {"query": "Discuta as implicações éticas (Filosofia) e legais (Direito) do uso de IA (IA) em sistemas de justiça criminal, abordando o viés algorítmico."},
     {"query": "Como as mudanças climáticas (Geografia) estão impactando o agronegócio (Agro), qual o papel da IoT (IoT) na mitigação, e como isso afeta os preços das commodities (Economia)?"},
     {"query": "Descreva como algoritmos de Machine Learning (IA) podem ser usados para analisar dados de sequenciamento de DNA (Biologia), e quais os desafios de infraestrutura (Redes) para processar esses dados."},
@@ -557,6 +975,149 @@ QUERIES = [
     {"query": "Descreva o impacto da Peste Negra (História) na estrutura social e econômica (Sociologia/Economia) da Europa medieval e compare com a resposta global à pandemia de COVID-19 (Saúde)."},
     {"query": "Quais são os desafios químicos (Química) e legais (Direito) associados ao descarte de lixo eletrônico (Programação/Redes) e seu impacto ambiental (Geografia)?"},
     {"query": "Compare o conceito de 'entropia' na física (Física) com seu uso em teoria da informação (Matemática/Redes) e discuta suas implicações filosóficas (Filosofia)."},
+    # Novas (10)
+    {"query": "Analise como a 'gamificação' (Psicologia/IA) pode ser usada na educação para engajamento, mas discuta os riscos éticos (Filosofia) de manipulação comportamental."},
+    {"query": "Discuta os desafios logísticos (Redes/Economia) e éticos (Filosofia) da mineração de asteroides (Astronomia) e quem teria direito (Direito) a esses recursos sob o 'Tratado do Espaço Sideral'."},
+    {"query": "Como a 'computação de borda' (Edge Computing) (Redes/IoT) pode ser usada para processar dados de sensores em tempo real (Agro) sem violar as leis de governança de dados (Direito) como a LGPD?"},
+    {"query": "Explique o 'dilema do bonde' (Filosofia) e como ele se aplica à programação de veículos autônomos (IA/Programação), e qual a implicação legal (Direito) de um acidente inevitável."},
+    {"query": "Analise o impacto da 'Indústria 4.0' (IA/IoT) na estrutura do mercado de trabalho (Sociologia/Economia), e qual o papel do Estado (Política) na requalificação da mão de obra."},
+    {"query": "Descreva o processo de 'teranóstico' (Biologia/Química), que combina diagnóstico e terapia, e discuta os desafios de 'big data' (IA) na análise de imagens médicas e genômicas."},
+    {"query": "O que é 'Decolonialidade' (Filosofia/Sociologia)? Use esse conceito para criticar o viés algorítmico (IA) em modelos de linguagem treinados predominantemente com dados do Norte Global."},
+    {"query": "Compare a 'Crise dos Mísseis de Cuba' (História/Política) com as tensões geopolíticas atuais envolvendo ciberataques (Redes/Política), analisando-as sob a 'Teoria dos Jogos' (Economia/Matemática)."},
+    {"query": "Explique como a 'tecnologia CRISPR' (Biologia) levanta questões sobre 'eugenia' (Filosofia/Sociologia) e quais regulações (Direito) estão sendo propostas para a edição de embriões humanos."},
+    {"query": "Discuta o impacto do 'Antropoceno' (Geografia) na 'sexta extinção em massa' (Biologia) e avalie a eficácia de acordos climáticos internacionais (Política/Direito) para reverter essa tendência."},
+    # Novas 2 (10)
+    {"query": "Discuta a 'psicologia evolucionista' (Biologia/Filosofia) e como ela explica comportamentos sociais (Sociologia), mas critique seus aspectos deterministas."},
+    {"query": "Como a 'teoria quântica' (Física) está sendo explorada em 'criptografia quântica' (Redes/Matemática) e quais as implicações para a segurança global (Política)?"},
+    {"query": "Analise a 'Revolução Verde' (Agro/História): aumentou a produção de alimentos (Economia), mas gerou dependência química (Química) e impacto ambiental (Geografia)."},
+    {"query": "O que é 'bioarte' (Arte/Biologia)? Discuta as implicações éticas (Filosofia) de usar tecidos vivos e 'CRISPR' (Biologia) como meio artístico."},
+    {"query": "Explique a 'gentrificação' (Sociologia/Geografia) impulsionada por 'hubs' de tecnologia (Economia/Programação) e o impacto no mercado imobiliário (Economia) e na cultura local (Sociologia)."},
+    {"query": "Descreva a 'economia gig' (Economia/Sociologia) (ex: Uber) e os desafios legais (Direito) sobre 'vínculo empregatício' e a precarização do trabalho."},
+    {"query": "Como o 'design de interfaces' (UI/UX) (Programação) aplica 'psicologia cognitiva' (Filosofia/Biologia) para criar 'hábitos' (Habit-forming products) e quais as éticas (Filosofia) disso?"},
+    {"query": "Analise a 'tradução automática' (IA/Literatura) e o desafio de preservar a 'nuance' cultural e 'pragmática' (Gramática/Filosofia) de um idioma para outro."},
+    {"query": "Discuta a 'soberania de dados' (Direito/Política) no contexto de 'cloud computing' (Redes) e a tensão entre leis locais (ex: LGPD/GDPR) e a jurisdição de 'Big Techs' (Economia)."},
+    {"query": "Como a 'impressão 3D' (Programação/Engenharia) está mudando a 'cadeia de suprimentos' (Economia) e quais os desafios de 'propriedade intelectual' (Direito) de 'blueprints' digitais?"},
+    # ======================================================
+    # 🔁 Questões Transversais (Foco Meta) (10)
+    # ======================================================
+    {"query": "Desenvolva um 'framework ético' (Filosofia) para a 'governança' (Política) de 'Inteligência Artificial Geral' (AGI) (IA). Como 'conceitos' como 'personalidade jurídica' (Direito) se 'aplicariam'? Quais 'riscos existenciais' (Filosofia/Física) devem ser 'priorizados' e quem ('nações' (Política) ou 'corporações' (Economia)) 'decide'?"},
+    {"query": "Analise a 'Crise Climática' (Geografia/Física) através da 'lente' da 'Teoria dos Jogos' (Matemática/Economia). Por que a 'cooperação global' (Política) 'falha' (Dilema do Prisioneiro / Tragédia dos Comuns)? Quais 'mecanismos' ('impostos de carbono' (Economia), 'geoengenharia' (Engenharia/Química)) 'poderiam' 'mudar' o 'equilíbrio' (Matemática)?"},
+    {"query": "O que é 'consciência' (Filosofia/Psicologia)? Compare 'visões' 'materialistas' (Biologia/Neurociência) (ex: 'produto' de 'redes neurais' (Biologia/Redes)) com 'visões' 'não-reducionistas' (Filosofia). A 'IA' (IA) 'poderia' 'alcançar' 'consciência' ('qualia') (Filosofia) ou 'apenas' 'simulá-la' (Programação)?"},
+    {"query": "Critique o 'PIB' (Economia) como 'métrica' de 'progresso' (Filosofia/História). Quais 'fatores' (ex: 'saúde mental' (Saúde), 'capital social' (Sociologia), 'degradação ambiental' (Geografia)) ele 'ignora'? Proponha 'métricas alternativas' (ex: 'Felicidade Interna Bruta') (Sociologia/Economia) e 'discuta' sua 'viabilidade política' (Política)."},
+    {"query": "Discuta a 'tensão' entre 'relativismo cultural' (Sociologia/Filosofia) e 'direitos humanos universais' (Direito/Filosofia). Como 'julgar' (Filosofia) 'práticas culturais' (Sociologia/História) (ex: 'mutilação genital feminina') (Saúde/Biologia) que 'violam' 'direitos' (Direito)? É 'imperialismo cultural' (Política) 'intervir'?"},
+    {"query": "Analise a 'verdade' (Filosofia) na 'era da pós-verdade' (Sociologia). Como 'plataformas' de 'mídia social' (Redes/IA), 'bolhas de filtro' (IA/Sociologia) e 'deepfakes' (IA/Cinema) 'erodiram' a 'confiança' (Sociologia) em 'instituições' (Política/Ciência)? Qual a 'solução': 'regulação' (Direito) ou 'alfabetização midiática' (Educação)?"},
+    {"query": "Projete uma 'cidade sustentável' (Geografia/Arquitetura) para 2050. 'Integre' 'soluções' de 'energia' (Física/IoT), 'transporte' (Engenharia/Política), 'produção de alimentos' (Agricultura Vertical) (Agro) e 'gestão de resíduos' (Química/Biologia) 'considerando' 'a' 'coesão social' (Sociologia) 'e' 'a' 'viabilidade econômica' (Economia)."},
+    {"query": "O que é 'capitalismo de vigilância' (Sociologia/Economia) (Shoshana Zuboff)? Explique o 'modelo de negócios' (Economia) de 'extrair' 'dados comportamentais' (IA/Psicologia) para 'prever' e 'influenciar' 'comportamento' (Política/Economia). É uma 'nova forma' de 'totalitarismo' (Filosofia/Política)?"},
+    {"query": "Analise 'a' 'exploração espacial' (Astronomia) 'liderada' 'por' 'bilionários' (Economia) (ex: Musk, Bezos). É 'o' 'próximo' 'passo' 'da' 'evolução humana' (Filosofia/Biologia) 'ou' 'um' 'desperdício' (Economia) 'de' 'recursos' (Geografia) 'que' 'poderiam' 'ser' 'usados' 'para' 'resolver' 'problemas' 'na' 'Terra' (Saúde/Geografia/Política)?"},
+    {"query": "Qual 'o' 'futuro' 'do' 'trabalho' (Economia/Sociologia) 'com' 'a' 'automação' (IA/Programação)? 'Debata' 'Renda' 'Básica' 'Universal' (Economia/Filosofia) 'vs.' 'requalificação' (Educação/Economia). 'Como' 'a' 'sociedade' (Sociologia) 'encontraria' 'propósito' (Filosofia/Psicologia) 'sem' 'o' 'emprego' 'tradicional' (História)?"},
+    # ======================================================
+    # 🇧🇷 Bloco 4: Foco no Brasil (75 Consultas)
+    # ======================================================
+
+    # --- História do Brasil (15) ---
+    {"query": "Analise a 'Guerra do Paraguai' (História). Foi um 'conflito' sobre 'fronteiras' (Geografia/Política) ou uma 'imposição' do 'imperialismo britânico' (Economia/História) para 'destruir' um 'modelo' 'autônomo' (Economia)?"},
+    {"query": "Discuta a 'Semana de Arte Moderna de 22' (Arte/História). Foi uma 'ruptura' 'verdadeira' (Filosofia) ou uma 'importação' 'elitista' (Sociologia) de 'vanguardas europeias' (Arte)?"},
+    {"query": "O que foi 'Guerra de Canudos' (História/Sociologia)? Analise o 'conflito' não como 'fanatismo religioso' (Filosofia), mas como uma 'disputa' pela 'terra' (Agro/Geografia) e um 'choque' entre 'Brasil rural' (Sociologia) e 'República urbana' (Política)."},
+    {"query": "Explique a 'Revolta da Vacina' (História/Saúde). Analise-a como uma 'reação' à 'violência' do 'saneamento' 'autoritário' (Política/Direito) de 'Pereira Passos' (Geografia) e à 'falta' de 'comunicação' 'científica' (Sociologia)."},
+    {"query": "O que foi o 'Ciclo do Ouro' (História/Economia)? Discuta o 'impacto' na 'demografia' (Geografia), o 'deslocamento' do 'eixo econômico' (Economia) para o 'Sudeste' e o 'estilo de arte' 'Barroco Mineiro' (Arte/Química)."},
+    {"query": "Analise a 'Lei de Terras de 1850' (Direito/História). Como ela 'consolidou' a 'concentração fundiária' (Geografia/Economia) e 'bloqueou' o 'acesso' à 'terra' (Sociologia) para 'imigrantes' (História) e 'escravos libertos' (Sociologia)?"},
+    {"query": "O que foi a 'Revolução de 1930' (História/Política)? Foi uma 'revolução' 'burguesa' (Economia), um 'golpe militar' (Política) ou o 'fim' da 'República Velha' (História) e da 'política do café com leite' (Agro/Política)?"},
+    {"query": "Discuta o 'Plano de Metas' de 'JK' (História/Economia). Analise o 'modelo' 'desenvolvimentista' (Economia), o 'custo' (inflação, dívida) (Economia) e o 'impacto' 'geopolítico' (Política/Geografia) da 'construção' de 'Brasília' (Arquitetura/Arte)."},
+    {"query": "O que foi o 'Tenentismo' (História/Política)? Analise o 'movimento' dos 'jovens oficiais' (Sociologia) e suas 'contradições' (Filosofia): 'autoritarismo' (Política) 'combinado' com 'demandas' por 'reforma' (Direito/Educação)."},
+    {"query": "Discuta a 'Abertura dos Portos' (1808) (História/Economia). Foi o 'início' da 'independência econômica' (Economia) ou o 'começo' de uma 'nova dependência' (Política) 'substituindo' 'Portugal' (História) pela 'Inglaterra' (Economia)?"},
+    {"query": "Analise o 'Quilombo dos Palmares' (História/Sociologia). Foi 'apenas' um 'refúgio' (Sociologia) ou um 'Estado' 'multiétnico' (Política/Filosofia) 'alternativo' (Direito) ao 'Brasil colonial' (História)?"},
+    {"query": "O que foi a 'Inconfidência Mineira' (História)? Discuta a 'influência' do 'Iluminismo' (Filosofia) e da 'Independência dos EUA' (História/Política), e as 'contradições' (Filosofia) de um 'movimento' 'elitista' (Sociologia) que 'não' 'abria mão' da 'escravidão' (Direito/Economia)."},
+    {"query": "Analise o 'Milagre Econômico' (História/Economia) (1968-1973). Quais 'fatores' 'permitiram' o 'crescimento' (Economia) e qual foi o 'custo social' (Sociologia) (aumento da desigualdade, 'arrocho salarial') (Economia) e 'político' (Direito) (Ditadura)?"},
+    {"query": "O que foi a 'Revolta da Chibata' (História/Sociologia)? Analise o 'movimento' de 'João Cândido' (História) como uma 'luta' por 'direitos humanos' (Direito/Filosofia) e o 'fim' de 'castigos corporais' (Biologia/Saúde) 'oriundos' da 'escravidão' (História) na 'Marinha' (Política)."},
+    {"query": "Discuta a 'transferência' da 'corte portuguesa' (História) para o 'Brasil' (1808). Quais 'impactos' 'culturais' (Arte/Música), 'políticos' (Política) e 'econômicos' (Economia) 'irreversíveis' (Filosofia) isso 'causou' na 'colônia', 'levando' à 'Independência' (História)?"},
+
+    # --- Geografia e Geopolítica do Brasil (15) ---
+    {"query": "O que são 'Rios Voadores' (Geografia/Física)? Explique o 'papel' da 'Amazônia' (Geografia) na 'regulação climática' (Física) e no 'regime de chuvas' (Clima) para o 'Agronegócio' (Agro/Economia) do 'Centro-Oeste' e 'Sudeste'."},
+    {"query": "Analise o 'Polígono das Secas' (Geografia). Discuta a 'indústria da seca' (Política/Economia) 'versus' 'soluções' 'tecnológicas' (Engenharia/Química) (ex: 'transposição do São Francisco', 'dessalinização') (Geografia/Química)."},
+    {"query": "Discuta a 'Matriz Energética Brasileira' (Geografia/Economia). Analise a 'dependência' de 'hidrelétricas' (Física/Engenharia), os 'riscos' (apagões) (Redes/Economia) e o 'potencial' 'subutilizado' de 'energia eólica' (Física) e 'solar' (Física/Agro)."},
+    {"query": "O que é o 'Pré-Sal' (Geografia/Química)? Discuta o 'desafio tecnológico' (Engenharia/Física) da 'extração' (Química) e o 'debate' 'geopolítico' (Política/Economia) sobre o 'uso' dos 'royalties' (Economia/Educação)."},
+    {"query": "Analise o 'Arco do Desmatamento' (Geografia/Agro). Quais 'forças econômicas' (Economia) (soja, gado) 'impulsionam' a 'expansão' da 'fronteira agrícola' (Agro) e quais os 'conflitos' 'sociais' (Sociologia/Direito) 'resultantes'?"},
+    {"query": "O que é o 'Aquífero Guarani' (Geografia/Química)? Discuta a 'importância' (Biologia) 'estratégica' (Geopolítica) de 'gerir' (Política/Direito) um 'recurso hídrico' (Química) 'transfronteiriço' (Direito) (Brasil, Argentina, Uruguai, Paraguai)."},
+    {"query": "Discuta a 'Matriz de Transporte' 'brasileira' (Geografia/Economia). Por que 'optamos' pelo 'rodoviarismo' (História/Política) em 'detrimento' de 'ferrovias' (Engenharia) e 'hidrovias' (Geografia), e qual o 'Custo Brasil' (Economia) 'dessa' 'escolha'?"},
+    {"query": "Analise a 'posição' do 'Brasil' (Geopolítica) na 'América do Sul'. O 'Brasil' 'age' como 'líder' 'regional' (Política/Economia) (ex: MERCOSUL) ou como 'ator' 'isolado' (Política) 'focado' em 'outras' 'alianças' (Geopolítica) (ex: BRICS, OCDE)?"},
+    {"query": "Discuta a 'urbanização' 'brasileira' (Geografia/Sociologia). Analise o 'processo' 'rápido' (História) e 'sem planejamento' (Engenharia) que 'levou' à 'favelização' (Sociologia), 'gentrificação' (Economia) e 'desafios' de 'mobilidade' (Redes/Engenharia)."},
+    {"query": "O que é 'Amazônia Azul' (Geopolítica/Geografia)? Explique o 'conceito' de 'mar territorial' (Direito) e a 'importância' 'estratégica' (Política) e 'econômica' (Economia) (petróleo, minerais, biodiversidade) (Química/Biologia) da 'costa brasileira'."},
+    {"query": "Analise a 'questão indígena' (Sociologia/Geografia) no 'Brasil'. Discuta o 'conflito' (Direito/Filosofia) entre 'demarcação de terras' (Direito/Geografia) e 'expansão do agronegócio' (Agro/Economia)."},
+    {"query": "O que é o 'Cangaço' (História/Sociologia)? Analise o 'fenômeno' (ex: Lampião) (História) não como 'bandidismo' (Direito), mas como 'resposta social' (Sociologia/Filosofia) à 'ausência' do 'Estado' (Política) e à 'concentração de terra' (Geografia) no 'Sertão'."},
+    {"query": "Discuta a 'geopolítica' da 'fronteira' 'Brasil-Venezuela' (Geografia/Política). Analise a 'crise migratória' (Sociologia), os 'desafios' de 'segurança' (Direito) e a 'tensão' 'diplomática' (Política)."},
+    {"query": "O que são 'enclaves' 'tecnológicos' (Geografia/Economia) no 'Brasil' (ex: 'Porto Digital' em Recife, 'Vale do Pinhão' em Curitiba)? Eles 'realmente' 'impulsionam' a 'inovação' (Programação/IA) ou 'apenas' 'aumentam' a 'gentrificação' (Sociologia/Economia) 'local'?"},
+    {"query": "Analise a 'Bacia do Prata' (Geografia/Geopolítica). Qual a 'importância' 'histórica' (História) (ex: Guerra do Paraguai) e 'econômica' (Economia) (escoamento de safra, 'Hidrelétrica de Itaipu') (Física) 'desta' 'bacia hidrográfica' (Geografia)?"},
+
+    # --- Economia Brasileira (15) ---
+    {"query": "O que é o 'Custo Brasil' (Economia)? Detalhe os 'componentes' (ex: 'burocracia' (Direito), 'logística' (Geografia), 'carga tributária' (Direito/Economia)) e 'analise' como 'afeta' a 'competitividade' 'internacional' (Economia/Política)."},
+    {"query": "Discuta o 'Plano Real' (Economia/História). Como a 'criação' da 'URV' (Matemática/Economia) 'funcionou' para 'quebrar' a 'inércia inflacionária' (Psicologia/Economia), e quais 'custos' 'sociais' (desemprego) (Sociologia) 'foram' 'pagos'?"},
+    {"query": "Analise a 'desindustrialização' (Economia) no 'Brasil'. É um 'processo' 'natural' (Economia) de 'avanço' para 'serviços' (Sociologia) ou uma 'consequência' da 'doença holandesa' (Economia) (commodities) (Agro) e 'falta' de 'política industrial' (Política)?"},
+    {"query": "Discuta o 'teto de gastos' (Direito/Economia). É uma 'ferramenta' 'necessária' (Economia) para 'controle fiscal' (Política) ou um 'obstáculo' (Filosofia) ao 'investimento' em 'saúde' (Saúde) e 'educação' (Educação)?"},
+    {"query": "O que é 'guerra fiscal' (Economia/Política) entre 'estados' 'brasileiros'? Analise como a 'competição' por 'investimentos' (Economia) 'usando' 'isenções' de 'ICMS' (Direito) 'pode' 'prejudicar' a 'arrecadação' 'nacional' (Economia)."},
+    {"query": "Analise o 'BNDES' (Economia/Política). Qual 'deve' ser o 'papel' (Filosofia) de um 'banco de desenvolvimento': 'fomentar' 'campeões nacionais' (Economia/Política) ou 'financiar' 'pequenas empresas' (Economia) e 'infraestrutura' (Engenharia/Geografia)?"},
+    {"query": "Discuta a 'Reforma Tributária' (Direito/Economia) 'brasileira'. Por que 'é' 'tão' 'difícil' (Política) 'unificar' 'impostos' (ex: 'IBS', 'CBS') (Direito)? Analise o 'impacto' 'esperado' na 'indústria' (Economia) vs. 'serviços' (Economia) e no 'pacto federativo' (Política)."},
+    {"query": "O que é 'dependência' de 'commodities' (Agro/Economia)? Como a 'economia brasileira' (Economia) é 'vulnerável' (Economia) à 'flutuação' de 'preços internacionais' (Economia/Geografia) e à 'taxa de câmbio' (Economia)?"},
+    {"query": "Analise a 'relação comercial' 'Brasil-China' (Economia/Geopolítica). O 'Brasil' 'é' 'apenas' um 'exportador' de 'matérias-primas' (Agro/Geografia) ou 'pode' 'se beneficiar' (Economia) da 'demanda' 'chinesa' (Política) por 'tecnologia' (IA/Redes)?"},
+    {"query": "Discuta a 'Reforma da Previdência' (Economia/Direito). Analise os 'argumentos' 'demográficos' (Sociologia/Matemática) (envelhecimento) (Biologia) e 'fiscais' (Economia) 'versus' as 'críticas' sobre 'justiça social' (Filosofia) e 'desigualdade' (Sociologia)."},
+    {"query": "O que é 'Pix' (Economia/Programação)? Analise o 'impacto' no 'sistema bancário' 'tradicional' (Economia/Redes), a 'redução' de 'custos' (Economia) e os 'novos' 'desafios' de 'segurança' (Redes/Direito) (ex: golpes) (Sociologia)."},
+    {"query": "Analise o 'agronegócio' (Agro/Economia) 'brasileiro'. Discuta a 'dualidade' (Filosofia): 'alta tecnologia' (IA/IoT) e 'produtividade' (Economia) 'versus' 'impacto ambiental' (Geografia/Biologia) e 'conflitos' por 'terra' (Sociologia)."},
+    {"query": "O que foi a 'crise da dívida' 'externa' (Economia/História) nos 'anos 80' ('década perdida')? Explique 'como' o 'Brasil' (Política) 'chegou' à 'moratória' (Direito/Economia) e 'como' isso 'moldou' a 'política econômica' (Política) 'posterior'."},
+    {"query": "Discuta o 'Bolsa Família' / 'Auxílio Brasil' (Economia/Sociologia). É 'assistencialismo' (Política/Filosofia) ou uma 'ferramenta' 'eficaz' (Economia) de 'combate' à 'pobreza extrema' (Sociologia) e 'estímulo' 'econômico' (Economia) 'local'?"},
+    {"query": "O que é 'economia informal' (Economia/Sociologia) no 'Brasil'? Analise 'suas' 'causas' (alta carga tributária, burocracia) (Direito/Economia) e 'consequências' (falta de direitos trabalhistas) (Direito/Saúde)."},
+
+    # --- Política Brasileira (15) ---
+    {"query": "O que é 'Presidencialismo de Coalizão' (Política/Sociologia)? Explique 'como' o 'sistema' 'funciona' (Política) no 'Brasil' e 'por que' 'ele' 'leva' a 'fragmentação partidária' (Matemática/Política) e 'negociações' (ex: 'toma lá, dá cá') (Sociologia/Economia)."},
+    {"query": "Analise o 'papel' do 'STF' (Direito/Política) no 'Brasil'. O 'tribunal' 'pratica' 'ativismo judicial' (Filosofia/Direito), 'excedendo' 'suas' 'funções' (Direito), ou 'apenas' 'preenche' 'vácuos' (Filosofia) 'deixados' pelo 'Legislativo' (Política)?"},
+    {"query": "Discuta o 'sistema eleitoral' 'brasileiro' (Política/Direito). A 'lista aberta' (Política) para 'deputados' (Direito) 'causa' 'personalismo' (Sociologia) e 'enfraquece' os 'partidos' (Filosofia)? 'Compare' com 'lista fechada' ou 'voto distrital' (Política)."},
+    {"query": "O que foi a 'Operação Lava Jato' (Direito/Política)? Analise seu 'impacto' no 'combate' à 'corrupção' (Sociologia/Economia) 'versus' as 'críticas' sobre 'violações' 'processuais' (Direito) e 'partidarização' ('lawfare') (Política/Filosofia)."},
+    {"query": "O que é o 'Centrão' (Política/Sociologia)? Analise 'esse' 'grupo' 'político' (Política) 'não' como 'ideológico' (Filosofia), mas como 'pragmático' (Filosofia) e 'essencial' (Matemática) para a 'governabilidade' (Política) no 'Presidencialismo de Coalizão' (Política)."},
+    {"query": "Discuta 'Fake News' (Sociologia/IA) e 'desinformação' (Psicologia) no 'contexto político' 'brasileiro'. Quais 'são' os 'impactos' na 'democracia' (Filosofia/Política) e qual 'deve' ser o 'papel' (Direito) do 'TSE' (Direito) na 'regulação' (Redes)?"},
+    {"query": "O que é o 'orçamento secreto' (Emendas de Relator RP9) (Política/Economia)? Analise 'como' 'esse' 'mecanismo' 'afetou' o 'equilíbrio' (Física) entre 'Executivo' (Política) e 'Legislativo' (Política) e a 'transparência' (Filosofia/Direito) dos 'gastos públicos' (Economia)."},
+    {"query": "Discuta o 'papel' das 'Forças Armadas' (Política/História) na 'política' 'brasileira' 'pós-1988'. Analise o 'conceito' de 'poder moderador' (Filosofia/História) 'versus' a 'submissão' ao 'poder civil' (Direito/Política)."},
+    {"query": "O que é 'judicialização' da 'política' (Direito/Política)? Explique 'por que' 'tantas' 'decisões' 'políticas' (Política) (ex: 'saúde', 'meio ambiente') (Saúde/Geografia) 'acabam' 'sendo' 'decididas' pelo 'Judiciário' (Direito) no 'Brasil'."},
+    {"query": "Analise o 'MERCOSUL' (Política/Economia). O 'bloco' 'é' 'relevante' (Economia) para a 'inserção' 'global' (Geopolítica) do 'Brasil' ou 'tornou-se' um 'obstáculo' (Direito) para 'acordos' 'bilaterais' (ex: 'UE-Mercosul') (Economia)?"},
+    {"query": "Discuta o 'financiamento de campanha' (Política/Direito) no 'Brasil'. A 'proibição' de 'doações' 'empresariais' (Direito/Economia) 'reduziu' a 'corrupção' (Sociologia) ou 'apenas' 'fortaleceu' o 'uso' de 'fundo partidário' (Economia) e 'caixa dois' (Direito)?"},
+    {"query": "O que é 'nepotismo' (Direito/Sociologia) e 'clientelismo' (Política/Sociologia)? Explique 'como' 'essas' 'práticas' 'históricas' (História) 'ainda' 'persistem' (Filosofia) na 'administração pública' 'brasileira' (Política)."},
+    {"query": "Analise a 'Lei de Improbidade Administrativa' (Direito). Como 'ela' 'tenta' 'punir' (Direito) 'gestores' 'públicos' (Política) e 'como' 'mudanças' 'recentes' (Direito) (ex: 'exigência de dolo') 'podem' 'afetar' seu 'impacto' (Sociologia)?"},
+    {"query": "O que é 'polarização' 'política' (Política/Sociologia) no 'Brasil'? Discuta 'suas' 'causas' ('mídias sociais' (Redes/IA), 'crise econômica' (Economia)) e 'consequências' (paralisia decisória) (Política/Filosofia)."},
+    {"query": "Analise a 'diplomacia' 'brasileira' (Política/Geopolítica). Discuta a 'tradição' (História) do 'Itamaraty' (Direito) (multilateralismo, 'soft power') (Sociologia) 'versus' 'novas' 'abordagens' 'ideológicas' (Filosofia) na 'política externa' (Política)."},
+
+    # --- Cultura e Sociedade Brasileira (35) ---
+    {"query": "O que é 'Sincretismo Religioso' (Sociologia/História) no 'Brasil'? Analise 'exemplos' (ex: 'Umbanda', 'Candomblé' e 'Catolicismo') (Filosofia) como 'forma' de 'resistência cultural' (Sociologia) 'africana' (História) 'diante' da 'imposição' (Direito) 'europeia'."},
+    {"query": "Analise o 'Movimento Antropofágico' (Arte/Literatura) de 'Oswald de Andrade'. Explique a 'filosofia' (Filosofia) de 'deglutir' (Biologia/Culinária) a 'cultura estrangeira' (Geografia) para 'criar' 'algo' 'autenticamente' 'brasileiro' (Sociologia)."},
+    {"query": "O que é 'Cinema Novo' (Cinema/Arte)? Discuta a 'estética da fome' (Filosofia/Sociologia) de 'Glauber Rocha' (Cinema) como uma 'ferramenta' 'política' (Política) e uma 'crítica' (Filosofia) ao 'subdesenvolvimento' (Economia) 'brasileiro'."},
+    {"query": "Discuta a 'Bossa Nova' (Música/Arte). Foi 'apenas' 'música' (Arte) ou um 'projeto' 'cultural' (Sociologia) que 'exportou' (Economia) uma 'imagem' 'moderna' (Filosofia) e 'branca' (Sociologia) do 'Brasil' (Geografia)?"},
+    {"query": "O que foi o 'Tropicália' (Música/Arte)? Analise 'como' 'Caetano' e 'Gil' (Música/História) 'usaram' a 'fusão' (Química) de 'tradição' (Música/Folclore) com 'rock psicodélico' (Música/Arte) para 'criticar' (Filosofia) a 'Ditadura' (Política) e o 'nacionalismo' 'ufanista' (Sociologia)."},
+    {"query": "Analise a 'arquitetura' de 'Brasília' (Arte/Engenharia) (Niemeyer, Lúcio Costa) (História). Foi um 'sucesso' 'utópico' (Filosofia) de 'design' 'modernista' (Arte) ou um 'fracasso' de 'planejamento urbano' (Geografia/Sociologia) que 'ignora' a 'escala humana' (Biologia/Psicologia)?"},
+    {"query": "O que é 'racismo estrutural' (Sociologia/Direito) no 'Brasil'? Discuta 'como' 'ele' 'difere' (Filosofia) do 'racismo' 'individual' (Psicologia) e 'como' 'ele' 'se manifesta' (Sociologia) na 'desigualdade econômica' (Economia) e na 'violência policial' (Direito)."},
+    {"query": "Discuta a 'Lei de Cotas' (Direito/Política). É uma 'política' 'eficaz' (Economia/Matemática) de 'reparação' 'histórica' (História/Filosofia) ou 'fere' o 'princípio' da 'meritocracia' (Filosofia/Sociologia)?"},
+    {"query": "Analise o 'Carnaval' (Cultura/Arte). É 'apenas' 'festa' (Sociologia) ou 'também' um 'espaço' 'político' (Política) de 'crítica social' (Filosofia) (ex: 'desfiles' de 'Escolas de Samba') (Música/Arte) e 'inversão' 'temporária' (Sociologia) de 'hierarquias' (Sociologia)?"},
+    {"query": "O que é 'Literatura de Cordel' (Literatura/Arte)? Analise 'sua' 'métrica' (Música/Literatura), 'sua' 'função' (História/Sociologia) de 'informar' (Jornalismo) e 'entreter' (Arte) no 'Nordeste' (Geografia) e 'seu' 'valor' 'cultural' (Sociologia)."},
+    {"query": "Discuta o 'futebol' (Cultura/Sociologia) no 'Brasil'. É 'apenas' 'esporte' (Biologia/Saúde) ou 'parte' 'fundamental' (Filosofia) da 'identidade nacional' (Sociologia) e 'instrumento' de 'política' (Política/História) (ex: 'Copa de 1970')?"},
+    {"query": "O que é 'Machado de Assis' (Literatura)? Analise 'como' 'sua' 'obra' (ex: 'Dom Casmurro') (Literatura) 'usa' 'ironia' (Filosofia/Gramática) e 'narradores não confiáveis' (Literatura/Psicologia) para 'criticar' a 'elite' (Sociologia) e a 'escravidão' (História/Direito) 'no' 'Segundo Reinado' (História)."},
+    {"query": "O que é 'Capoeira' (Cultura/Arte)? Discuta 'sua' 'dualidade' (Filosofia): 'dança' (Música/Arte), 'luta' (Biologia/Física) e 'ferramenta' de 'resistência' 'cultural' (Sociologia/História) 'afro-brasileira' (Geografia)."},
+    {"query": "Analise a 'MPB' (Música Popular Brasileira) (Música/Arte). Como 'ela' 'serviu' de 'veículo' para 'protesto político' (Política) 'durante' a 'Ditadura' (História), 'usando' 'metáforas' (Literatura/Filosofia) para 'burlar' a 'censura' (Direito)?"},
+    {"query": "O que é 'Estatuto da Criança e do Adolescente' (ECA) (Direito)? Analise a 'filosofia' (Filosofia) da 'proteção integral' (Saúde/Psicologia) 'versus' os 'desafios' (Política) de 'implementação' (Economia) e o 'debate' (Sociologia) sobre 'redução' da 'maioridade penal' (Direito)."},
+    {"query": "Discuta o 'Movimento dos Trabalhadores Rurais Sem Terra' (MST) (Sociologia/Política). É um 'movimento social' 'legítimo' (Filosofia) 'lutando' pela 'reforma agrária' (Direito/Geografia) ou uma 'organização' que 'viola' o 'direito' de 'propriedade' (Direito/Economia)?"},
+    {"query": "Analise a 'violência urbana' (Sociologia/Direito) no 'Brasil'. Discuta 'causas' 'complexas' (desigualdade (Economia), 'guerra às drogas' (Política/Química)) e 'consequências' ('encarceramento em massa' (Direito), 'desconfiança' na 'polícia' (Sociologia))."},
+    {"query": "O que é 'Funk Carioca' (Música/Cultura Pop)? Analise 'sua' 'estética' (Música/Arte), 'sua' 'função' (Sociologia) como 'crônica social' (Literatura) das 'favelas' (Geografia) e a 'criminalização' (Direito/Sociologia) 'sofrida' 'pelo' 'movimento'."},
+    {"query": "Discuta o 'PAC' (Programa de Aceleração do Crescimento) (Economia/Política). Foi um 'plano' 'eficaz' (Economia) de 'investimento' em 'infraestrutura' (Engenharia/Geografia) ou 'sofreu' com 'corrupção' (Direito/Sociologia) e 'má gestão' (Economia)?"},
+    {"query": "O que é 'democracia racial' (Sociologia/Filosofia)? Critique o 'mito' (História) de 'Gilberto Freyre' (Sociologia) e 'explique' 'como' 'ele' 'dificultou' (Psicologia/Política) o 'reconhecimento' do 'racismo' (Sociologia) no 'Brasil'."},
+    {"query": "Analise a 'cultura' da 'burocracia' (Sociologia/Direito) no 'Brasil'. É um 'legado' (História) do 'patrimonialismo' (Política/Filosofia) 'português' (Geografia) que 'trava' a 'inovação' (Economia) e 'incentiva' a 'corrupção' (Direito)?"},
+    {"query": "O que é 'Lei Rouanet' (Direito/Arte)? Explique 'seu' 'mecanismo' de 'incentivo fiscal' (Economia) e 'debata' as 'críticas' (Filosofia/Política) (concentração de recursos, 'marketing' 'empresarial') (Economia) 'versus' 'sua' 'importância' (Economia) para 'financiar' a 'cultura' (Arte/Música)."},
+    {"query": "Discuta 'Paulo Freire' (Educação/Filosofia). Explique a 'Pedagogia do Oprimido' (Filosofia/Sociologia) e 'por que' 'seu' 'método' (Psicologia) de 'alfabetização' (Gramática) 'é' 'tão' 'influente' (História) e 'politicamente' 'contestado' (Política) no 'Brasil'."},
+    {"query": "O que é 'SUS' (Sistema Único de Saúde) (Saúde/Direito)? Analise 'seus' 'princípios' (Filosofia) (universalidade, equidade) 'versus' os 'desafios' 'crônicos' (Política) de 'financiamento' (Economia) e 'gestão' (Sociologia)."},
+    {"query": "Analise a 'Lei Maria da Penha' (Direito). Foi 'eficaz' (Sociologia/Matemática) na 'redução' da 'violência doméstica' (Saúde/Biologia) e 'como' 'ela' 'mudou' a 'cultura' (Sociologia/Filosofia) 'patriarcal' (História) no 'sistema de justiça' (Direito)?"},
+    {"query": "O que é 'Modernismo' (Arte) 'versus' 'Parnasianismo' (Literatura/Arte) no 'Brasil'? Discuta a 'ruptura' (Filosofia) da 'Semana de 22' (História) 'contra' a 'forma' 'rígida' (Gramática) e 'temas' 'clássicos' (História/Filosofia) 'anteriores'."},
+    {"query": "Discuta 'Ariano Suassuna' (Literatura/Arte). Analise 'como' o 'Movimento Armorial' (Arte) 'buscava' 'criar' uma 'arte erudita' (Filosofia/Música) 'baseada' na 'cultura popular' (Sociologia) do 'Nordeste' (Geografia/História)."},
+    {"query": "O que é 'Estatuto da Cidade' (Direito/Geografia)? Explique 'ferramentas' (Direito) como 'IPTU progressivo' (Economia) e 'ZEIS' (Zonas Especiais de Interesse Social) (Sociologia) e 'por que' 'são' 'tão' 'pouco' 'aplicadas' (Política) 'pelos' 'municípios' (Geografia)."},
+    {"query": "Analise 'Raízes do Brasil' (Sociologia/História) de 'Sérgio Buarque de Holanda'. Explique o 'conceito' do 'homem cordial' (Sociologia/Psicologia) e 'como' 'ele' 'descreve' a 'dificuldade' 'brasileira' (Política) em 'separar' o 'público' (Direito) do 'privado' (Filosofia)."},
+    {"query": "O que é 'regionalismo' (Literatura/Geografia) na 'literatura brasileira'? Analise 'obras' (ex: 'Vidas Secas' de Graciliano Ramos) (Literatura) 'como' 'denúncia social' (Sociologia/Política) da 'seca' (Geografia) e da 'desigualdade' (Economia)."},
+    {"query": "Discuta 'Clarice Lispector' (Literatura/Filosofia). Como 'sua' 'prosa' (Gramática) 'usa' o 'fluxo de consciência' (Psicologia) e a 'epifania' (Filosofia) para 'explorar' o 'cotidiano' (Sociologia) e a 'subjetividade feminina' (Filosofia/Sociologia)?"},
+    {"query": "O que é 'futebol-arte' (Cultura Pop/Arte)? Discuta a 'filosofia' (Filosofia) 'associada' ao 'futebol brasileiro' (Sociologia) (ex: 'Copa de 1982') 'versus' o 'futebol de resultado' (Economia/Matemática) 'europeu' (Geografia)."},
+    {"query": 'Analise "Cidade de Deus" (Cinema/Sociologia). O "filme" (Arte) "reforça" "estereótipos" (Sociologia/Psicologia) sobre "favelas" (Geografia) ou "funciona" como "crítica" (Filosofia) "eficaz" da "violência" (Direito) e "exclusão social" (Sociologia)?"'},
+    {"query": "O que é 'coronelismo' (Política/História)? Explique a 'relação' (Sociologia) de 'poder' (Política) 'local' (Geografia) 'baseada' na 'terra' (Agro/Economia) e no 'voto de cabresto' (Direito/Sociologia) 'durante' a 'República Velha' (História)."},
+    {"query": "Discuta 'Língua Brasileira de Sinais' (LIBRAS) (Gramática/Sociologia). É 'apenas' uma 'tradução' (Gramática) do 'português' ou uma 'língua' 'completa' (Filosofia) com 'gramática' 'própria' (Gramática)? 'Analise' a 'luta' (Política) da 'comunidade surda' (Saúde/Sociologia) por 'direitos' (Direito)."},
 ]
 
 # ==========================================================

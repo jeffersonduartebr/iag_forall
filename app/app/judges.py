@@ -1,20 +1,36 @@
 """
 judges.py
 ----------------------------------------------------
-Sistema de avaliação de respostas (juízes LLM + heurístico + RAG).
-Cada juiz gera notas entre 0 e 10, que são ponderadas e retornadas ao roteador.
-Integração com Prometheus, Chroma e modelos Ollama locais.
+Sistema de avaliação de respostas (juízes LLM + heurístico + RAG)
+com fallback automático e auditoria em banco de dados.
+----------------------------------------------------
+Novidades:
+✅ Fallback automático para GPT-4.1 quando um juiz falha ou retorna 0.00
+✅ Registro detalhado de todos os eventos de fallback em judge_logs
+✅ Total rastreabilidade das decisões de avaliação
 """
 
 import logging
 import re
+import os
 from typing import List, Dict, Any
+from sqlalchemy import create_engine, text
 from .settings import settings
 from .providers import call_model
 from .vectorstore import query_embedding
 from .embeddings import embed_text
 
 logger = logging.getLogger(__name__)
+
+# ======================================================
+# 🔧 Banco de dados (para auditoria)
+# ======================================================
+DB_HOST = os.getenv("DB_HOST", "mariadb")
+DB_USER = os.getenv("DB_USER", "router_user")
+DB_PASS = os.getenv("DB_PASS", "router_pass")
+DB_NAME = os.getenv("DB_NAME", "routerdb")
+DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
+engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # ======================================================
 # 🔹 Recuperação de contexto (RAG dinâmico)
@@ -31,7 +47,6 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
         context = "\n\n".join(docs).strip()
         if len(context) > max_chars:
             context = context[:max_chars] + "..."
-        logger.info(f"[Judges] {len(docs)} trechos recuperados via RAG.")
         return context
     except Exception as e:
         logger.error(f"[Judges] Falha ao obter contexto RAG: {e}")
@@ -42,7 +57,7 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
 # 🔹 Função principal de julgamento
 # ======================================================
 async def judge_answer(query: str, answer: str, use_rag: bool = False) -> List[Dict[str, Any]]:
-    """Executa julgamento composto (heurístico + LLM) e retorna lista de notas."""
+    """Retorna uma lista de julgamentos sobre a qualidade da resposta."""
     try:
         if not answer or not isinstance(answer, str):
             logger.warning("[Judges] Resposta vazia ou inválida, score=0.")
@@ -57,26 +72,27 @@ async def judge_answer(query: str, answer: str, use_rag: bool = False) -> List[D
             results.append({"judge_id": "heuristic", "score": round(base_score, 3)})
             logger.info(f"[Judges] Heurístico: {base_score:.2f}")
 
-        # 2️⃣ Julgamento via LLM
+        # 2️⃣ LLM-based (com RAG e fallback)
         if mode in ("llm", "hybrid"):
             llm_score = await llm_based_score(query, answer, use_rag)
             results.append({"judge_id": "llm", "score": round(llm_score, 3)})
             logger.info(f"[Judges] LLM: {llm_score:.2f}")
 
-        valid = [r for r in results if "score" in r]
-        if not valid:
+        valid_results = [r for r in results if "score" in r]
+        if not valid_results:
             return [{"judge_id": "fallback", "score": 0.0}]
-        return valid
+        return valid_results
+
     except Exception as e:
         logger.error(f"[Judges] Erro inesperado no julgamento: {e}")
         return [{"judge_id": "error", "score": 0.0}]
 
 
 # ======================================================
-# 🔹 Heurística simples (clareza e tamanho)
+# 🔹 Heurística simples
 # ======================================================
 def heuristic_score(answer: str) -> float:
-    """Score básico com base em tamanho e presença de pontuação."""
+    """Gera score com base em tamanho e pontuação."""
     try:
         length = len(answer.strip())
         if length == 0:
@@ -90,14 +106,16 @@ def heuristic_score(answer: str) -> float:
 
 
 # ======================================================
-# 🔹 Avaliação via LLM (com RAG opcional)
+# 🔹 Avaliação via modelos LLM (com fallback e auditoria)
 # ======================================================
 async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
-    """Executa julgamento via múltiplos juízes LLM com ou sem contexto RAG."""
+    """Executa julgamento dinâmico com fallback para GPT-4.1 e registra auditoria."""
     try:
         judge_models = getattr(settings, "JUDGE_MODELS", [])
         if not judge_models:
             judge_models = [settings.JUDGE_LLM_MODEL] * getattr(settings, "JUDGE_LLM_N", 1)
+
+        fallback_model = os.getenv("JUDGE_FALLBACK_MODEL", "openai/gpt-4.1")
 
         context = ""
         if use_rag:
@@ -107,34 +125,48 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
 
         rag_block = f"\nContexto adicional (via RAG):\n{context}\n" if context else ""
         prompt = (
-            "Você é um avaliador especializado em qualidade de respostas de IA.\n"
-            "Analise a resposta abaixo com base em:\n"
-            "- Correção técnica e factual\n"
-            "- Clareza e coerência\n"
-            "- Relevância em relação à pergunta\n\n"
+            "Você é um avaliador de respostas de IA.\n"
+            "Avalie a resposta abaixo considerando:\n"
+            "1️⃣ Correção técnica e factual\n"
+            "2️⃣ Clareza e coerência textual\n"
+            "3️⃣ Relevância ao que foi perguntado\n\n"
             f"Pergunta: {query}\n\n"
             f"Resposta do modelo: {answer}\n\n"
             f"{rag_block}"
-            "Responda SOMENTE com um número entre 0 e 10 (use ponto decimal se necessário).\n"
-            "Formato de saída obrigatório:\n<nota>\nExemplo: 8.5\n"
-            "Não inclua comentários, explicações ou texto adicional."
+            "Responda SOMENTE com um número entre 0 e 10.\n"
+            "FORMATO DE SAÍDA OBRIGATÓRIO:\n<nota>\n\n"
+            "Por exemplo:\n8.7\n\n"
+            "NÃO escreva mais nada além do número."
         ).strip()
 
         scores = []
         for idx, model in enumerate(judge_models, start=1):
             try:
-                text, _ = call_model(
-                    model=model,
-                    prompt=prompt,
-                    temperature=0.1,
-                    max_tokens=32
-                )
-                logger.debug(f"[Judges][RAW OUTPUT] {model}: {text!r}")
+                text, _ = call_model(model=model, prompt=prompt, temperature=0.2, max_tokens=32)
                 numeric = extract_score(text)
-                scores.append(numeric)
                 logger.info(f"[Judges] {model} → nota={numeric:.2f} (juiz {idx}/{len(judge_models)})")
+
+                if numeric == 0.0:
+                    logger.warning(f"[Judges] {model} retornou 0.00 — aplicando fallback {fallback_model}")
+                    fb_text, _ = call_model(model=fallback_model, prompt=prompt, temperature=0.2, max_tokens=32)
+                    fb_score = extract_score(fb_text)
+                    numeric = fb_score
+                    log_fallback_event(query, answer, model, 0.0, fallback_model, fb_score, "zero_score")
+                    logger.info(f"[Judges] Fallback {fallback_model} → nota={fb_score:.2f}")
+
+                scores.append(numeric)
+
             except Exception as e:
                 logger.warning(f"[Judges] Falha no julgamento com {model}: {e}")
+                try:
+                    fb_text, _ = call_model(model=fallback_model, prompt=prompt, temperature=0.2, max_tokens=32)
+                    fb_score = extract_score(fb_text)
+                    log_fallback_event(query, answer, model, None, fallback_model, fb_score, "exception")
+                    logger.info(f"[Judges] Fallback {fallback_model} → nota={fb_score:.2f}")
+                    scores.append(fb_score)
+                except Exception as e2:
+                    logger.error(f"[Judges] Fallback {fallback_model} também falhou: {e2}")
+                    scores.append(0.0)
 
         if not scores:
             logger.warning("[Judges] Nenhum juiz retornou nota válida. Fallback 5.0.")
@@ -142,40 +174,61 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
 
         avg = sum(scores) / len(scores)
         return round(avg / 10.0, 3)
+
     except Exception as e:
         logger.error(f"[Judges] Erro no julgamento via LLM: {e}")
         return 0.0
 
 
 # ======================================================
-# 🔹 Extração robusta de nota
+# 🔹 Auditoria de fallback
+# ======================================================
+def log_fallback_event(query: str, answer: str, model: str, score_before: float,
+                       fallback_model: str, score_after: float, event_type: str):
+    """Registra evento de fallback ou substituição de nota no banco."""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO judge_logs
+                (query, answer, judge_model, score_before, fallback_model, score_after, event_type)
+                VALUES (:q, :a, :jm, :sb, :fb, :sa, :ev)
+            """), {
+                "q": query,
+                "a": answer,
+                "jm": model,
+                "sb": score_before,
+                "fb": fallback_model,
+                "sa": score_after,
+                "ev": event_type
+            })
+    except Exception as e:
+        logger.error(f"[Judges] Erro ao registrar evento de auditoria: {e}")
+
+
+# ======================================================
+# 🔹 Extração de nota reforçada
 # ======================================================
 def extract_score(text: str) -> float:
-    """Extrai número entre 0 e 10, tolerando formatos livres."""
+    """Extrai número entre 0 e 10 do texto de saída do LLM."""
     try:
         if not text:
             return 0.0
         clean = text.strip().lower()
-
-        # 🔍 Captura padrões típicos
         match = re.search(r"(\d+(?:\.\d+)?)(?:\s*/\s*10)?", clean)
         if match:
             val = float(match.group(1))
             return max(0.0, min(val, 10.0))
 
-        # 🔍 Fallback qualitativo (quando o modelo responde com palavras)
-        if any(w in clean for w in ["excelente", "ótima", "perfeita", "correta", "impecável"]):
+        if any(w in clean for w in ["excelente", "ótima", "perfeita", "correta"]):
             return 9.0
         if any(w in clean for w in ["boa", "adequada", "razoável", "clara"]):
             return 7.0
-        if any(w in clean for w in ["regular", "parcial", "mediana", "ok"]):
+        if any(w in clean for w in ["regular", "parcial", "mediana"]):
             return 5.0
-        if any(w in clean for w in ["ruim", "fraca", "errada", "inadequada", "confusa"]):
+        if any(w in clean for w in ["ruim", "fraca", "errada", "inadequada"]):
             return 3.0
-        if any(w in clean for w in ["péssima", "horrível", "inútil", "completamente errada"]):
+        if any(w in clean for w in ["péssima", "horrível", "completamente errada"]):
             return 1.0
-
-        logger.debug(f"[Judges] Nenhum número reconhecido em: {clean[:50]}...")
         return 0.0
     except Exception:
         return 0.0

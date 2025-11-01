@@ -1,27 +1,74 @@
-# ===========================================================
-# Dockerfile.nsga
-# Serviço autônomo para otimização dos pesos NSGA-II
-# ===========================================================
+# =========================================================
+# 🧠 Dockerfile.nsga — Serviço de otimização multiobjetivo
+# =========================================================
+FROM python:3.11-slim AS base
 
-FROM python:3.11-slim
+LABEL maintainer="Jefferson Duarte <jefferson.igorbr@gmail.com>"
+LABEL description="NSGA-II Optimizer for LLM Router (Prometheus + Redis + MariaDB)"
 
-# 1️⃣ Dependências básicas
-RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+# Evita prompts interativos e ativa logs imediatos
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# 2️⃣ Pacotes Python necessários
-RUN pip install --no-cache-dir numpy scipy prometheus_client sqlalchemy psycopg2-binary pymysql --quiet
-
-# 3️⃣ Diretório de trabalho
 WORKDIR /app
 
-# 4️⃣ Copia código da aplicação
-COPY ./app /app
+# =========================================================
+# 📦 Dependências básicas
+# =========================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libmariadb-dev \
+    pkg-config \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# 5️⃣ Garante que o pacote Python é válido
-RUN touch /app/__init__.py
+# =========================================================
+# 🧩 Instala dependências Python
+# =========================================================
+COPY requirements.txt /app/requirements.txt
 
-# 6️⃣ Apenas para depuração (opcional)
-RUN ls -la /app
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir gunicorn python-dotenv
 
-# ✅ 7️⃣ Executa o módulo correto (sem .py)
-ENTRYPOINT ["bash", "-c", "while true; do python -m app.nsga_weights_updater; echo '[nsga] Ciclo concluído. Aguardando 15min...'; sleep 900; done"]
+# =========================================================
+# 📁 Copia os arquivos necessários da aplicação
+# =========================================================
+COPY . /app
+
+# =========================================================
+# ⚙️ Variáveis de ambiente padrão
+# =========================================================
+ENV PYTHONPATH=/app
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom/nsga_updater
+ENV REDIS_HOST=redis
+ENV REDIS_PORT=6379
+ENV DB_HOST=mariadb
+ENV DB_USER=router_user
+ENV DB_PASS=router_pass
+ENV DB_NAME=routerdb
+ENV DEAP_DEBUG=false
+
+# =========================================================
+# 🔧 Prestart script — garante que o banco e Redis estejam prontos
+# =========================================================
+RUN echo '#!/bin/bash\n\
+echo "⏳ Aguardando Banco e Redis..."\n\
+until nc -z ${DB_HOST:-mariadb} 3306; do sleep 2; echo "Aguardando MariaDB..."; done\n\
+until nc -z ${REDIS_HOST:-redis} ${REDIS_PORT:-6379}; do sleep 2; echo "Aguardando Redis..."; done\n\
+echo "✅ Serviços disponíveis, inicializando NSGA-II..."\n\
+python /app/app/db_manager.py || echo "⚠️ Banco já sincronizado ou inicialização ignorada."\n\
+exec "$@"' > /app/prestart_nsga.sh && chmod +x /app/prestart_nsga.sh
+
+# =========================================================
+# 🧩 Healthcheck Prometheus
+# =========================================================
+HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -f http://localhost:9999/metrics || exit 1
+
+# =========================================================
+# 🧩 Entrypoint
+# =========================================================
+ENTRYPOINT ["/app/prestart_nsga.sh"]
+CMD ["python", "app/nsga_weights_updater.py"]
+# =========================================================

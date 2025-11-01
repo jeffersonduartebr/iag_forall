@@ -1,236 +1,619 @@
-# app/nsga_weights_updater.py
+# nsga_weights_updater.py
+# ------------------------------------------------------------
+# Serviço NSGA-II para cálculo de pesos de seleção entre modelos.
+# Lê modelos de Redis -> DB -> .env; usa logs recentes de consultas
+# para inferir métricas e características; publica pesos em DB/Redis;
+# expõe /metrics e /health.
+# ------------------------------------------------------------
+
 import os
-import time
 import re
 import json
+import math
+import time
 import random
 import logging
-import numpy as np
-from datetime import datetime
-from prometheus_client import Counter, Gauge, Histogram, start_http_server
-from .db_manager import load_history, insert_weights, get_conn
+import threading
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Any, Optional
 
-# ============================================================
-# CONFIGURAÇÃO DE LOGGING
-# ============================================================
+from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse, JSONResponse
+import uvicorn
+
+import numpy as np
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+
+try:
+    # use o util já existente no projeto, se disponível
+    from app.utils.redis_client import get_redis
+except Exception:
+    # fallback minimalista
+    import redis
+
+    def get_redis(max_wait_s: int = 0):
+        host = os.getenv("REDIS_HOST", "redis")
+        port = int(os.getenv("REDIS_PORT", "6379"))
+        pwd = os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS") or "SenhaForte"
+        try:
+            r = redis.Redis(host=host, port=port, password=pwd, db=int(os.getenv("REDIS_DB", "0")))
+            r.ping()
+            return r
+        except Exception:
+            return None
+
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    generate_latest,
+)
+
+# DEAP - Algoritmo evolutivo (NSGA-II)
+from deap import base, creator, tools, algorithms
+
+# ------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("nsga-updater")
 
-# ============================================================
-# MÉTRICAS PROMETHEUS
-# ============================================================
-NSGA_GENERATIONS = Counter("nsga_generations_total", "Número total de gerações NSGA executadas.")
-NSGA_LAST_FITNESS = Gauge("nsga_last_fitness_mean", "Fitness médio da última geração NSGA.")
-NSGA_LAST_UPDATE = Gauge("nsga_weights_last_update_seconds", "Tempo desde a última atualização de pesos NSGA (s).")
-NSGA_EXECUTION_TIME = Histogram("nsga_execution_time_seconds", "Tempo de execução de cada ciclo de otimização NSGA.")
-NSGA_DB_ERRORS = Counter("nsga_db_errors_total", "Número de erros de conexão ou escrita no banco de dados.")
+# ------------------------------------------------------------
+# Config / Conexões
+# ------------------------------------------------------------
+DB_HOST = os.getenv("DB_HOST", "mariadb")
+DB_USER = os.getenv("DB_USER", "router_user")
+DB_PASS = os.getenv("DB_PASS", "router_pass")
+DB_NAME = os.getenv("DB_NAME", "routerdb")
+DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
+engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
-# ============================================================
-# PARÂMETROS DO NSGA-II
-# ============================================================
-POP_SIZE = 200         # população ampliada
-MAX_GEN = 50           # número de gerações
-MUT_RATE = 0.15
-CROSS_RATE = 0.6
-EPS = 1e-6
-RETRY_DELAY = 15
-MAX_DB_RETRIES = 5
-SLEEP_BETWEEN_RUNS = 7200  # 2 horas entre ciclos
+REDIS_KEY_CANDIDATES = "config:candidate_models"      # JSON list
+REDIS_KEY_JUDGES = "config:judge_models"              # JSON list (não usado diretamente aqui, mas mantemos padrão)
+REDIS_KEY_WEIGHTS = "nsga:weights"                    # JSON dict: {model: weight}
 
-# ============================================================
-# CONFIGURAÇÕES POR FAMÍLIA DE MODELO
-# ============================================================
-MODEL_FAMILIES = {
-    "phi": {"default_weights": [0.65, 0.20, 0.15], "cost_target": 0.002, "latency_target": 1.3, "token_key": "max_tokens"},
-    "deepseek": {"default_weights": [0.55, 0.25, 0.20], "cost_target": 0.005, "latency_target": 1.4, "token_key": "max_tokens"},
-    "llama": {"default_weights": [0.60, 0.25, 0.15], "cost_target": 0.008, "latency_target": 1.5, "token_key": "max_tokens"},
-    "mistral": {"default_weights": [0.58, 0.22, 0.20], "cost_target": 0.006, "latency_target": 1.1, "token_key": "max_tokens"},
-    "qwen": {"default_weights": [0.50, 0.30, 0.20], "cost_target": 0.009, "latency_target": 1.2, "token_key": "max_tokens"},
-    "gemma": {"default_weights": [0.57, 0.23, 0.20], "cost_target": 0.010, "latency_target": 1.0, "token_key": "max_tokens"},
-    "gpt": {"default_weights": [0.45, 0.35, 0.20], "cost_target": 0.12, "latency_target": 0.9, "token_key": "max_completion_tokens"},
-    "gemini": {"default_weights": [0.50, 0.30, 0.20], "cost_target": 0.15, "latency_target": 1.0, "token_key": "max_tokens"},
-    "default": {"default_weights": [0.55, 0.25, 0.20], "cost_target": 0.01, "latency_target": 1.5, "token_key": "max_tokens"},
-}
+# NSGA ciclo (em segundos)
+UPDATE_INTERVAL_S = int(os.getenv("NSGA_UPDATE_INTERVAL_S", "300"))  # 5 minutos
 
-# ============================================================
-# FUNÇÕES AUXILIARES
-# ============================================================
-def detect_model_family(model_name: str) -> str:
+# Quantidade de logs considerados (janela móvel)
+QUERY_LOG_LOOKBACK_MINUTES = int(os.getenv("NSGA_LOOKBACK_MINUTES", "180"))  # 3h
+QUERY_LOG_MAX_ROWS = int(os.getenv("NSGA_LOOKBACK_MAXROWS", "2000"))         # até 2000 linhas
+
+# ------------------------------------------------------------
+# Prometheus (single-process registry)
+# ------------------------------------------------------------
+registry = CollectorRegistry()
+
+NSGA_RUNS = Counter("nsga_runs_total", "Total de execuções NSGA-II realizadas", registry=registry)
+NSGA_LAST_RUN_TS = Gauge("nsga_last_run_timestamp", "Epoch da última execução do NSGA", registry=registry)
+NSGA_POP_FITNESS_AVG = Gauge("nsga_population_fitness_avg", "Fitness médio da população (proxy)", registry=registry)
+
+NSGA_BEST_LATENCY = Gauge("nsga_best_latency_seconds", "Latência esperada (s) do mix ótimo", registry=registry)
+NSGA_BEST_COST = Gauge("nsga_best_cost_per_1k", "Custo esperado ($/1k toks) do mix ótimo", registry=registry)
+NSGA_BEST_QUALITY = Gauge("nsga_best_quality", "Qualidade esperada (0-10) do mix ótimo", registry=registry)
+NSGA_BEST_ALIGNMENT = Gauge("nsga_best_query_alignment", "Alinhamento esperado (0-1) do mix ótimo", registry=registry)
+
+WEIGHT_BY_MODEL = Gauge("nsga_model_weight", "Peso/Probabilidade do modelo no mix", ["model"], registry=registry)
+MODEL_OBS_LAT = Gauge("nsga_model_obs_latency", "Latência média observada (s) do modelo", ["model"], registry=registry)
+MODEL_OBS_COST = Gauge("nsga_model_obs_cost_per_1k", "Custo médio observado do modelo", ["model"], registry=registry)
+MODEL_OBS_QUAL = Gauge("nsga_model_obs_quality", "Qualidade média observada (0-10) do modelo", ["model"], registry=registry)
+MODEL_OBS_SR = Gauge("nsga_model_obs_success_rate", "Taxa de sucesso observada (0-1) do modelo", ["model"], registry=registry)
+MODEL_ALIGNMENT = Gauge("nsga_model_alignment", "Score de alinhamento (0-1) do modelo ao perfil de query atual", ["model"], registry=registry)
+
+# ------------------------------------------------------------
+# Utilidades: leitura dinâmica (Redis -> DB -> .env)
+# ------------------------------------------------------------
+def _parse_models_list(raw: str) -> List[str]:
+    """Aceita JSON list ou CSV."""
+    if not raw:
+        return []
+    raw = raw.strip()
+    try:
+        if raw.startswith("["):
+            data = json.loads(raw)
+            return [m for m in data if isinstance(m, str)]
+    except Exception:
+        pass
+    # CSV
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+def load_candidate_models() -> List[str]:
+    """Redis -> DB -> .env (CANDIDATE_MODELS_LIST)."""
+    # 1) Redis
+    try:
+        r = get_redis()
+        if r:
+            v = r.get(REDIS_KEY_CANDIDATES)
+            if v:
+                data = json.loads(v)
+                if isinstance(data, list) and all(isinstance(m, str) for m in data):
+                    logger.info(f"[nsga] Modelos (Redis): {data}")
+                    return data
+    except Exception as e:
+        logger.warning(f"[nsga] Falha ao ler candidatos do Redis: {e}")
+
+    # 2) DB (tabela app_config opcional)
+    try:
+        with engine.connect() as conn:
+            rs = conn.execute(text("SELECT `value` FROM app_config WHERE `key` = 'CANDIDATE_MODELS_LIST' LIMIT 1;"))
+            row = rs.fetchone()
+            if row and row[0]:
+                models = _parse_models_list(row[0])
+                if models:
+                    logger.info(f"[nsga] Modelos (DB): {models}")
+                    return models
+    except Exception:
+        pass
+
+    # 3) .env / environment
+    env_val = os.getenv("CANDIDATE_MODELS_LIST", "")
+    models = _parse_models_list(env_val)
+    if models:
+        logger.info(f"[nsga] Modelos (.env): {models}")
+    else:
+        logger.warning("[nsga] Nenhum modelo encontrado; usando fallback ['ollama/gemma3:4b-it-qat'].")
+        models = ["ollama/gemma3:4b-it-qat"]
+    return models
+
+# ------------------------------------------------------------
+# Esquemas / tabelas necessárias
+# ------------------------------------------------------------
+def ensure_tables():
+    """Cria tabelas necessárias (nsga_weights, query_logs) se não existirem."""
+    ddl_weights = """
+    CREATE TABLE IF NOT EXISTS nsga_weights (
+        model VARCHAR(255) PRIMARY KEY,
+        weight FLOAT NOT NULL,
+        computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB;
     """
-    Identifica dinamicamente a família real do modelo (phi, llama, deepseek, gpt, gemini etc.)
-    mesmo quando servido via Ollama ou outro provedor.
+    # query_logs é a tabela de auditoria / transparência
+    ddl_qlogs = """
+    CREATE TABLE IF NOT EXISTS query_logs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        query TEXT,
+        model VARCHAR(255),
+        latency_s FLOAT,
+        quality FLOAT,
+        cost_per_1k FLOAT,
+        success TINYINT(1) DEFAULT 1,
+        judge_scores JSON NULL
+    ) ENGINE=InnoDB;
     """
-    if not model_name:
-        return "default"
-    model_name = model_name.lower()
-    for fam in MODEL_FAMILIES.keys():
-        if fam in model_name:
-            return fam
-    return "default"
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(ddl_weights))
+            conn.execute(text(ddl_qlogs))
+    except SQLAlchemyError as e:
+        logger.warning(f"[nsga] Falha ao garantir tabelas: {e}")
 
-def _fitness(rewards: list[float]) -> float:
-    return float(np.mean(np.array(rewards, dtype=np.float32)))
+# ------------------------------------------------------------
+# Coleta de dados dos logs recentes
+# ------------------------------------------------------------
+def load_recent_query_logs(minutes_back: int, max_rows: int) -> List[Dict[str, Any]]:
+    """Carrega logs recentes (janela móvel)."""
+    try:
+        with engine.connect() as conn:
+            since = datetime.utcnow() - timedelta(minutes=minutes_back)
+            rs = conn.execute(
+                text(
+                    """
+                    SELECT ts, query, model, latency_s, quality, cost_per_1k, success
+                    FROM query_logs
+                    WHERE ts >= :since
+                    ORDER BY id DESC
+                    LIMIT :lim
+                    """
+                ),
+                {"since": since, "lim": max_rows},
+            )
+            rows = rs.fetchall()
+        out = []
+        for r in rows:
+            m = r._mapping
+            out.append(
+                {
+                    "ts": m["ts"],
+                    "query": m["query"] or "",
+                    "model": m["model"] or "",
+                    "latency_s": float(m["latency_s"]) if m["latency_s"] is not None else None,
+                    "quality": float(m["quality"]) if m["quality"] is not None else None,
+                    "cost_per_1k": float(m["cost_per_1k"]) if m["cost_per_1k"] is not None else None,
+                    "success": bool(m["success"]) if m["success"] is not None else True,
+                }
+            )
+        return out
+    except SQLAlchemyError as e:
+        logger.warning(f"[nsga] Falha ao ler query_logs: {e}")
+        return []
 
-def _mutate(theta: list[float]) -> list[float]:
-    theta = np.array(theta, dtype=np.float32)
-    i = random.randint(0, len(theta) - 1)
-    theta[i] = max(0, min(1, float(theta[i] + np.random.uniform(-0.1, 0.1))))
-    s = float(np.sum(theta))
-    theta = theta / s if s > 0 else np.array([1/3, 1/3, 1/3], dtype=np.float32)
-    return theta.tolist()
+# ------------------------------------------------------------
+# Extração de características das queries
+# ------------------------------------------------------------
+_CODE_HINTS = [
+    "def ", "class ", "import ", "from ", "```", "```python", "SELECT ", "INSERT ", "UPDATE ", "DELETE ",
+    "for(", "while(", ";", "#include", "console.log", "function(", "pub fn", "package "
+]
+_MATH_HINTS = [
+    "∑", "∫", "√", "≈", "≤", "≥", "theorem", "lemma", "proof", "derivative", "integral", "matrix", "vector",
+    "probability", "variance", "covariance", "gradient", "loss", "optimization", "equation"
+]
 
-def _crossover(p1: list[float], p2: list[float]) -> list[float]:
-    a = float(np.random.rand())
-    child = a * np.array(p1, dtype=np.float32) + (1 - a) * np.array(p2, dtype=np.float32)
-    s = float(np.sum(child))
-    child = child / s if s > 0 else np.array([1/3, 1/3, 1/3], dtype=np.float32)
-    return child.tolist()
+def _is_code_like(s: str) -> bool:
+    s2 = s.strip()
+    if "```" in s2:
+        return True
+    s_low = s2.lower()
+    return any(h.lower() in s_low for h in _CODE_HINTS)
 
-def _ensure_db_connection():
-    for attempt in range(1, MAX_DB_RETRIES + 1):
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1;")
-            logger.info("[nsga] Conexão com o banco de dados verificada com sucesso.")
-            return True
-        except Exception as e:
-            logger.warning(f"[nsga] Falha ao conectar ao banco (tentativa {attempt}/{MAX_DB_RETRIES}): {e}")
-            NSGA_DB_ERRORS.inc()
-            time.sleep(RETRY_DELAY)
-    logger.error("[nsga] Banco de dados indisponível após múltiplas tentativas.")
-    return False
+def _is_math_like(s: str) -> bool:
+    s_low = s.lower()
+    return any(h.lower() in s_low for h in _MATH_HINTS) or bool(re.search(r"[0-9]\s*[\+\-\*/\^]\s*[0-9]", s_low))
 
-# ============================================================
-# NÚCLEO DO NSGA-II
-# ============================================================
-def run_nsga(model_name: str = "ollama/deepseek-r1:1.5b"):
-    time.sleep(10)  # breve pausa para evitar sobrecarga
-    start_time = time.time()
-    model_family = detect_model_family(model_name)
-    fam_cfg = MODEL_FAMILIES.get(model_family, MODEL_FAMILIES["default"])
+def _estimate_tokens(s: str) -> int:
+    # aproximação simples baseada em caracteres
+    return max(1, int(len(s) / 4))
 
-    logger.info(
-        f"[nsga] Iniciando ciclo para '{model_name}' | família={model_family} "
-        f"(token_key={fam_cfg['token_key']}, cost*={fam_cfg['cost_target']}, lat*={fam_cfg['latency_target']})"
+def characterize_queries(logs: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Gera estatísticas de perfil de query da janela."""
+    if not logs:
+        return {
+            "avg_tokens": 64.0,
+            "code_frac": 0.1,
+            "math_frac": 0.1,
+            "diversity": 0.5,
+        }
+    toks = []
+    code_count = 0
+    math_count = 0
+
+    # diversidade (Simpson) por trigramas grosseiros
+    grams = {}
+
+    for row in logs:
+        q = (row.get("query") or "").strip()
+        toks.append(_estimate_tokens(q))
+        if _is_code_like(q):
+            code_count += 1
+        if _is_math_like(q):
+            math_count += 1
+
+        # trigrama bem simplificado (apenas letras/números)
+        clean = re.sub(r"[^a-z0-9]+", " ", q.lower())
+        parts = clean.split()
+        for i in range(len(parts) - 2):
+            tri = " ".join(parts[i:i+3])
+            grams[tri] = grams.get(tri, 0) + 1
+
+    avg_tokens = float(np.mean(toks)) if toks else 64.0
+    n = len(logs)
+    code_frac = code_count / n
+    math_frac = math_count / n
+
+    # índice de Simpson (quanto maior, mais concentrado; usaremos 1 - simpson para "diversidade")
+    total = sum(grams.values()) or 1
+    simpson = sum((c / total) ** 2 for c in grams.values())
+    diversity = max(0.0, min(1.0, 1.0 - simpson))
+
+    return {
+        "avg_tokens": float(avg_tokens),
+        "code_frac": float(code_frac),
+        "math_frac": float(math_frac),
+        "diversity": float(diversity),
+    }
+
+# ------------------------------------------------------------
+# Métricas observadas por modelo
+# ------------------------------------------------------------
+def per_model_observations(models: List[str], logs: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    """
+    Calcula métricas por modelo a partir dos logs: média de latência, custo, qualidade, taxa de sucesso.
+    Se um modelo não tiver dados, usa defaults conservadores.
+    """
+    by_model: Dict[str, List[Dict[str, Any]]] = {m: [] for m in models}
+    for r in logs:
+        m = r.get("model") or ""
+        if m in by_model:
+            by_model[m].append(r)
+
+    out: Dict[str, Dict[str, float]] = {}
+    for m in models:
+        rows = by_model[m]
+        if not rows:
+            out[m] = {
+                "latency": 8.0,
+                "cost_per_1k": 0.02 if "ollama" not in m else 0.001,
+                "quality": 5.0,
+                "success_rate": 0.95,
+            }
+            continue
+
+        lat = [r["latency_s"] for r in rows if r.get("latency_s") is not None]
+        qlt = [r["quality"] for r in rows if r.get("quality") is not None]
+        cst = [r["cost_per_1k"] for r in rows if r.get("cost_per_1k") is not None]
+        succ = [1.0 if r.get("success", True) else 0.0 for r in rows]
+
+        out[m] = {
+            "latency": float(np.mean(lat)) if lat else 8.0,
+            "cost_per_1k": float(np.mean(cst)) if cst else (0.02 if "ollama" not in m else 0.001),
+            "quality": float(np.mean(qlt)) if qlt else 5.0,
+            "success_rate": float(np.mean(succ)) if succ else 0.9,
+        }
+
+    return out
+
+# ------------------------------------------------------------
+# Alinhamento modelo ↔ perfil de query
+# ------------------------------------------------------------
+def _parse_model_billion_params(model_name: str) -> float:
+    """
+    Tenta inferir o número de parâmetros em bilhões (ex: ':1.7b', ':4b', ':70b') a partir do nome.
+    Se não encontrado, usa heurística: modelos 'gpt' -> 70b; 'mini' ~ 4b; caso geral 8b.
+    """
+    m = re.search(r":\s*([0-9]+(?:\.[0-9]+)?)\s*b", model_name.lower())
+    if m:
+        return float(m.group(1))
+    lower = model_name.lower()
+    if "mini" in lower:
+        return 4.0
+    if "gpt" in lower:
+        return 70.0
+    if "qwen2.5" in lower or "qwen3" in lower or "gemma3" in lower or "granite" in lower:
+        return 3.0
+    return 8.0
+
+def alignment_score(model: str, profile: Dict[str, float]) -> float:
+    """
+    Score de alinhamento (0..1) do modelo ao perfil de query:
+    - queries com muitos tokens beneficiam modelos maiores;
+    - queries 'code-like' favorecem modelos com >4B;
+    - queries 'math-like' favorecem modelos maiores ainda;
+    - diversidade alta favorece modelos 'robustos' (aumenta baseline).
+    """
+    size_b = _parse_model_billion_params(model)
+    avg_toks = profile["avg_tokens"]
+    code_frac = profile["code_frac"]
+    math_frac = profile["math_frac"]
+    diversity = profile["diversity"]
+
+    # contribuição por tamanho vs tokens
+    # ideal_size_b ~ avg_toks/256 com saturação
+    ideal_size = min(20.0, max(1.0, avg_toks / 256.0))
+    size_factor = 1.0 - min(1.0, abs(size_b - ideal_size) / max(ideal_size, 1.0))
+
+    code_factor = 1.0 if (size_b >= 4.0) else 0.6
+    math_factor = 1.0 if (size_b >= 7.0) else 0.6
+
+    # mistura ponderada
+    score = (
+        0.50 * size_factor +
+        0.30 * (code_frac * code_factor + (1 - code_frac) * 0.9) +
+        0.20 * (math_frac * math_factor + (1 - math_frac) * 0.9)
     )
 
-    # 1) Verifica DB
-    if not _ensure_db_connection():
-        logger.error("[nsga] Abortando ciclo por falta de conexão com o banco.")
-        return
+    # diversidade aumenta baseline (robustez)
+    score = 0.8 * score + 0.2 * diversity
+    return max(0.0, min(1.0, float(score)))
 
-    # 2) Coleta de dados (métricas dinâmicas + fallback banco) — ROBUSTO
-    rewards: list[float] = []
+# ------------------------------------------------------------
+# NSGA-II (variáveis = pesos por modelo que somam 1; 0<=w<=1)
+# Objetivos: minimizar latência e custo; maximizar qualidade e alinhamento.
+# ------------------------------------------------------------
+def normalize_weights(w: List[float]) -> List[float]:
+    w = [max(0.0, min(1.0, x)) for x in w]
+    s = sum(w)
+    if s <= 0:
+        # volta para uniforme
+        return [1.0 / len(w)] * len(w)
+    return [x / s for x in w]
+
+def expected_mix_objectives(
+    weights: List[float],
+    per_model: Dict[str, Dict[str, float]],
+    models: List[str],
+    align: Dict[str, float],
+) -> Tuple[float, float, float, float]:
+    """
+    Dado um vetor de pesos, calcula objetivos esperados do "mix":
+    latency (min), cost (min), quality (max), alignment (max).
+    """
+    w = weights
+    lat = sum(w[i] * per_model[models[i]]["latency"] for i in range(len(models)))
+    cst = sum(w[i] * per_model[models[i]]["cost_per_1k"] for i in range(len(models)))
+    qlt = sum(w[i] * per_model[models[i]]["quality"] for i in range(len(models)))
+    aln = sum(w[i] * align[models[i]] for i in range(len(models)))
+    return lat, cst, qlt, aln
+
+def run_nsga(models: List[str], pm_obs: Dict[str, Dict[str, float]], align: Dict[str, float]) -> Dict[str, float]:
+    n = len(models)
+    if n == 1:
+        return {models[0]: 1.0}
+
+    # DEAP setup
     try:
-        live_metrics = {}
-        try:
-            from .metrics_collector import get_snapshot
-            live_metrics = get_snapshot() or {}
-        except Exception as e:
-            logger.warning(f"[nsga] metrics_collector indisponível: {e}")
-
-        if live_metrics:
-            logger.info(f"[nsga] Coletando métricas dinâmicas de {len(live_metrics)} modelos...")
-            for _, m in live_metrics.items():
-                # qualidade alta e custos/latência baixos => reward maior
-                q = float(m.get("quality", 0.0))
-                l = float(m.get("latency", 0.0))
-                c = float(m.get("cost", 0.0))
-                reward = q / (1.0 + l + (c * 10.0))
-                rewards.append(reward)
-        else:
-            logger.warning("[nsga] Nenhuma métrica dinâmica disponível. Tentando histórico no banco...")
-            history = load_history(limit=1000) or []
-            rewards = [float(h["reward"]) for h in history if h and h.get("reward") is not None]
-
-    except Exception as e:
-        NSGA_DB_ERRORS.inc()
-        logger.error(f"[nsga] Erro ao coletar métricas ou histórico: {e}")
-        rewards = []
-
-    # 3) Validação de dados
-    if not rewards or len(rewards) < 10:
-        logger.warning(f"[nsga] Dados insuficientes para otimização ({len(rewards)} registros do modelo {model_name}). Encerrando ciclo.")
-        return
-
-    # 4) Inicialização da população
-    population = [np.random.dirichlet(np.ones(3)).tolist() for _ in range(POP_SIZE)]
-    best_theta = fam_cfg["default_weights"]
-    best_fit = -float("inf")
-
-    # 5) Loop evolutivo
-    for gen in range(MAX_GEN):
-        fitness_scores = []
-        for th in population:
-            # proxy simples de utilidade ponderada
-            sim_rewards = [r * (th[0] - th[1]*0.2 - th[2]*0.1) for r in rewards]
-            fitness_scores.append(_fitness(sim_rewards))
-
-        mean_fit = float(np.mean(fitness_scores))
-        best_idx = int(np.argmax(fitness_scores))
-        if fitness_scores[best_idx] > best_fit + EPS:
-            best_fit = fitness_scores[best_idx]
-            best_theta = population[best_idx]
-
-        logger.info(f"[nsga] Geração {gen+1}/{MAX_GEN} | Fit médio={mean_fit:.3f} | Melhor={best_fit:.3f}")
-        NSGA_GENERATIONS.inc()
-        NSGA_LAST_FITNESS.set(mean_fit)
-
-        # reprodução
-        new_pop = []
-        for _ in range(POP_SIZE // 2):
-            p1, p2 = random.choices(population, k=2)
-            c1, c2 = _crossover(p1, p2), _crossover(p2, p1)
-            if random.random() < MUT_RATE:
-                c1 = _mutate(c1)
-            if random.random() < MUT_RATE:
-                c2 = _mutate(c2)
-            new_pop.extend([c1, c2])
-        population = new_pop
-
-    # 6) Persistência
+        creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0, +1.0, +1.0))
+    except Exception:
+        pass
     try:
-        insert_weights(
-            best_theta, best_fit, MAX_GEN,
-            model_name=model_name,
-            model_family=model_family,
-            token_key=fam_cfg["token_key"]
-        )
-        logger.info(f"[nsga] Pesos persistidos para {model_name}({model_family}) | θ={best_theta} | Fitness={best_fit:.4f}")
+        creator.create("Individual", list, fitness=creator.FitnessMulti)
+    except Exception:
+        pass
+
+    toolbox = base.Toolbox()
+    toolbox.register("attr_w", random.random)
+    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_w, n=n)
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+    def evaluate(individual):
+        w = normalize_weights(individual)
+        lat, cst, qlt, aln = expected_mix_objectives(w, pm_obs, models, align)
+        # proxy de "fitness médio" para debug
+        NSGA_POP_FITNESS_AVG.set((max(0.0, 10.0 - lat) + max(0.0, 10.0 - cst) + qlt + 10.0 * aln) / 4.0)
+        return lat, cst, qlt, aln
+
+    toolbox.register("evaluate", evaluate)
+    toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=0.0, up=1.0, eta=20.0)
+    toolbox.register("mutate", tools.mutPolynomialBounded, low=0.0, up=1.0, eta=20.0, indpb=1.0/n)
+    toolbox.register("select", tools.selNSGA2)
+
+    pop = toolbox.population(n=40)
+    hof = tools.ParetoFront()
+    algorithms.eaMuPlusLambda(
+        population=pop,
+        toolbox=toolbox,
+        mu=40,
+        lambda_=40,
+        cxpb=0.9,
+        mutpb=0.1,
+        ngen=30,
+        stats=None,
+        halloffame=hof,
+        verbose=False,
+    )
+
+    # Escolha do ponto do Pareto: "melhor comprometido" via escalarização simples
+    best = None
+    best_score = -1e9
+    for ind in hof:
+        w = normalize_weights(list(ind))
+        lat, cst, qlt, aln = expected_mix_objectives(w, pm_obs, models, align)
+        # score escalar (ajuste os pesos conforme sua preferência)
+        score = -lat - 0.5 * cst + 0.8 * qlt + 5.0 * aln
+        if score > best_score:
+            best_score = score
+            best = (w, (lat, cst, qlt, aln))
+
+    if best is None:
+        # fallback uniforme
+        return {m: 1.0 / n for m in models}
+
+    w, (lat, cst, qlt, aln) = best
+    NSGA_BEST_LATENCY.set(lat)
+    NSGA_BEST_COST.set(cst)
+    NSGA_BEST_QUALITY.set(qlt)
+    NSGA_BEST_ALIGNMENT.set(aln)
+
+    return {models[i]: float(w[i]) for i in range(n)}
+
+# ------------------------------------------------------------
+# Persistência de pesos (DB/Redis)
+# ------------------------------------------------------------
+def persist_weights(weights: Dict[str, float]):
+    # DB
+    try:
+        with engine.begin() as conn:
+            for model, w in weights.items():
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO nsga_weights (model, weight, computed_at)
+                        VALUES (:m, :w, NOW())
+                        ON DUPLICATE KEY UPDATE
+                            weight = :w,
+                            computed_at = NOW()
+                        """
+                    ),
+                    {"m": model, "w": w},
+                )
+    except SQLAlchemyError as e:
+        logger.warning(f"[nsga] Falha ao gravar nsga_weights: {e}")
+
+    # Redis
+    try:
+        r = get_redis()
+        if r:
+            r.set(REDIS_KEY_WEIGHTS, json.dumps(weights))
     except Exception as e:
-        NSGA_DB_ERRORS.inc()
-        logger.error(f"[nsga] Falha ao gravar pesos otimizados: {e}")
+        logger.warning(f"[nsga] Falha ao publicar pesos no Redis: {e}")
 
-    # 7) Métricas de execução
-    elapsed = time.time() - start_time
-    NSGA_LAST_UPDATE.set(elapsed)
-    NSGA_EXECUTION_TIME.observe(elapsed)
-    logger.info(f"[nsga] Atualização concluída em {elapsed:.2f}s ✅")
+    # Prometheus
+    for m, w in weights.items():
+        WEIGHT_BY_MODEL.labels(model=m).set(w)
 
-# ============================================================
-# LOOP PRINCIPAL
-# ============================================================
-if __name__ == "__main__":
-    logger.info("[nsga] Servidor Prometheus na porta 9999...")
-    start_http_server(9999)
+# ------------------------------------------------------------
+# Loop principal
+# ------------------------------------------------------------
+def one_iteration():
+    try:
+        ensure_tables()
+        models = load_candidate_models()
+        if not models:
+            logger.warning("[nsga] Sem modelos; interrompendo iteração.")
+            return
 
+        logs = load_recent_query_logs(QUERY_LOG_LOOKBACK_MINUTES, QUERY_LOG_MAX_ROWS)
+        profile = characterize_queries(logs)
+        pm_obs = per_model_observations(models, logs)
+        align = {m: alignment_score(m, profile) for m in models}
+
+        # expõe métricas observadas por modelo
+        for m in models:
+            MODEL_OBS_LAT.labels(model=m).set(pm_obs[m]["latency"])
+            MODEL_OBS_COST.labels(model=m).set(pm_obs[m]["cost_per_1k"])
+            MODEL_OBS_QUAL.labels(model=m).set(pm_obs[m]["quality"])
+            MODEL_OBS_SR.labels(model=m).set(pm_obs[m]["success_rate"])
+            MODEL_ALIGNMENT.labels(model=m).set(align[m])
+
+        weights = run_nsga(models, pm_obs, align)
+        persist_weights(weights)
+
+        NSGA_RUNS.inc()
+        NSGA_LAST_RUN_TS.set(time.time())
+        logger.info(f"[nsga] Pesos atualizados: {weights}")
+    except Exception as e:
+        logger.exception(f"[nsga] Falha na iteração NSGA: {e}")
+
+def nsga_loop():
+    # primeira execução imediata
+    one_iteration()
+    # atualizações periódicas
     while True:
-        try:
-            # Execute para múltiplos “model identifiers” (provedor ≠ família)
-            for model in [
-                "ollama/deepseek-r1:8b",
-                "ollama/phi4",
-                "ollama/llama3:8b",
-                "openai/gpt-5-nano",
-                "gemini/gemini-2.0-flash",
-            ]:
-                run_nsga(model)
-                time.sleep(5)
-        except Exception as e:
-            logger.exception(f"[nsga] Erro inesperado no ciclo principal: {e}")
-        logger.info(f"[nsga] Aguardando {SLEEP_BETWEEN_RUNS/3600:.1f}h para próxima execução...")
-        time.sleep(SLEEP_BETWEEN_RUNS)
+        time.sleep(UPDATE_INTERVAL_S)
+        one_iteration()
+
+# ------------------------------------------------------------
+# API (FastAPI) para /metrics e /health
+# ------------------------------------------------------------
+app = FastAPI(title="NSGA Weights Updater")
+
+@app.get("/metrics")
+def metrics():
+    return PlainTextResponse(generate_latest(registry).decode("utf-8"))
+
+@app.get("/health")
+def health():
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    r = get_redis()
+    redis_ok = r is not None
+
+    return JSONResponse(
+        {
+            "status": "ok" if (db_ok and redis_ok) else "degraded",
+            "db": db_ok,
+            "redis": redis_ok,
+            "last_run_epoch": NSGA_LAST_RUN_TS._value.get() if hasattr(NSGA_LAST_RUN_TS, "_value") else None,
+        }
+    )
+
+# ------------------------------------------------------------
+# Bootstrap
+# ------------------------------------------------------------
+if __name__ == "__main__":
+    # roda o loop de otimização num thread separado do servidor HTTP
+    t = threading.Thread(target=nsga_loop, daemon=True)
+    t.start()
+
+    # inicia servidor HTTP (porta 9999 dentro do container conforme docker-compose)
+    uvicorn.run(app, host="0.0.0.0", port=9999, log_level="info")
