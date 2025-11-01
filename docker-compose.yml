@@ -36,6 +36,7 @@ services:
       - REDIS_PORT=6379
       # Diretório isolado para métricas multiprocess
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom/api
+      - CHROMA_TELEMETRY_ENABLED= "false"
     volumes:
       - ./state:/app/state
       - ./data:/app/data
@@ -85,9 +86,11 @@ services:
       - OLLAMA_HOST=0.0.0.0:11434
       - OLLAMA_KEEP_ALIVE=600
       - OLLAMA_NUM_PARALLEL=2
-      - OLLAMA_METRICS=true  
+      - OLLAMA_METRICS=true
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/keys/vertex_api.json.json  
     volumes:
       - ./ollama_data:/root/.ollama
+      - ./app/data/vertex_api.json:/app/keys/vertex_api.json.json:ro
     gpus: all
     depends_on:
       - mariadb

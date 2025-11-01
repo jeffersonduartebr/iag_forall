@@ -146,8 +146,28 @@ async def route_and_answer(
     """
     start_time = time.time()
 
+    # Sanitiza entradas (evita erro 'NoneType.strip')
+    if query is None or not isinstance(query, str) or query.strip() == "":
+        logger.error("[router_core] Erro: parâmetro 'query' ausente ou inválido.")
+        return {
+            "model": "router_error",
+            "answer": "[Erro] Nenhuma consulta fornecida para roteamento.",
+            "latency_s": 0.0,
+            "cost_per_1k": 0.0,
+            "quality": 0.0,
+            "metadata": {"error": "invalid_query"},
+        }
+
+    system_prompt = (system_prompt or "").strip()
+    query = query.strip()
+
     # 0️⃣ Verifica cache semântico
-    cached = await check_cache(query)
+    try:
+        cached = await check_cache(query)
+    except Exception as e:
+        logger.warning(f"[router_core] Falha ao consultar cache: {e}")
+        cached = None
+
     if cached:
         logger.info(
             f"[router_core] ✅ Cache HIT — similaridade={cached['similarity']:.2f}. "
@@ -168,6 +188,7 @@ async def route_and_answer(
         if isinstance(m, str) and not any(m.startswith(prefix) for prefix in BLOCKED_PREFIXES)
     ]
     if not valid_models:
+        logger.error("[router_core] Nenhum modelo válido disponível para geração.")
         raise RuntimeError("Nenhum modelo válido disponível para geração.")
 
     # 2️⃣ Seleção via Bandit/NSGA-II
@@ -176,10 +197,13 @@ async def route_and_answer(
 
     # 3️⃣ Garante modelo local (Ollama)
     if chosen.startswith("ollama/"):
-        await asyncio.to_thread(_ensure_ollama_model, chosen.replace("ollama/", ""))
+        try:
+            await asyncio.to_thread(_ensure_ollama_model, chosen.replace("ollama/", ""))
+        except Exception as e:
+            logger.warning(f"[router_core] Falha ao verificar/baixar modelo '{chosen}': {e}")
 
-    # 4️⃣ Monta prompt final
-    prompt = f"{system_prompt.strip()}\n\nUsuário: {query.strip()}".strip()
+    # 4️⃣ Monta prompt final de forma segura
+    prompt = f"{system_prompt}\n\nUsuário: {query}".strip()
 
     # 5️⃣ Chama o modelo LLM
     try:
@@ -222,24 +246,17 @@ async def route_and_answer(
     # ============================================================
     # 📊 Métricas Prometheus
     # ============================================================
-    ROUTER_MODEL_COST.labels(model=chosen).inc(result["cost_per_1k"])
-    ROUTER_QUALITY_AVG.labels(model=chosen).set(result["quality"])
-    ROUTER_COST_PER_QUERY.set(result["cost_per_1k"])
-    if "ollama" in chosen:
-        ROUTER_COST_SAVINGS.inc(0.12 - result["cost_per_1k"])
-        ROUTER_LOCAL_USAGE_RATIO.set(1.0)
-    else:
-        ROUTER_LOCAL_USAGE_RATIO.set(0.0)
-
     try:
-        update_model_metrics(
-            model_name=chosen,
-            latency=result["latency_s"],
-            quality=result["quality"],
-            cost=result["cost_per_1k"]
-        )
+        ROUTER_MODEL_COST.labels(model=chosen).inc(result["cost_per_1k"])
+        ROUTER_QUALITY_AVG.labels(model=chosen).set(result["quality"])
+        ROUTER_COST_PER_QUERY.set(result["cost_per_1k"])
+        if "ollama" in chosen:
+            ROUTER_COST_SAVINGS.inc(0.12 - result["cost_per_1k"])
+            ROUTER_LOCAL_USAGE_RATIO.set(1.0)
+        else:
+            ROUTER_LOCAL_USAGE_RATIO.set(0.0)
     except Exception as e:
-        logger.warning(f"[router_core] Falha ao atualizar métricas dinâmicas: {e}")
+        logger.warning(f"[router_core] Falha ao atualizar métricas Prometheus: {e}")
 
     # ============================================================
     # 🧮 EMA com persistência e logging temporal
