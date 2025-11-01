@@ -13,6 +13,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
+# =========================================================
+# 📁 Copia os arquivos da aplicação
+# =========================================================
+COPY . /app
+
 # Instala dependências básicas
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -28,14 +33,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt /app/requirements.txt
 
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r /app/requirements.txt && \
     pip install --no-cache-dir gunicorn && \
     pip install --no-cache-dir python-dotenv
-
-# =========================================================
-# 📁 Copia os arquivos da aplicação
-# =========================================================
-COPY . /app
 
 # =========================================================
 # 🧩 Configuração de ambiente
