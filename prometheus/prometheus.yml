@@ -3,9 +3,9 @@
 # ============================================================
 
 global:
-  scrape_interval: 60s       # tempo entre coletas
-  scrape_timeout: 15s        # tempo máximo de espera por resposta
-  evaluation_interval: 15s   # tempo para reavaliação de regras/alertas
+  scrape_interval: 30s
+  scrape_timeout: 15s
+  evaluation_interval: 15s
   external_labels:
     monitor: 'llm-router-stack'
 
@@ -15,7 +15,7 @@ global:
 
 scrape_configs:
   # ---------------------------
-  # Coleta das métricas da API principal
+  # 🧠 API Principal — FastAPI / Uvicorn
   # ---------------------------
   - job_name: 'llm_router_api'
     metrics_path: /metrics
@@ -26,7 +26,7 @@ scrape_configs:
           env: 'production'
 
   # ---------------------------
-  # Coleta das métricas do NSGA Updater
+  # 🧮 NSGA-II Updater
   # ---------------------------
   - job_name: 'nsga_updater'
     metrics_path: /metrics
@@ -37,7 +37,18 @@ scrape_configs:
           env: 'production'
 
   # ---------------------------
-  # Coleta de métricas do próprio Prometheus (auto-monitoramento)
+  # 🎛 Painel Dash de Controle
+  # ---------------------------
+  - job_name: 'dash_control_panel'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['dash_control_panel:8050']
+        labels:
+          service: 'dash_control_panel'
+          env: 'production'
+
+  # ---------------------------
+  # 📈 Prometheus (auto-monitoramento)
   # ---------------------------
   - job_name: 'prometheus'
     scrape_interval: 60s
@@ -49,7 +60,7 @@ scrape_configs:
           env: 'internal'
 
   # ---------------------------
-  # Coleta opcional do Ollama
+  # 🧩 Ollama (coleta opcional, se modificado para expor métricas)
   # ---------------------------
   - job_name: 'ollama'
     metrics_path: /metrics
@@ -58,14 +69,26 @@ scrape_configs:
         labels:
           service: 'ollama'
           env: 'production'
+    # Se Ollama não expõe /metrics, comentar este bloco
 
   # ---------------------------
-  # Coleta do Redis (se exposto)
+  # 🧱 Redis Exporter (coleta real de métricas Redis)
   # ---------------------------
-  - job_name: 'redis'
+  - job_name: 'redis_exporter'
     metrics_path: /metrics
     static_configs:
-      - targets: ['redis:6379']
+      - targets: ['redis_exporter:9121']
         labels:
           service: 'redis'
+          env: 'production'
+
+  # ---------------------------
+  # 🗄️ MariaDB Exporter (opcional)
+  # ---------------------------
+  - job_name: 'mariadb_exporter'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['mariadb_exporter:9104']
+        labels:
+          service: 'mariadb'
           env: 'production'
