@@ -6,7 +6,6 @@ FROM python:3.11-slim AS base
 LABEL maintainer="Jefferson Duarte <jefferson.igorbr@gmail.com>"
 LABEL description="NSGA-II Optimizer for LLM Router (Prometheus + Redis + MariaDB)"
 
-# Evita prompts interativos e ativa logs imediatos
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -16,7 +15,9 @@ WORKDIR /app
 # =========================================================
 # 📁 Copia os arquivos necessários da aplicação
 # =========================================================
-COPY . /app
+COPY ./app /app/app
+COPY ./app/requirements.txt /app/requirements.txt
+
 # =========================================================
 # 📦 Dependências básicas
 # =========================================================
@@ -25,17 +26,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmariadb-dev \
     pkg-config \
     curl \
+    vim \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================================================
 # 🧩 Instala dependências Python
 # =========================================================
-COPY requirements.txt /app/requirements.txt
-
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.txt && \
     pip install --no-cache-dir gunicorn python-dotenv
-
 
 # =========================================================
 # ⚙️ Variáveis de ambiente padrão
@@ -51,7 +50,7 @@ ENV DB_NAME=routerdb
 ENV DEAP_DEBUG=false
 
 # =========================================================
-# 🔧 Prestart script — garante que o banco e Redis estejam prontos
+# 🔧 Script de inicialização
 # =========================================================
 RUN echo '#!/bin/bash\n\
 echo "⏳ Aguardando Banco e Redis..."\n\
@@ -61,14 +60,7 @@ echo "✅ Serviços disponíveis, inicializando NSGA-II..."\n\
 python /app/app/db_manager.py || echo "⚠️ Banco já sincronizado ou inicialização ignorada."\n\
 exec "$@"' > /app/prestart_nsga.sh && chmod +x /app/prestart_nsga.sh
 
-# =========================================================
-# 🧩 Healthcheck Prometheus
-# =========================================================
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -f http://localhost:9999/metrics || exit 1
 
-# =========================================================
-# 🧩 Entrypoint
-# =========================================================
 ENTRYPOINT ["/app/prestart_nsga.sh"]
-CMD ["python", "app/nsga_weights_updater.py"]
-# =========================================================
+CMD ["python", "app/app/nsga_weights_updater.py"]

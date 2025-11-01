@@ -1,0 +1,30 @@
+# =========================================================
+# 📈 Dockerfile.correlation — Serviço de análise de correlação NSGA-II
+# =========================================================
+FROM python:3.11-slim
+
+LABEL maintainer="Jefferson Duarte <jefferson.igorbr@gmail.com>"
+LABEL description="Correlation metrics exporter for NSGA-II optimization stack"
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app
+
+COPY ./app /app/app
+COPY ./app/requirements.txt /app/requirements.txt
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libmariadb-dev pkg-config curl vim && \
+    pip install --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV DB_HOST=mariadb
+ENV DB_USER=router_user
+ENV DB_PASS=router_pass
+ENV DB_NAME=routerdb
+ENV REDIS_HOST=redis
+ENV REDIS_PORT=6379
+ENV REDIS_PASSWORD=SenhaForte
+ENV PROM_PORT=9105
+
+CMD ["python", "app/app/correlation_metrics.py"]

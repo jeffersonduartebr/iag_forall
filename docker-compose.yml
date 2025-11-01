@@ -1,4 +1,3 @@
-
 services:
   # =========================================================
   # ⚙️ Inicialização do banco e Redis (migração automática)
@@ -86,6 +85,55 @@ services:
       - ai_net
 
   # =========================================================
+  # 📈 Serviço de correlação de métricas NSGA-II
+  # =========================================================
+  correlation_metrics:
+    build:
+      context: .
+      dockerfile: app/Dockerfile.correlation
+    container_name: correlation_metrics
+    depends_on:
+      - mariadb
+      - redis
+    environment:
+      - DB_HOST=mariadb
+      - DB_USER=router_user
+      - DB_PASS=router_pass
+      - DB_NAME=routerdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=SenhaForte
+      - PROM_PORT=9105
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+  # =========================================================
+  # 🎛 Painel Dash de Controle
+  # =========================================================
+  dash-control:
+    build:
+      context: .
+      dockerfile: app/Dockerfile.dash
+    container_name: dash_control_panel
+    command: python app/app/dash_control_panel.py
+    ports:
+      - "8050:8050"
+    depends_on:
+      db_init:
+        condition: service_completed_successfully
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_HOST=redis
+      - DB_HOST=mariadb
+      - DB_USER=router_user
+      - DB_PASS=router_pass
+      - DB_NAME=routerdb
+    networks:
+      - ai_net
+
+  # =========================================================
   # 🧩 Servidor Ollama (modelos locais)
   # =========================================================
   ollama:
@@ -150,7 +198,7 @@ services:
       - ai_net
 
   # =========================================================
-  # 🪵 Loki e Promtail (logs estruturados)
+  # 🪵 Loki e Promtail
   # =========================================================
   loki:
     image: grafana/loki:2.9.2
@@ -243,29 +291,8 @@ services:
       - ai_net
 
   # =========================================================
-  # 🎛 Painel Dash de Controle
+  # 📡 Exporters (Redis / MariaDB)
   # =========================================================
-  dash-control:
-    build:
-      context: ./app
-      dockerfile: Dockerfile.dash
-    command: python app/dash_control_panel.py
-    ports:
-      - "8050:8050"
-    depends_on:
-      db_init:
-        condition: service_completed_successfully
-    volumes:
-      - .:/app
-    environment:
-      - REDIS_HOST=redis
-      - DB_HOST=mariadb
-      - DB_USER=router_user
-      - DB_PASS=router_pass
-      - DB_NAME=routerdb
-    networks:
-      - ai_net
-
   redis_exporter:
     image: oliver006/redis_exporter
     container_name: redis_exporter
@@ -288,30 +315,6 @@ services:
       - "9104:9104"
     networks:
       - ai_net
-
-  correlation_metrics:
-    build:
-      context: .
-      dockerfile: app/Dockerfile
-    container_name: correlation_metrics
-    command: ["python", "app/correlation_metrics.py"]
-    depends_on:
-      - mariadb
-      - redis
-    environment:
-      - DB_HOST=mariadb
-      - DB_USER=router_user
-      - DB_PASS=router_pass
-      - DB_NAME=routerdb
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=SenhaForte
-      - PROM_PORT=9105
-    networks:
-      - ai_net
-    restart: unless-stopped
-
-
 
 # =========================================================
 # 📦 Volumes persistentes

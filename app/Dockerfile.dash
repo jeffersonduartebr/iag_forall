@@ -1,66 +1,55 @@
 # =========================================================
-# 🎛 Dockerfile.dash — Painel de Controle Dash + Redis + MariaDB
+# 🎛 Dockerfile.dash — Painel de Controle Dash
 # =========================================================
-
 FROM python:3.11-slim
 
-LABEL maintainer="Jefferson Igor Duarte Silva <jefferson.duarte@academico.ifrn.edu.br>"
-LABEL description="Painel Dash de Controle do Roteador de LLMs"
+LABEL maintainer="Jefferson Duarte <jefferson.igorbr@gmail.com>"
+LABEL description="Painel de controle interativo do LLM Router"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
 
 # ---------------------------------------------------------
-# 🧰 Dependências básicas
+# 🧰 Dependências de sistema
 # ---------------------------------------------------------
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libmariadb-dev \
+    pkg-config \
     curl \
     netcat-traditional \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------
-# 📂 Diretório de trabalho
+# 📦 Copia arquivos da aplicação
 # ---------------------------------------------------------
-WORKDIR /app
+COPY ./app /app/app
+COPY ./app/requirements.txt /app/requirements.txt
+COPY ./app/prestart_dash.sh /app/prestart_dash.sh
 
-# ---------------------------------------------------------
-# 📦 Copia arquivos da aplicação (com base no layout real)
-# ---------------------------------------------------------
-COPY . /app
-
-# ---------------------------------------------------------
-# 🔧 Instalação das dependências Python
-# ---------------------------------------------------------
-RUN pip install --upgrade pip setuptools wheel \
-    && pip install -r /app/requirements.txt \
-    && pip install dash==2.17.1 dash-bootstrap-components==1.6.0 \
-    && pip install redis pymysql sqlalchemy pandas
-
-# ---------------------------------------------------------
-# ⚙️ Variáveis de ambiente padrão
-# ---------------------------------------------------------
-ENV PYTHONUNBUFFERED=1 \
-    REDIS_HOST=redis \
-    REDIS_PORT=6379 \
-    REDIS_PASS=SenhaForte \
-    DB_HOST=mariadb \
-    DB_USER=router_user \
-    DB_PASS=router_pass \
-    DB_NAME=routerdb \
-    DASH_DEBUG_MODE=False \
-    PROMETHEUS_MULTIPROC_DIR=/tmp/prom/dash
-
-# ---------------------------------------------------------
-# 🚦 Script de inicialização
-# ---------------------------------------------------------
-COPY prestart_dash.sh /app/prestart_dash.sh
 RUN chmod +x /app/prestart_dash.sh
 
 # ---------------------------------------------------------
-# 🚀 Comando principal
+# 🧩 Instala dependências Python
 # ---------------------------------------------------------
-ENTRYPOINT ["/app/prestart_dash.sh"]
-CMD ["python", "dash_control_panel.py"]
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -r /app/requirements.txt && \
+    pip install dash==2.17.1 dash-bootstrap-components==1.6.0 && \
+    pip install gunicorn python-dotenv
 
 # ---------------------------------------------------------
-# 🔓 Porta padrão
+# ⚙️ Variáveis padrão
 # ---------------------------------------------------------
-EXPOSE 8050
+ENV REDIS_HOST=redis
+ENV DB_HOST=mariadb
+ENV DB_USER=router_user
+ENV DB_PASS=router_pass
+ENV DB_NAME=routerdb
+ENV PROM_PORT=8050
+
+# ---------------------------------------------------------
+# 🚀 Inicialização (aguarda dependências)
+# ---------------------------------------------------------
+ENTRYPOINT ["/app/prestart_dash.sh"]
+CMD ["python", "app/app/dash_control_panel.py"]
