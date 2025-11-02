@@ -12,8 +12,11 @@ WORKDIR /app
 COPY ./app /app/app
 COPY ./app/requirements.correlation.txt /app/requirements.correlation.txt
 
+# Troca o repositório para o CDN oficial antes de fazer o update
+RUN sed -i 's/deb.debian.org/cdn-aws.deb.debian.org/g' /etc/apt/sources.list.d/debian.sources
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libmariadb-dev pkg-config curl vim && \
+    libmariadb-dev pkg-config curl vim && \
     pip install --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.correlation.txt && \
     rm -rf /var/lib/apt/lists/*

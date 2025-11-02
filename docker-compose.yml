@@ -12,7 +12,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["python", "app/db_manager.py"]
+    command: ["python", "app/app/db_manager.py"]
     restart: "no"
     env_file:
       - .env
@@ -66,7 +66,9 @@ services:
       dockerfile: app/Dockerfile.nsga
     container_name: nsga_weights_updater
     depends_on:
-      db_init:
+      - redis
+      - mariadb
+      - db_init:
         condition: service_completed_successfully
     ports:
       - "9999:9999"
@@ -77,6 +79,7 @@ services:
       - DB_NAME=routerdb
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=SenhaForte
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom/nsga_updater
     volumes:
       - ./tmp_prom/nsga_updater:/tmp/prom/nsga_updater
@@ -111,27 +114,27 @@ services:
   # =========================================================
   # 🎛 Painel Dash de Controle
   # =========================================================
-  dash-control:
-    build:
-      context: .
-      dockerfile: app/Dockerfile.dash
-    container_name: dash_control_panel
-    command: python app/app/dash_control_panel.py
-    ports:
-      - "8050:8050"
-    depends_on:
-      db_init:
-        condition: service_completed_successfully
-    volumes:
-      - .:/app
-    environment:
-      - REDIS_HOST=redis
-      - DB_HOST=mariadb
-      - DB_USER=router_user
-      - DB_PASS=router_pass
-      - DB_NAME=routerdb
-    networks:
-      - ai_net
+  # dash-control:
+  #   build:
+  #     context: .
+  #     dockerfile: app/Dockerfile.dash
+  #   container_name: dash_control_panel
+  #   command: python app/app/dash_control_panel.py
+  #   ports:
+  #     - "8050:8050"
+  #   depends_on:
+  #     db_init:
+  #       condition: service_completed_successfully
+  #   volumes:
+  #     - .:/app
+  #   environment:
+  #     - REDIS_HOST=redis
+  #     - DB_HOST=mariadb
+  #     - DB_USER=router_user
+  #     - DB_PASS=router_pass
+  #     - DB_NAME=routerdb
+  #   networks:
+  #     - ai_net
 
   # =========================================================
   # 🧩 Servidor Ollama (modelos locais)
@@ -322,19 +325,19 @@ services:
       - "9104:9104"
     networks:
       - ai_net
-  ollama_exporter:
-    image: ghcr.io/mprezzma/ollama-exporter:latest
-    container_name: ollama_exporter
-    restart: unless-stopped
-    ports:
-      - "9100:9100"  # Porta padrão do exporter
-    environment:
-      # Diz ao exporter onde encontrar o seu Ollama
-      - OLLAMA_URL=http://ollama:11434 
-    networks:
-      - ai_net
-    depends_on:
-      - ollama
+  # ollama_exporter:
+  #   image: ghcr.io/mprezzma/ollama-exporter:latest
+  #   container_name: ollama_exporter
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9100:9100"  # Porta padrão do exporter
+  #   environment:
+  #     # Diz ao exporter onde encontrar o seu Ollama
+  #     - OLLAMA_URL=http://ollama:11434 
+  #   networks:
+  #     - ai_net
+  #   depends_on:
+  #     - ollama
 
 # =========================================================
 # 📦 Volumes persistentes

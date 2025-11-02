@@ -56,6 +56,7 @@ redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASS, deco
 # ============================================================
 
 TABLES_DDL = {
+    
     # Histórico das médias exponenciais
     "ema_history": """
         CREATE TABLE IF NOT EXISTS ema_history (
@@ -150,6 +151,21 @@ TABLES_DDL = {
             score_after FLOAT,
             event_type VARCHAR(50)
         );
+    """,
+    # Métricas detalhadas por modelo e geração
+    "model_metrics": """
+        CREATE TABLE IF NOT EXISTS model_metrics (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            model VARCHAR(255) NOT NULL,
+            latency_ms FLOAT DEFAULT 0,
+            cost_usd FLOAT DEFAULT 0,
+            quality_score FLOAT DEFAULT 0,
+            fitness FLOAT DEFAULT 0,
+            generation INT DEFAULT 0,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP 
+                ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_model_timestamp (model, timestamp)
+        );        
     """
 }
 

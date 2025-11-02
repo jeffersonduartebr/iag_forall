@@ -15,6 +15,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Any, Optional
+from .settings_dynamic import settings
 
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse, JSONResponse
@@ -23,31 +24,32 @@ import uvicorn
 import numpy as np
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+import redis
 
-try:
-    # CORRIGIDO: Importa o settings central
-    from app.settings_dynamic import settings
-    # use o util já existente no projeto, se disponível
-    from app.utils.redis_client import get_redis
-except Exception:
-    # Fallback de import (caso o path esteja diferente)
-    import sys
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from app.settings_dynamic import settings
+# try:
+#     # CORRIGIDO: Importa o settings central
+#     from app.settings_dynamic import settings
+#     # use o util já existente no projeto, se disponível
+#     from app.utils.redis_client import get_redis
+# except Exception:
+#     # Fallback de import (caso o path esteja diferente)
+#     import sys
+#     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+#     from app.settings_dynamic import settings
     
     # fallback minimalista
-    import redis
 
-    def get_redis(max_wait_s: int = 0):
-        host = os.getenv("REDIS_HOST", "redis")
-        port = int(os.getenv("REDIS_PORT", "6379"))
-        pwd = os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS") or "SenhaForte"
-        try:
-            r = redis.Redis(host=host, port=port, password=pwd, db=int(os.getenv("REDIS_DB", "0")))
-            r.ping()
-            return r
-        except Exception:
-            return None
+
+def get_redis(max_wait_s: int = 0):
+    host = os.getenv("REDIS_HOST", "redis")
+    port = int(os.getenv("REDIS_PORT", "6379"))
+    pwd = os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS") or "SenhaForte"
+    try:
+        r = redis.Redis(host=host, port=port, password=pwd, db=int(os.getenv("REDIS_DB", "0")))
+        r.ping()
+        return r
+    except Exception:
+        return None
 
 from prometheus_client import (
     CollectorRegistry,
