@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 main.py
 ----------------------------------------------------
@@ -8,6 +9,7 @@ Inclui:
 - Warmup assíncrono com preload de modelos Ollama e base RAG.
 - Roteamento híbrido (Bandit + NSGA-II + RAG + Juízes).
 - Administração dinâmica via Redis + MariaDB.
+- Persistência de logs (query_log) com recompensa.
 """
 
 import json
@@ -73,13 +75,13 @@ async def on_startup():
         try:
             logger.info("[warmup] Iniciando rotina de inicialização...")
 
-            # Espera Redis ficar pronto (não falha a inicialização)
+            # Espera Redis ficar pronto
             r = get_redis(max_wait_s=45)
             if r is None:
-                logger.warning("[warmup] Redis indisponível — seguindo sem cache por enquanto.")
+                logger.warning("[warmup] Redis indisponível — seguindo sem cache.")
 
-            # 1️⃣ Garante modelos disponíveis no Ollama
-            ollama_models_from_settings = [
+            # Garante modelos Ollama
+            ollama_models = [
                 m.replace("ollama/", "") for m in settings.CANDIDATE_MODELS_LIST
                 if isinstance(m, str) and m.startswith("ollama/")
             ]
@@ -89,30 +91,25 @@ async def on_startup():
                     essentials.append(j.replace("ollama/", ""))
                 elif isinstance(j, str) and (":" in j and "/" not in j):
                     essentials.append(j)
+            all_models = list({*ollama_models, *essentials})
 
-            all_ollama_models = list({*ollama_models_from_settings, *essentials})
-            logger.info(f"[warmup] Garantindo modelos Ollama: {all_ollama_models}")
-            for model in all_ollama_models:
-                if model:
-                    try:
-                        await asyncio.to_thread(_ensure_ollama_model, model)
-                    except Exception as e:
-                        logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
+            for model in all_models:
+                try:
+                    await asyncio.to_thread(_ensure_ollama_model, model)
+                except Exception as e:
+                    logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
 
-            # 2️⃣ Documento base no RAG (exemplo)
+            # Documento base de exemplo no RAG
             await add_document(
                 "intro",
-                "NSGA-II is a multi-objective evolutionary algorithm used for Pareto optimization."
+                "NSGA-II é um algoritmo evolutivo multiobjetivo usado em otimização de Pareto.",
             )
 
-            # 3️⃣ Requisições de teste
+            # Execução de teste inicial
             samples = [
-                "Explique em 3 tópicos o que é NSGA-II e onde é aplicado.",
-                "Escreva um snippet Python que lê um CSV e calcula a média de uma coluna.",
-                "O que é RAG em sistemas de IA e como funciona?",
-                "Quais são as vantagens de usar um modelo Bandit para roteamento de LLMs?",
-                "Descreva a revolução francesa, seus principais eventos e consequências.", 
-                "Explique para uma criança o que são as marés e os seus movimentos." 
+                "Explique o que é NSGA-II e onde é aplicado.",
+                "Escreva um código Python que calcule média de uma coluna CSV.",
+                "O que é RAG em sistemas de IA?",
             ]
             for s in samples:
                 try:
@@ -121,7 +118,7 @@ async def on_startup():
                 except Exception as e:
                     logger.warning(f"[warmup] Falha no teste de prompt: {e}")
 
-            logger.info("[warmup] Rotina de inicialização concluída com sucesso ✅")
+            logger.info("[warmup] Inicialização concluída ✅")
 
         except Exception as e:
             logger.exception(f"[warmup] Falhou: {e}")
@@ -159,13 +156,30 @@ async def route_query(req: QueryRequest):
     cost = float(result["cost_per_1k"])
     text = result["answer"]
 
-    # Recompensa acoplada ao NSGA-II / Bandit
+    # Recompensa NSGA-II / Bandit
     try:
         reward = compute_reward(chosen_model or "unknown", quality, latency)
         bandit_update(chosen_model or "unknown", req.query, reward)
         BANDIT_REWARD.observe(reward)
     except Exception as e:
         logger.warning(f"[bandit] Falha ao calcular/atualizar recompensa: {e}")
+        reward = 0.0
+
+    # Persistência
+    try:
+        from .services.query_service import insert_query_log
+        insert_query_log(
+            query=req.query,
+            model=chosen_model,
+            response=text,
+            latency=latency,
+            cost=cost,
+            quality=quality,
+            reward=reward,
+        )
+        logger.info(f"[db] query_log registrado para modelo={chosen_model}")
+    except Exception as e:
+        logger.warning(f"[db] Falha ao registrar query_log: {e}")
 
     ROUTER_CHOSEN.labels(model=chosen_model or "cached").inc()
     CANDIDATE_COST.observe(cost)
@@ -192,7 +206,7 @@ async def route_query(req: QueryRequest):
     return QueryResponse(answer=text, model=chosen_model, route=route, candidates=[candidate])
 
 # ------------------------------------------------------
-# Administração: SETTINGS dinâmicos (Redis + DB)
+# Administração de settings
 # ------------------------------------------------------
 def _require_admin(token: Optional[str]):
     if token != settings.ADMIN_TOKEN:
@@ -204,10 +218,7 @@ def get_all_settings(x_admin_token: Optional[str] = Header(None)):
     return settings.snapshot(only_known=False)
 
 @app.put("/admin/settings")
-def set_settings(
-    payload: Dict[str, Any] = Body(...),
-    x_admin_token: Optional[str] = Header(None),
-):
+def set_settings(payload: Dict[str, Any] = Body(...), x_admin_token: Optional[str] = Header(None)):
     _require_admin(x_admin_token)
     if not isinstance(payload, dict) or not payload:
         raise HTTPException(status_code=400, detail="Payload inválido.")

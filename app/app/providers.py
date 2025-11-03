@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-# providers.py
-# ------------------------------------------------------------
-# Camada de abstração para chamadas a modelos LLM.
-# Suporta múltiplos provedores: OpenAI, Anthropic, Gemini, Ollama.
-# Integra-se com o NSGA-II, judges.py e query_log.
-# ------------------------------------------------------------
+"""
+providers.py
+------------------------------------------------------------
+Camada de abstração para chamadas a modelos LLM.
+- Suporta: OpenAI, Anthropic, Gemini, Ollama
+- Exporta métricas Prometheus por modelo
+- Fornece helper para servir /metrics diretamente
+------------------------------------------------------------
+"""
 
 from __future__ import annotations
 
@@ -12,11 +15,13 @@ import logging
 import os
 import time
 from typing import Dict, Tuple
+
 import requests
 
-# ========= Importações defensivas =========
+# ========= Importações defensivas (evitam crash no import do módulo) =========
 try:
-    from openai import OpenAI as OpenAIClient  # Novo SDK
+    # Novo SDK OpenAI
+    from openai import OpenAI as OpenAIClient  # type: ignore
 except Exception:  # pragma: no cover
     OpenAIClient = None  # type: ignore
 
@@ -30,7 +35,32 @@ try:
 except Exception:  # pragma: no cover
     genai = None  # type: ignore
 
+# ========= Prometheus: tenta usar registry central, senão cria local =========
+try:
+    # Se você já tiver app/observability.py, vamos reaproveitar o registry
+    from app.observability import registry as _shared_registry  # type: ignore
+    from prometheus_client import (
+        Counter,
+        Histogram,
+        Gauge,
+        CollectorRegistry,
+        generate_latest,
+    )
+    REGISTRY: CollectorRegistry = _shared_registry
+except Exception:  # pragma: no cover
+    from prometheus_client import (  # type: ignore
+        Counter,
+        Histogram,
+        Gauge,
+        CollectorRegistry,
+        generate_latest,
+    )
 
+    REGISTRY = CollectorRegistry()
+
+from prometheus_client.exposition import CONTENT_TYPE_LATEST
+
+# ========= Logger =========
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
@@ -42,11 +72,74 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"))
 
+# Configura Gemini se disponível
 if genai and GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        logger.warning(f"[providers] Falha ao configurar Gemini: {e}")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("[providers] Falha ao configurar Gemini: %s", exc)
+
+# ============================================================
+# 📈 Métricas Prometheus (por modelo)
+# ============================================================
+PROV_REQ = Counter(
+    "providers_model_requests_total",
+    "Total de chamadas ao provedor por modelo",
+    labelnames=["model"],
+    registry=REGISTRY,
+)
+PROV_ERR = Counter(
+    "providers_model_errors_total",
+    "Total de erros ao chamar o provedor por modelo",
+    labelnames=["model"],
+    registry=REGISTRY,
+)
+PROV_OK = Counter(
+    "providers_model_success_total",
+    "Total de chamadas bem-sucedidas por modelo",
+    labelnames=["model"],
+    registry=REGISTRY,
+)
+PROV_LAT = Histogram(
+    "providers_model_latency_seconds",
+    "Latência observada por modelo (s)",
+    labelnames=["model"],
+    registry=REGISTRY,
+)
+PROV_COST = Histogram(
+    "providers_model_cost_usd",
+    "Custo estimado por chamada (USD) por modelo",
+    labelnames=["model"],
+    registry=REGISTRY,
+)
+PROV_QUAL = Histogram(
+    "providers_model_quality_score",
+    "Qualidade heurística (0–10) por modelo",
+    labelnames=["model"],
+    registry=REGISTRY,
+)
+PROV_LAST_TS = Gauge(
+    "providers_model_last_call_timestamp",
+    "Epoch da última chamada por modelo",
+    labelnames=["model"],
+    registry=REGISTRY,
+)
+
+
+def render_metrics_response() -> Tuple[bytes, str]:
+    """
+    Retorna (body_bytes, content_type) para ser usado num endpoint /metrics.
+    Exemplo (FastAPI):
+        from fastapi import Response
+        from app.providers import render_metrics_response
+
+        @app.get("/metrics")
+        def metrics():
+            body, ctype = render_metrics_response()
+            return Response(content=body, media_type=ctype)
+    """
+    return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+
 
 # ============================================================
 # ⚙️ Estimativas auxiliares (custos e qualidade)
@@ -85,16 +178,18 @@ def estimate_openai_cost(model: str, prompt_len: int, output_len: int) -> float:
 
 
 def estimate_gemini_cost(model: str, prompt_len: int, output_len: int) -> float:
+    # custo aproximado simbólico
     base_rate = 0.0005 if "flash" in model.lower() else 0.0015
     return round((prompt_len + output_len) / 1000 * base_rate, 6)
 
 
 def estimate_ollama_cost(model: str, prompt_len: int, output_len: int) -> float:
+    # custos locais geralmente desprezíveis; valor simbólico
     return round((prompt_len + output_len) / 1000 * 0.0001, 6)
 
 
 # ============================================================
-# 🚀 Função principal
+# 🚀 Função principal (com instrumentação de métricas)
 # ============================================================
 def call_model(
     model: str,
@@ -109,6 +204,10 @@ def call_model(
     """
     start_time = time.time()
     model_lower = model.lower()
+    model_label = model  # label Prometheus
+
+    # Contabiliza a requisição
+    PROV_REQ.labels(model=model_label).inc()
 
     try:
         # ====================================================
@@ -122,57 +221,68 @@ def call_model(
 
             model_name = model.split("/", 1)[1]
             client = OpenAIClient(api_key=OPENAI_API_KEY)
-            text_out = ""
 
+            text_out = ""
             try:
-                # Modelos GPT-5 e Mini → usam max_completion_tokens
-                if "gpt-5" in model_name or "mini" in model_name:
-                    completion = client.chat.completions.create(
-                        model=model_name,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=temperature,
-                        max_completion_tokens=max_tokens,
-                    )
-                else:
-                    completion = client.chat.completions.create(
-                        model=model_name,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                    )
-                text_out = (completion.choices[0].message.content or "").strip()
-            except Exception as e_first:
-                # fallback: tenta API responses
-                try:
+                # Heurística:
+                # - se SDK possui Responses API e o modelo é da família gpt-5/mini,
+                #   use Responses com max_output_tokens
+                if hasattr(client, "responses") and (
+                    "gpt-5" in model_name.lower() or "mini" in model_name.lower()
+                ):
                     resp = client.responses.create(
                         model=model_name,
                         input=prompt,
                         temperature=temperature,
                         max_output_tokens=max_tokens,
                     )
-                    if hasattr(resp, "output") and resp.output:
-                        text_out = "".join(
-                            chunk.text for chunk in resp.output[0].content
-                            if getattr(chunk, "type", "") == "output_text"
-                        ).strip()
-                    else:
-                        text_out = str(resp)
-                except Exception as e_second:
-                    raise RuntimeError(f"OpenAI falhou: {e_first} | {e_second}") from e_second
+                    # SDK novo tem .output_text — se não houver, cai no str(resp)
+                    text_out = getattr(resp, "output_text", None) or str(resp)
+                    text_out = text_out.strip()
+                else:
+                    # Chat Completions (modelos que aceitam max_tokens)
+                    completion = client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    text_out = (completion.choices[0].message.content or "").strip()
+            except Exception as exc_first:
+                # Se falhou e Responses existe, tenta Responses como fallback
+                if hasattr(client, "responses"):
+                    try:
+                        resp = client.responses.create(
+                            model=model_name,
+                            input=prompt,
+                            temperature=temperature,
+                            max_output_tokens=max_tokens,
+                        )
+                        text_out = getattr(resp, "output_text", None) or str(resp)
+                        text_out = text_out.strip()
+                    except Exception as exc_second:
+                        raise RuntimeError(f"OpenAI falhou: {exc_first} | {exc_second}") from exc_second
+                else:
+                    raise RuntimeError(f"OpenAI falhou: {exc_first}") from exc_first
 
             latency = time.time() - start_time
             cost = estimate_openai_cost(model_name, len(prompt), len(text_out))
-            meta = {
-                "latency": latency,
-                "cost_per_1k": cost,
-                "quality": heuristic_quality_estimate(text_out),
-            }
+            quality = heuristic_quality_estimate(text_out)
+
+            # Métricas
+            PROV_LAT.labels(model=model_label).observe(latency)
+            PROV_COST.labels(model=model_label).observe(cost)
+            PROV_QUAL.labels(model=model_label).observe(quality)
+            PROV_OK.labels(model=model_label).inc()
+            PROV_LAST_TS.labels(model=model_label).set(time.time())
+
+            meta = {"latency": latency, "cost_per_1k": cost, "quality": quality}
             return text_out, meta
 
         # ====================================================
-        # 🤖 Ollama
+        # 🤖 Ollama (modelos locais)
         # ====================================================
-        elif model_lower.startswith("ollama/"):
+        if model_lower.startswith("ollama/"):
             model_name = model.split("/", 1)[1]
             payload = {
                 "model": model_name,
@@ -180,53 +290,66 @@ def call_model(
                 "stream": False,
                 "options": {"temperature": temperature},
             }
+
             resp = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, timeout=120)
             resp.raise_for_status()
             data = resp.json()
+
             text_out = (data.get("response") or "").strip()
             latency = time.time() - start_time
             cost = estimate_ollama_cost(model_name, len(prompt), len(text_out))
-            meta = {
-                "latency": latency,
-                "cost_per_1k": cost,
-                "quality": heuristic_quality_estimate(text_out),
-            }
+            quality = heuristic_quality_estimate(text_out)
+
+            PROV_LAT.labels(model=model_label).observe(latency)
+            PROV_COST.labels(model=model_label).observe(cost)
+            PROV_QUAL.labels(model=model_label).observe(quality)
+            PROV_OK.labels(model=model_label).inc()
+            PROV_LAST_TS.labels(model=model_label).set(time.time())
+
+            meta = {"latency": latency, "cost_per_1k": cost, "quality": quality}
             return text_out, meta
 
         # ====================================================
         # 🌟 Google Gemini
         # ====================================================
-        elif model_lower.startswith("gemini/"):
+        if model_lower.startswith("gemini/"):
             if not GEMINI_API_KEY:
                 raise RuntimeError("GEMINI_API_KEY não configurada.")
             if not genai:
-                raise RuntimeError("SDK do Gemini (google-generativeai) não disponível no ambiente.")
+                raise RuntimeError("SDK do Gemini (google-generativeai) não disponível.")
 
             model_name = model.split("/", 1)[1]
             model_ref = genai.GenerativeModel(model_name)
             response = model_ref.generate_content(prompt)
+
             text_out = getattr(response, "text", None) or str(response)
             text_out = text_out.strip()
+
             latency = time.time() - start_time
             cost = estimate_gemini_cost(model_name, len(prompt), len(text_out))
-            meta = {
-                "latency": latency,
-                "cost_per_1k": cost,
-                "quality": heuristic_quality_estimate(text_out),
-            }
+            quality = heuristic_quality_estimate(text_out)
+
+            PROV_LAT.labels(model=model_label).observe(latency)
+            PROV_COST.labels(model=model_label).observe(cost)
+            PROV_QUAL.labels(model=model_label).observe(quality)
+            PROV_OK.labels(model=model_label).inc()
+            PROV_LAST_TS.labels(model=model_label).set(time.time())
+
+            meta = {"latency": latency, "cost_per_1k": cost, "quality": quality}
             return text_out, meta
 
         # ====================================================
-        # 🦉 Anthropic
+        # 🦉 Anthropic (Claude)
         # ====================================================
-        elif model_lower.startswith("anthropic/"):
+        if model_lower.startswith("anthropic/"):
             if not ANTHROPIC_API_KEY:
                 raise RuntimeError("ANTHROPIC_API_KEY não configurada.")
             if not anthropic:
-                raise RuntimeError("SDK Anthropic não disponível no ambiente.")
+                raise RuntimeError("SDK Anthropic não disponível.")
 
             model_name = model.split("/", 1)[1]
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
             response = client.messages.create(
                 model=model_name,
                 temperature=temperature,
@@ -237,33 +360,48 @@ def call_model(
             text_out = ""
             if getattr(response, "content", None):
                 parts = [
-                    part.text for part in response.content
+                    part.text
+                    for part in response.content
                     if hasattr(part, "text") and isinstance(part.text, str)
                 ]
                 text_out = "".join(parts).strip()
 
             latency = time.time() - start_time
             cost = estimate_anthropic_cost(model_name, len(prompt), len(text_out))
-            meta = {
-                "latency": latency,
-                "cost_per_1k": cost,
-                "quality": heuristic_quality_estimate(text_out),
-            }
+            quality = heuristic_quality_estimate(text_out)
+
+            PROV_LAT.labels(model=model_label).observe(latency)
+            PROV_COST.labels(model=model_label).observe(cost)
+            PROV_QUAL.labels(model=model_label).observe(quality)
+            PROV_OK.labels(model=model_label).inc()
+            PROV_LAST_TS.labels(model=model_label).set(time.time())
+
+            meta = {"latency": latency, "cost_per_1k": cost, "quality": quality}
             return text_out, meta
 
         # ====================================================
-        # 🧩 Modelo desconhecido
+        # 🧩 Desconhecido / Default
         # ====================================================
-        logger.warning(f"[providers] Modelo desconhecido: {model}")
+        logger.warning("[providers] Modelo desconhecido: %s", model)
         latency = time.time() - start_time
+
+        PROV_LAT.labels(model=model_label).observe(latency)
+        PROV_ERR.labels(model=model_label).inc()
+        PROV_LAST_TS.labels(model=model_label).set(time.time())
+
         meta = {"latency": latency, "cost_per_1k": 0.0, "quality": 0.0}
         return f"[Modelo não suportado: {model}]", meta
 
-    except Exception as e:
-        logger.error(f"[providers] Falha ao chamar {model}: {e}")
+    except Exception as exc:
+        # Telemetria de erro
         latency = time.time() - start_time
+        PROV_LAT.labels(model=model_label).observe(latency)
+        PROV_ERR.labels(model=model_label).inc()
+        PROV_LAST_TS.labels(model=model_label).set(time.time())
+
+        logger.error("[providers] Falha ao chamar %s: %s", model, exc)
         meta = {"latency": latency, "cost_per_1k": 0.0, "quality": 0.0}
-        return f"[Erro ao processar com {model}: {e}]", meta
+        return f"[Erro ao processar com {model}: {exc}]", meta
 
 
 # ============================================================
@@ -281,14 +419,14 @@ def _ensure_ollama_model(model_name: str) -> bool:
         tags_payload = resp.json() or {}
         models = [m.get("name", "") for m in tags_payload.get("models", [])]
         if model_name in models:
-            logger.info(f"[ollama] Modelo '{model_name}' já disponível.")
+            logger.info("[ollama] Modelo '%s' já disponível.", model_name)
             return True
 
-        logger.info(f"[ollama] Baixando modelo '{model_name}' via API...")
+        logger.info("[ollama] Baixando modelo '%s' via API...", model_name)
         pull = requests.post(f"{base_url}/api/pull", json={"name": model_name}, timeout=600)
         pull.raise_for_status()
-        logger.info(f"[ollama] Modelo '{model_name}' baixado com sucesso.")
+        logger.info("[ollama] Modelo '%s' baixado com sucesso.", model_name)
         return True
-    except Exception as e:
-        logger.warning(f"[ollama] Falha ao garantir modelo '{model_name}': {e}")
+    except Exception as exc:
+        logger.warning("[ollama] Falha ao garantir modelo '%s': %s", model_name, exc)
         return False

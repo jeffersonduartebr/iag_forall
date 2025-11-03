@@ -3,20 +3,28 @@
 judges.py
 ----------------------------------------------------
 Sistema de avaliação de respostas (juízes LLM + heurístico + RAG)
-com fallback dinâmico e auditoria em banco de dados.
-----------------------------------------------------
-Novidades:
-✅ Seleção aleatória de 2 juízes a cada julgamento
-✅ Fallback dinâmico baseado em JUDGE_MODELS (Redis)
-✅ Registro detalhado de todos os eventos de fallback
-✅ Total rastreabilidade das decisões de avaliação
+com seleção adaptativa e meta-avaliação automática (desacordo ≥ 20%).
+
+Principais pontos:
+- Seleciona 2 juízes por rodada dentre `settings.JUDGE_MODELS`.
+- Persistência das métrricas no banco (judge_logs e judge_performance_log).
+- Seleção ponderada por fitness × (qualidade/custo) + exploração ε-greedy.
+- Meta-avaliação automática com terceiro juiz em caso de divergência.
 """
 
+from __future__ import annotations
+
 import logging
-import re
 import random
-from typing import List, Dict, Any
+import re
+import statistics
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Sequence, Tuple
+
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+
 from .settings_dynamic import settings
 from .providers import call_model
 from .vectorstore import query_embedding
@@ -24,223 +32,473 @@ from .embeddings import embed_text
 
 logger = logging.getLogger(__name__)
 
-# ======================================================
-# 🔧 Banco de dados (para auditoria)
-# ======================================================
+# ============================================================
+# ⚙️ Banco de dados
+# ============================================================
 DB_HOST = settings.DB_HOST
 DB_USER = settings.DB_USER
 DB_PASS = settings.DB_PASS
 DB_NAME = settings.DB_NAME
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
-engine = create_engine(DB_URL, pool_pre_ping=True)
+engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
-DISAGREE_PERCENT = 0.20 # 20% de desacordo aciona meta-avaliação
+# ============================================================
+# 📏 Configurações principais
+# ============================================================
+ALPHA_DECAY = float(settings.get("JUDGES_FITNESS_DECAY", 0.90))
+MIN_FITNESS = float(settings.get("JUDGES_MIN_FITNESS", 0.30))
+CONSIST_WINDOW_MIN = int(settings.get("JUDGES_WINDOW_MIN", 180))
+DISAGREE_PERCENT = float(settings.get("JUDGES_DISAGREE_PERCENT", 0.20))
+META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "openai/gpt-4o-mini"))
+MAX_TOKENS_JUDGE = int(settings.get("JUDGES_MAX_TOKENS", 32))
+TEMP_JUDGE = float(settings.get("JUDGES_TEMPERATURE", 0.2))
+W_FIT = float(settings.get("JUDGES_WEIGHT_FITNESS", 0.6))
+W_QC = float(settings.get("JUDGES_WEIGHT_QC", 0.4))
+EPSILON_RANDOM = float(settings.get("JUDGES_EPSILON", 0.10))
 
-# ======================================================
-# 🔹 Recuperação de contexto (RAG dinâmico)
-# ======================================================
+# ============================================================
+# 📊 Estruturas auxiliares
+# ============================================================
+
+@dataclass
+class JudgeStats:
+    model: str
+    avg_score: float = 0.7
+    avg_latency: float = 2.0
+    avg_cost: float = 0.001
+    consistency: float = 0.8
+    fitness: float = 0.5
+
+
+@dataclass
+class SelectedJudge:
+    model: str
+    weight: float
+
+
+# ============================================================
+# 🧱 Funções utilitárias
+# ============================================================
+
+def _ema(prev: float, new: float, alpha: float) -> float:
+    return alpha * prev + (1.0 - alpha) * new
+
+
+def _adaptive_threshold(values: Sequence[float], base: float) -> float:
+    if not values:
+        return base
+    median_val = statistics.median(values)
+    return max(base, min(0.9, median_val * 0.6))
+
+
+def _ensure_judge_logs_table() -> None:
+    """Cria tabelas se não existirem."""
+    ddl = """
+        CREATE TABLE IF NOT EXISTS judge_logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            query TEXT,
+            answer TEXT,
+            judge_model VARCHAR(255),
+            score_before FLOAT,
+            fallback_model VARCHAR(255),
+            score_after FLOAT,
+            event_type VARCHAR(50)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COLLATE=utf8mb4_unicode_ci;
+        CREATE TABLE IF NOT EXISTS judge_performance_log (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            judge_model VARCHAR(255) NOT NULL,
+            avg_score FLOAT DEFAULT 0,
+            avg_latency FLOAT DEFAULT 0,
+            avg_cost FLOAT DEFAULT 0,
+            consistency FLOAT DEFAULT 0,
+            fitness FLOAT DEFAULT 0,
+            window_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            window_end TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_judge_model (judge_model),
+            INDEX idx_window_end (window_end)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+    except SQLAlchemyError as exc:
+        logger.warning("[Judges] Falha ao garantir tabelas: %s", exc)
+
+
+# ============================================================
+# 📈 Métricas históricas
+# ============================================================
+
+def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
+    since = datetime.utcnow() - timedelta(minutes=window_minutes)
+    stats: Dict[str, JudgeStats] = {}
+    try:
+        with engine.connect() as conn:
+            rs = conn.execute(
+                text(
+                    """
+                    SELECT judge_model,
+                           AVG(avg_score) AS a_score,
+                           AVG(avg_latency) AS a_lat,
+                           AVG(avg_cost) AS a_cost,
+                           AVG(consistency) AS a_cons,
+                           AVG(fitness) AS a_fit
+                    FROM judge_performance_log
+                    WHERE window_end >= :since
+                    GROUP BY judge_model
+                    """
+                ),
+                {"since": since},
+            ).fetchall()
+        for r in rs:
+            m = r._mapping
+            stats[m["judge_model"]] = JudgeStats(
+                model=m["judge_model"],
+                avg_score=float(m["a_score"] or 0.7),
+                avg_latency=float(m["a_lat"] or 2.0),
+                avg_cost=float(m["a_cost"] or 0.001),
+                consistency=float(m["a_cons"] or 0.8),
+                fitness=float(m["a_fit"] or 0.5),
+            )
+    except Exception as exc:
+        logger.info("[Judges] Métricas históricas indisponíveis: %s", exc)
+    return stats
+
+
+# ============================================================
+# 🔢 Seleção de juízes
+# ============================================================
+
+def _score_candidate(s: JudgeStats) -> float:
+    qc = s.avg_score / max(1e-6, s.avg_cost)
+    qc_norm = min(10.0, 1.0 + (qc ** 0.25))
+    return max(0.0, W_FIT * s.fitness + W_QC * (qc_norm / 10.0))
+
+
+def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[SelectedJudge]:
+    fitness_vals = [stats.get(m, JudgeStats(m)).fitness for m in models]
+    thr = _adaptive_threshold(fitness_vals, MIN_FITNESS)
+    valid = [m for m in models if stats.get(m, JudgeStats(m)).fitness >= thr]
+    if len(valid) < 2:
+        valid = models[:]
+    if random.random() < EPSILON_RANDOM and len(valid) >= 2:
+        picks = random.sample(valid, k=2)
+        return [SelectedJudge(p, 1.0) for p in picks]
+    scored = [(m, _score_candidate(stats.get(m, JudgeStats(m)))) for m in valid]
+    total = sum(w for _, w in scored) or 1.0
+    weights = [(m, w / total) for m, w in scored]
+
+    def weighted_pick(wlist: List[Tuple[str, float]]) -> str:
+        r = random.random()
+        acc = 0.0
+        for name, w in wlist:
+            acc += w
+            if r <= acc:
+                return name
+        return wlist[-1][0]
+
+    first = weighted_pick(weights)
+    rest = [(m, w) for m, w in weights if m != first]
+    second = weighted_pick(rest) if rest else first
+    return [SelectedJudge(first, 1.0), SelectedJudge(second, 1.0)]
+
+
+# ============================================================
+# 🔎 RAG opcional
+# ============================================================
+
 async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500) -> str:
-    """Recupera contexto relevante da base vetorial (ChromaDB)."""
     try:
         query_vec = await embed_text(query)
-        collection_name = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
-        results = await query_embedding(collection_name, query_vec, n_results=n_results)
+        collection = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
+        results = await query_embedding(collection, query_vec, n_results=n_results)
         if not results or "documents" not in results or not results["documents"]:
-            logger.info("[Judges] Nenhum contexto RAG recuperado.")
             return ""
         docs = results["documents"][0]
         context = "\n\n".join(docs).strip()
-        if len(context) > max_chars:
-            context = context[:max_chars] + "..."
-        return context
-    except Exception as e:
-        logger.error(f"[Judges] Falha ao obter contexto RAG: {e}")
+        return (context[:max_chars] + "...") if len(context) > max_chars else context
+    except Exception as exc:
+        logger.warning("[Judges] Falha ao obter contexto RAG: %s", exc)
         return ""
 
-# ======================================================
-# 🔹 Função principal de julgamento
-# ======================================================
-async def judge_answer(query: str, answer: str, use_rag: bool = False) -> List[Dict[str, Any]]:
-    """Retorna uma lista de julgamentos sobre a qualidade da resposta."""
-    try:
-        if not answer or not isinstance(answer, str):
-            logger.warning("[Judges] Resposta vazia ou inválida, score=0.")
-            return [{"judge_id": "heuristic", "score": 0.0}]
 
-        mode = settings.JUDGES_MODE.lower().strip()
-        results = []
+# ============================================================
+# 🧠 Heurístico simples
+# ============================================================
 
-        # 1️⃣ Heurístico simples
-        if mode in ("heuristic", "hybrid"):
-            base_score = heuristic_score(answer)
-            results.append({"judge_id": "heuristic", "score": round(base_score, 3)})
-            logger.info(f"[Judges] Heurístico: {base_score:.2f}")
-
-        # 2️⃣ LLM-based (com RAG e fallback dinâmico)
-        if mode in ("llm", "hybrid"):
-            llm_score = await llm_based_score(query, answer, use_rag)
-            results.append({"judge_id": "llm", "score": round(llm_score, 3)})
-            logger.info(f"[Judges] LLM: {llm_score:.2f}")
-
-        valid_results = [r for r in results if "score" in r]
-        return valid_results or [{"judge_id": "fallback", "score": 0.0}]
-    except Exception as e:
-        logger.error(f"[Judges] Erro inesperado no julgamento: {e}")
-        return [{"judge_id": "error", "score": 0.0}]
-
-# ======================================================
-# 🔹 Heurística simples
-# ======================================================
 def heuristic_score(answer: str) -> float:
-    """Gera score com base em tamanho e pontuação."""
     try:
         length = len(answer.strip())
         if length == 0:
             return 0.0
-        score = min(1.0, 0.2 + (length / 500))
+        score = min(1.0, 0.2 + (length / 500.0))
         if any(p in answer for p in [".", "?", "!"]):
             score += 0.2
         return min(score, 1.0)
     except Exception:
         return 0.0
 
-# ======================================================
-# 🔹 Avaliação via modelos LLM (com fallback dinâmico e seleção aleatória)
-# ======================================================
-async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
-    """Executa julgamento dinâmico com fallback baseado em 2 juízes aleatórios."""
+
+# ============================================================
+# 💾 Persistência de performance dos juízes
+# ============================================================
+
+def _persist_judge_metrics(judge_model: str,
+                           score: float,
+                           latency: float,
+                           cost: float,
+                           consistency: float,
+                           fitness: float) -> None:
+    """Grava uma amostra de métricas do juiz no banco."""
     try:
-        judge_models = getattr(settings, "JUDGE_MODELS", [])
-        if not judge_models:
-            judge_models = ["openai/gpt-4o-mini"]
-
-        # ✅ Seleciona dois juízes aleatórios (sem repetição)
-        selected_judges = random.sample(judge_models, min(2, len(judge_models)))
-        logger.info(f"[Judges] Selecionados {selected_judges} para avaliação desta resposta.")
-
-        context = ""
-        if use_rag:
-            context = await get_rag_context(query, n_results=5)
-            if context:
-                logger.info("[Judges] Contexto RAG será usado na avaliação LLM.")
-
-        rag_block = f"\nContexto adicional (via RAG):\n{context}\n" if context else ""
-        prompt = (
-            "Você é um avaliador de respostas de IA.\n"
-            "Avalie a resposta abaixo considerando:\n"
-            "1️⃣ Correção técnica e factual\n"
-            "2️⃣ Clareza e coerência textual\n"
-            "3️⃣ Relevância ao que foi perguntado\n\n"
-            f"Pergunta: {query}\n\n"
-            f"Resposta do modelo: {answer}\n\n"
-            f"{rag_block}"
-            "Responda SOMENTE com um número entre 0 e 10.\n"
-            "FORMATO DE SAÍDA OBRIGATÓRIO:\n<nota>\n\n"
-            "Por exemplo:\n8.7\n\n"
-            "NÃO escreva mais nada além do número."
-        ).strip()
-
-        scores = []
-
-        # ✅ Agora só percorremos os 2 juízes aleatórios
-        for idx, model in enumerate(selected_judges, start=1):
-            try:
-                text, _ = call_model(model=model, prompt=prompt, temperature=0.2, max_tokens=32)
-                numeric = extract_score(text)
-                logger.info(f"[Judges] {model} → nota={numeric:.2f} (juiz {idx}/{len(selected_judges)})")
-
-                # fallback se nota for 0
-                if numeric == 0.0 and len(selected_judges) > 1:
-                    next_model = selected_judges[(idx) % len(selected_judges)]
-                    fb_text, _ = call_model(model=next_model, prompt=prompt, temperature=0.2, max_tokens=32)
-                    fb_score = extract_score(fb_text)
-                    log_fallback_event(query, answer, model, 0.0, next_model, fb_score, "zero_score")
-                    logger.info(f"[Judges] Fallback {next_model} → nota={fb_score:.2f}")
-                    numeric = fb_score
-
-                scores.append(numeric)
-
-            except Exception as e:
-                logger.warning(f"[Judges] Falha no julgamento com {model}: {e}")
-                try:
-                    next_model = selected_judges[(idx) % len(selected_judges)]
-                    fb_text, _ = call_model(model=next_model, prompt=prompt, temperature=0.2, max_tokens=32)
-                    fb_score = extract_score(fb_text)
-                    log_fallback_event(query, answer, model, None, next_model, fb_score, "exception")
-                    logger.info(f"[Judges] Fallback {next_model} → nota={fb_score:.2f}")
-                    scores.append(fb_score)
-                except Exception as e2:
-                    logger.error(f"[Judges] Fallback {next_model} também falhou: {e2}")
-                    scores.append(0.0)
-
-        if not scores:
-            logger.warning("[Judges] Nenhum juiz retornou nota válida. Fallback 5.0.")
-            return 0.5
-
-        avg = sum(scores) / len(scores)
-        return round(avg / 10.0, 3)
-
-    except Exception as e:
-        logger.error(f"[Judges] Erro no julgamento via LLM: {e}")
-        return 0.0
-
-# ======================================================
-# 🔹 Auditoria de fallback
-# ======================================================
-def log_fallback_event(query: str, answer: str, model: str, score_before: float,
-                       fallback_model: str, score_after: float, event_type: str):
-    """Registra evento de fallback ou substituição de nota no banco."""
-    try:
+        _ensure_judge_logs_table()
         with engine.begin() as conn:
-            ddl_judge_logs = """
-            CREATE TABLE IF NOT EXISTS judge_logs (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                query TEXT,
-                answer TEXT,
-                judge_model VARCHAR(255),
-                score_before FLOAT,
-                fallback_model VARCHAR(255),
-                score_after FLOAT,
-                event_type VARCHAR(50)
-            );
-            """
-            conn.execute(text(ddl_judge_logs))
-            conn.execute(text("""
-                INSERT INTO judge_logs
-                (query, answer, judge_model, score_before, fallback_model, score_after, event_type)
-                VALUES (:q, :a, :jm, :sb, :fb, :sa, :ev)
-            """), {
-                "q": query, "a": answer, "jm": model, "sb": score_before,
-                "fb": fallback_model, "sa": score_after, "ev": event_type
-            })
-    except Exception as e:
-        logger.error(f"[Judges] Erro ao registrar evento de auditoria: {e}")
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO judge_performance_log
+                    (judge_model, avg_score, avg_latency, avg_cost,
+                     consistency, fitness, window_start, window_end)
+                    VALUES (:jm, :ascore, :alat, :acost, :cons, :fit,
+                            NOW() - INTERVAL 10 MINUTE, NOW())
+                    """
+                ),
+                {
+                    "jm": judge_model,
+                    "ascore": float(score),
+                    "alat": float(latency),
+                    "acost": float(cost),
+                    "cons": float(consistency),
+                    "fit": float(fitness),
+                },
+            )
+    except Exception as exc:
+        logger.warning("[Judges] Falha ao gravar métricas (%s): %s", judge_model, exc)
 
-# ======================================================
-# 🔹 Extração de nota reforçada
-# ======================================================
-def extract_score(text: str) -> float:
-    """Extrai número entre 0 e 10 do texto de saída do LLM."""
-    try:
-        if not text:
+
+# ============================================================
+# ⚖️ Julgamento LLM (2 juízes + meta-avaliação)
+# ============================================================
+
+async def _llm_pair_score(query: str, answer: str, use_rag: bool) -> float:
+    context = await get_rag_context(query) if use_rag else ""
+    rag_block = f"\nContexto adicional (via RAG):\n{context}\n" if context else ""
+
+    prompt = (
+        "Você é um avaliador de respostas de IA.\n"
+        "Avalie a resposta abaixo considerando:\n"
+        "1️⃣ Correção técnica e factual\n"
+        "2️⃣ Clareza e coerência textual\n"
+        "3️⃣ Relevância ao que foi perguntado\n\n"
+        f"Pergunta: {query}\n\nResposta do modelo: {answer}\n\n"
+        f"{rag_block}Responda SOMENTE com um número entre 0 e 10.\n"
+        "FORMATO OBRIGATÓRIO: apenas o número (ex.: 8.7)"
+    )
+
+    judge_models_all = getattr(settings, "JUDGE_MODELS", []) or ["openai/gpt-4o-mini"]
+    stats = _load_judge_stats(CONSIST_WINDOW_MIN)
+    selected = _choose_two(judge_models_all, stats)
+    results: List[Tuple[str, float, float, Dict[str, float]]] = []
+
+    for sj in selected:
+        try:
+            text_out, meta = call_model(
+                model=sj.model,
+                prompt=prompt,
+                temperature=TEMP_JUDGE,
+                max_tokens=MAX_TOKENS_JUDGE,
+            )
+            note_10 = _extract_score(text_out)
+            note_01 = max(0.0, min(note_10 / 10.0, 1.0))
+            latency = float(meta.get("latency", 2.0))
+            cost = float(meta.get("cost_per_1k", 0.001))
+            # Fitness simples: 70% nota, 30% rapidez relativa (cap 10s)
+            fitness = (note_01 * 0.7) + (1.0 - min(latency, 10.0) / 10.0) * 0.3
+            # Consistência: quanto mais perto de 0.5 (meio da faixa), menor;
+            # aqui tratamos como "conservador": distância do meio reduz consistência
+            consistency = 1.0 - abs(note_01 - 0.5)
+
+            _persist_judge_metrics(
+                judge_model=sj.model,
+                score=note_01,
+                latency=latency,
+                cost=cost,
+                consistency=consistency,
+                fitness=fitness,
+            )
+            results.append((sj.model, note_10, note_01, meta))
+        except Exception as exc:
+            logger.warning("[Judges] Falha no juiz %s: %s", sj.model, exc)
+            results.append((sj.model, 0.0, 0.0, {"latency": 5.0, "cost_per_1k": 0.0}))
+
+    if len(results) >= 2:
+        n1_10, n2_10 = results[0][1], results[1][1]
+        maior, menor = max(n1_10, n2_10), min(n1_10, n2_10)
+        if maior > 0 and (maior - menor) / maior >= DISAGREE_PERCENT:
+            meta_score = await _meta_evaluate(
+                query,
+                answer,
+                [(results[0][0], n1_10), (results[1][0], n2_10)],
+                prompt,
+            )
+            base_pair = (results[0][2] + results[1][2]) / 2.0
+            return round(0.6 * meta_score + 0.4 * base_pair, 3)
+        return round((results[0][2] + results[1][2]) / 2.0, 3)
+
+    return results[0][2] if results else 0.0
+
+
+async def _meta_evaluate(
+    query: str,
+    answer: str,
+    pair_scores: List[Tuple[str, float]],
+    base_prompt: str,
+) -> float:
+    judge_models_all = getattr(settings, "JUDGE_MODELS", []) or [META_JUDGE_HINT]
+    stats = _load_judge_stats(CONSIST_WINDOW_MIN)
+
+    scored_all = [
+        (m, _score_candidate(stats.get(m, JudgeStats(m)))) for m in judge_models_all
+    ]
+    scored_all.sort(key=lambda x: x[1], reverse=True)
+    candidates = [META_JUDGE_HINT] + [m for m, _ in scored_all[:3]]
+
+    a, b = pair_scores
+    arb_prompt = (
+        base_prompt
+        + f"\n\nNotas preliminares:"
+          f"\n- {a[0]}: {a[1]:.2f}/10"
+          f"\n- {b[0]}: {b[1]:.2f}/10"
+          f"\nReavalie e responda SOMENTE com um número entre 0 e 10."
+    )
+
+    for cm in candidates[:2]:
+        try:
+            text_out, _ = call_model(
+                model=cm,
+                prompt=arb_prompt,
+                temperature=TEMP_JUDGE,
+                max_tokens=MAX_TOKENS_JUDGE,
+            )
+            note_10 = _extract_score(text_out)
+            return max(0.0, min(note_10 / 10.0, 1.0))
+        except Exception as exc:
+            logger.warning("[Judges] Falha meta-avaliação %s: %s", cm, exc)
+
+    return 0.0
+
+
+# ============================================================
+# 🔍 Extração robusta
+# ============================================================
+
+_SCORE_RE = re.compile(r"(\d+(?:\.\d+)?)(?:\s*/\s*10)?")
+
+def _extract_score(text: str) -> float:
+    if not text:
+        return 0.0
+    clean = text.strip().lower()
+    match = _SCORE_RE.search(clean)
+    if match:
+        try:
+            return max(0.0, min(float(match.group(1)), 10.0))
+        except ValueError:
             return 0.0
-        clean = text.strip().lower()
-        match = re.search(r"(\d+(?:\.\d+)?)(?:\s*/\s*10)?", clean)
-        if match:
-            val = float(match.group(1))
-            return max(0.0, min(val, 10.0))
+    if any(w in clean for w in ["excelente", "ótima", "perfeita"]):
+        return 9.0
+    if any(w in clean for w in ["boa", "adequada", "razoável"]):
+        return 7.0
+    if any(w in clean for w in ["regular", "parcial"]):
+        return 5.0
+    if any(w in clean for w in ["ruim", "fraca", "errada"]):
+        return 3.0
+    if any(w in clean for w in ["péssima", "horrível"]):
+        return 1.0
+    return 0.0
 
-        if any(w in clean for w in ["excelente", "ótima", "perfeita", "correta"]):
-            return 9.0
-        if any(w in clean for w in ["boa", "adequada", "razoável", "clara"]):
-            return 7.0
-        if any(w in clean for w in ["regular", "parcial", "mediana"]):
-            return 5.0
-        if any(w in clean for w in ["ruim", "fraca", "errada", "inadequada"]):
-            return 3.0
-        if any(w in clean for w in ["péssima", "horrível", "completamente errada"]):
-            return 1.0
-        return 0.0
-    except Exception:
-        return 0.0
+
+# ============================================================
+# 🌐 API pública
+# ============================================================
+
+async def get_rag_context_blocking(query: str) -> str:
+    """Compat: helper explícito para recuperar contexto RAG."""
+    return await get_rag_context(query)
+
+
+async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
+    """Ponto de entrada usado externamente para obter nota 0–1."""
+    return await _llm_pair_score(query, answer, use_rag)
+
+
+def log_fallback_event(
+    query: str,
+    answer: str,
+    model: str,
+    score_before: float | None,
+    fallback_model: str,
+    score_after: float,
+    event_type: str,
+) -> None:
+    """Registra evento (fallback/substituição) no banco."""
+    try:
+        _ensure_judge_logs_table()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO judge_logs
+                    (query, answer, judge_model, score_before,
+                     fallback_model, score_after, event_type)
+                    VALUES (:q, :a, :jm, :sb, :fb, :sa, :ev)
+                    """
+                ),
+                {
+                    "q": query,
+                    "a": answer,
+                    "jm": model,
+                    "sb": score_before,
+                    "fb": fallback_model,
+                    "sa": score_after,
+                    "ev": event_type,
+                },
+            )
+    except Exception as exc:
+        logger.error("[Judges] Erro ao registrar auditoria: %s", exc)
+
+
+async def judge_answer(
+    query: str,
+    answer: str,
+    use_rag: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Retorna lista com ao menos um dicionário {"judge_id": ..., "score": ...}
+    onde 'score' está em escala 0–1.
+    """
+    try:
+        if not answer or not isinstance(answer, str):
+            logger.warning("[Judges] Resposta vazia — score = 0.")
+            return [{"judge_id": "heuristic", "score": 0.0}]
+
+        mode = (settings.JUDGES_MODE or "hybrid").lower().strip()
+        results: List[Dict[str, Any]] = []
+
+        # Heurístico sempre no modo "heuristic" ou "hybrid"
+        if mode in ("heuristic", "hybrid"):
+            base_score = heuristic_score(answer)
+            results.append({"judge_id": "heuristic", "score": round(base_score, 3)})
+
+        # LLM-based nos modos "llm" ou "hybrid"
+        if mode in ("llm", "hybrid"):
+            llm_score = await _llm_pair_score(query, answer, use_rag)
+            results.append({"judge_id": "llm", "score": round(llm_score, 3)})
+
+        valid = [r for r in results if "score" in r]
+        return valid or [{"judge_id": "fallback", "score": 0.0}]
+    except Exception as exc:
+        logger.error("[Judges] Erro inesperado no julgamento: %s", exc)
+        return [{"judge_id": "error", "score": 0.0}]
