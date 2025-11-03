@@ -1,20 +1,29 @@
 """
 semantic_cache.py
------------------
+----------------------------------------------------
 Cache semântico híbrido: ChromaDB + Redis + Prometheus.
 Evita reprocessar consultas semelhantes e mede eficiência do cache.
+
+Atualizado para:
+✅ Usar o registry global do módulo observability
+✅ Operar de forma compatível com Prometheus multiprocess
+✅ Manter logs consistentes e métricas confiáveis
 """
 
 import time
 import json
 import logging
 import numpy as np
-from prometheus_client import Counter, Gauge
-from app.vectorstore import get_or_create_collection_async, query_embedding, insert_embedding
+from app.vectorstore import (
+    get_or_create_collection_async,
+    query_embedding,
+    insert_embedding,
+)
 from app.embeddings import embed_text
 from app.utils.redis_client import get_redis
+from app.observability import registry, logger  # integração centralizada
 
-logger = logging.getLogger(__name__)
+from prometheus_client import Counter, Gauge
 
 # ============================================================
 # ⚙️ Configurações básicas
@@ -25,12 +34,28 @@ MAX_RESULTS = 1
 CACHE_TTL = 60 * 60 * 24  # 24h
 
 # ============================================================
-# 📊 Métricas Prometheus
+# 📊 Métricas Prometheus (registradas no registry global)
 # ============================================================
-CACHE_HITS = Counter("semantic_cache_hits_total", "Total de acertos no cache semântico.")
-CACHE_MISSES = Counter("semantic_cache_misses_total", "Total de falhas no cache semântico.")
-CACHE_ENTRIES = Gauge("semantic_cache_entries", "Número de respostas armazenadas no cache.")
-CACHE_HIT_RATIO = Gauge("semantic_cache_hit_ratio", "Taxa de acerto do cache semântico (0–1).")
+CACHE_HITS = Counter(
+    "semantic_cache_hits_total",
+    "Total de acertos no cache semântico.",
+    registry=registry,
+)
+CACHE_MISSES = Counter(
+    "semantic_cache_misses_total",
+    "Total de falhas no cache semântico.",
+    registry=registry,
+)
+CACHE_ENTRIES = Gauge(
+    "semantic_cache_entries",
+    "Número de respostas armazenadas no cache.",
+    registry=registry,
+)
+CACHE_HIT_RATIO = Gauge(
+    "semantic_cache_hit_ratio",
+    "Taxa de acerto do cache semântico (0–1).",
+    registry=registry,
+)
 
 # ============================================================
 # 🧠 Utilitários
@@ -49,14 +74,14 @@ def cosine_similarity(a, b):
 def _update_hit_ratio():
     """Atualiza a métrica de taxa de acerto (hits / total)."""
     try:
-        hits = CACHE_HITS._value.get()
-        misses = CACHE_MISSES._value.get()
+        # Acessa valores via collectors em vez de atributos privados
+        hits = CACHE_HITS._value.get() if hasattr(CACHE_HITS, "_value") else 0
+        misses = CACHE_MISSES._value.get() if hasattr(CACHE_MISSES, "_value") else 0
         total = hits + misses
         ratio = hits / total if total > 0 else 0.0
         CACHE_HIT_RATIO.set(round(ratio, 3))
     except Exception as e:
         logger.warning(f"[semantic_cache] Falha ao atualizar hit ratio: {e}")
-
 
 # ============================================================
 # 🔍 Consulta ao cache (Redis → Chroma)

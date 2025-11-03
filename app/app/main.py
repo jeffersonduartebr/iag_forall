@@ -1,3 +1,15 @@
+"""
+main.py
+----------------------------------------------------
+Ponto de entrada da API principal do LLM Router Stack.
+
+Inclui:
+- Endpoint /metrics integrado ao registry global (Prometheus multiprocess).
+- Warmup assíncrono com preload de modelos Ollama e base RAG.
+- Roteamento híbrido (Bandit + NSGA-II + RAG + Juízes).
+- Administração dinâmica via Redis + MariaDB.
+"""
+
 import json
 import os
 import time
@@ -5,12 +17,23 @@ import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 
-from fastapi import FastAPI, HTTPException, Header, Body
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Header, Body, Response
+from fastapi.responses import JSONResponse
 
 from .settings_dynamic import settings
 from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
-from .observability import *
+from .observability import (
+    setup_logging,
+    logger,
+    registry,
+    render_metrics_response,
+    API_REQUESTS,
+    API_LATENCY,
+    ROUTER_CHOSEN,
+    CANDIDATE_COST,
+    CANDIDATE_LAT,
+    BANDIT_REWARD,
+)
 from .providers import _ensure_ollama_model
 from .router_core import route_and_answer
 from .rag_local import add_document
@@ -23,7 +46,6 @@ from .routers import rag_router
 # ------------------------------------------------------
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 setup_logging()
-logger = logging.getLogger(__name__)
 logging.getLogger("chromadb.telemetry").setLevel(logging.ERROR)
 
 app = FastAPI(title="LLM Router (Hybrid Bandit + NSGA-II + RAG + Judges)")
@@ -34,11 +56,13 @@ app = FastAPI(title="LLM Router (Hybrid Bandit + NSGA-II + RAG + Judges)")
 app.include_router(rag_router.router)
 
 # ------------------------------------------------------
-# Métricas Prometheus
+# Métricas Prometheus (usando registry global)
 # ------------------------------------------------------
 @app.get("/metrics")
 def metrics():
-    return PlainTextResponse(generate_latest().decode("utf-8"))
+    """Endpoint Prometheus com suporte a multiprocess."""
+    data, ctype = render_metrics_response()
+    return Response(content=data, media_type=ctype)
 
 # ------------------------------------------------------
 # Rotina de warmup assíncrona
@@ -84,7 +108,11 @@ async def on_startup():
             # 3️⃣ Requisições de teste
             samples = [
                 "Explique em 3 tópicos o que é NSGA-II e onde é aplicado.",
-                "Escreva um snippet Python que lê um CSV e calcula a média de uma coluna."
+                "Escreva um snippet Python que lê um CSV e calcula a média de uma coluna.",
+                "O que é RAG em sistemas de IA e como funciona?",
+                "Quais são as vantagens de usar um modelo Bandit para roteamento de LLMs?",
+                "Descreva a revolução francesa, seus principais eventos e consequências.", 
+                "Explique para uma criança o que são as marés e os seus movimentos." 
             ]
             for s in samples:
                 try:
@@ -131,7 +159,7 @@ async def route_query(req: QueryRequest):
     cost = float(result["cost_per_1k"])
     text = result["answer"]
 
-    # Recompensa acoplada ao NSGA-II
+    # Recompensa acoplada ao NSGA-II / Bandit
     try:
         reward = compute_reward(chosen_model or "unknown", quality, latency)
         bandit_update(chosen_model or "unknown", req.query, reward)
@@ -164,7 +192,7 @@ async def route_query(req: QueryRequest):
     return QueryResponse(answer=text, model=chosen_model, route=route, candidates=[candidate])
 
 # ------------------------------------------------------
-# Administração: SETTINGS dinâmicos (Redis+DB)
+# Administração: SETTINGS dinâmicos (Redis + DB)
 # ------------------------------------------------------
 def _require_admin(token: Optional[str]):
     if token != settings.ADMIN_TOKEN:
@@ -187,7 +215,6 @@ def set_settings(
         settings.set(k, v, actor="api", source="admin")
     return {"ok": True, "applied": sorted(payload.keys())}
 
-# Retém compat com endpoints antigos
 @app.get("/admin/judges", response_model=List[str])
 async def get_judges():
     return settings.JUDGE_MODELS

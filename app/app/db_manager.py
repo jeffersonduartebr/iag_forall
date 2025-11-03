@@ -17,11 +17,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from redis import Redis
 
-# ✅ CORRIGIDO: Importa o settings
+# ✅ Importa settings centralizado
 try:
     from app.settings_dynamic import settings
 except ImportError:
-    # Fallback se o path for diferente
     import sys
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from app.settings_dynamic import settings
@@ -31,32 +30,27 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 # ============================================================
-# ⚙️ Configurações do banco e Redis (Lidas do settings)
+# ⚙️ Configurações de banco e Redis
 # ============================================================
 
-# ✅ CORRIGIDO: Lê do settings
 DB_HOST = settings.DB_HOST
 DB_USER = settings.DB_USER
 DB_PASS = settings.DB_PASS
 DB_NAME = settings.DB_NAME
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 
-# ✅ CORRIGIDO: Lê do settings
 REDIS_HOST = settings.REDIS_HOST
 REDIS_PORT = settings.REDIS_PORT
-REDIS_PASS = settings.get("REDIS_PASS", "SenhaForte") # .get() para chaves não-padrão
+REDIS_PASS = settings.get("REDIS_PASS", "SenhaForte")
 
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
-# (O cliente Redis é mantido caso seja usado para outras tarefas de
-#  inicialização de DADOS, mas não de CONFIG)
 redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASS, decode_responses=True)
 
 # ============================================================
-# 🧱 Tabelas da aplicação (Tabelas de DADOS)
+# 🧱 Tabelas da aplicação (schemas de DADOS)
 # ============================================================
 
 TABLES_DDL = {
-    
     # Histórico das médias exponenciais
     "ema_history": """
         CREATE TABLE IF NOT EXISTS ema_history (
@@ -69,6 +63,7 @@ TABLES_DDL = {
                 ON UPDATE CURRENT_TIMESTAMP
         );
     """,
+
     # Log de atualizações de EMA
     "ema_history_log": """
         CREATE TABLE IF NOT EXISTS ema_history_log (
@@ -82,6 +77,7 @@ TABLES_DDL = {
             INDEX idx_model_created_at (model, created_at)
         );
     """,
+
     # Estatísticas contextuais do Bandit
     "bandit_context_stats": """
         CREATE TABLE IF NOT EXISTS bandit_context_stats (
@@ -95,21 +91,8 @@ TABLES_DDL = {
             UNIQUE KEY uq_ctx_model (context_type, model)
         ) ENGINE=InnoDB;
     """,
-    # Métricas agregadas por modelo (Schema antigo, pode ser redundante)
-    "model_metrics": """
-        CREATE TABLE IF NOT EXISTS model_metrics (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            model VARCHAR(255) NOT NULL,
-            avg_latency FLOAT DEFAULT 0,
-            avg_quality FLOAT DEFAULT 0,
-            avg_cost FLOAT DEFAULT 0,
-            total_queries INT DEFAULT 0,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP 
-                ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uq_model (model)
-        );
-    """,
-    # Log detalhado de consultas
+
+    # Log detalhado de consultas (usado por NSGA e métricas)
     "query_log": """
         CREATE TABLE IF NOT EXISTS query_log (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -125,7 +108,8 @@ TABLES_DDL = {
             INDEX idx_created_at (created_at)
         );
     """,
-    # Cache semântico (Tabela de dados, separada do Chroma)
+
+    # Cache semântico (dados auxiliares, separado do Chroma)
     "semantic_cache": """
         CREATE TABLE IF NOT EXISTS semantic_cache (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -138,7 +122,8 @@ TABLES_DDL = {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """,
-    # Log dos juízes (criado pelo judges.py, mas definido aqui por centralização)
+
+    # Log dos juízes (auditoria de fallback e scores)
     "judge_logs": """
         CREATE TABLE IF NOT EXISTS judge_logs (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -152,7 +137,8 @@ TABLES_DDL = {
             event_type VARCHAR(50)
         );
     """,
-    # Métricas detalhadas por modelo e geração
+
+    # ✅ Schema único e atualizado de métricas detalhadas
     "model_metrics": """
         CREATE TABLE IF NOT EXISTS model_metrics (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -165,12 +151,12 @@ TABLES_DDL = {
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP 
                 ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_model_timestamp (model, timestamp)
-        );        
+        );
     """
 }
 
 # ============================================================
-# 🗂 Execução do init_db.sql (opcional)
+# 🗂 Execução opcional de init_db.sql
 # ============================================================
 
 def _execute_init_sql():
@@ -196,35 +182,26 @@ def _execute_init_sql():
 # ============================================================
 
 def initialize_tables():
-    """Cria ou atualiza todas as tabelas de DADOS do sistema."""
-    logger.info("[db_manager] Verificando e criando tabelas de dados necessárias...")
+    """Cria ou atualiza todas as tabelas necessárias."""
+    logger.info("[db_manager] Verificando/criando tabelas de dados...")
     try:
         with engine.begin() as conn:
             for name, ddl in TABLES_DDL.items():
                 conn.execute(text(ddl))
-                logger.info(f"✅ Tabela de dados verificada/criada: {name}")
+                logger.info(f"✅ Tabela verificada/criada: {name}")
     except SQLAlchemyError as e:
         logger.error(f"[db_manager] Erro ao criar tabelas: {e}")
-
-# ============================================================
-# 🧩 Inicialização do Redis (Removida)
-# ============================================================
-
-# ❌ REMOVIDO: A função initialize_redis() foi removida.
-# A configuração agora é lida pelo settings_dynamic.py e 
-# escrita pelo admin/settings (main.py).
 
 # ============================================================
 # 🚀 Inicialização completa
 # ============================================================
 
 def initialize_system():
-    """Inicializa o banco de dados (schemas de DADOS)."""
-    logger.info("🚀 Iniciando setup do banco de dados (tabelas de dados)...")
+    """Inicializa todas as tabelas e scripts opcionais."""
+    logger.info("🚀 Iniciando setup do banco de dados...")
     initialize_tables()
     _execute_init_sql()
-    # ❌ REMOVIDO: Chamada para initialize_redis()
-    logger.info("✅ Banco de dados (tabelas de dados) inicializado com sucesso.")
+    logger.info("✅ Banco de dados inicializado com sucesso.")
 
 # ============================================================
 # 🎯 Execução direta

@@ -43,6 +43,12 @@ RUN pip install --upgrade pip && \
 ENV PATH="/app:${PATH}"
 ENV PYTHONPATH="/app"
 
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
+    PYTHONUNBUFFERED=1 \
+    CHROMA_TELEMETRY_ENABLED=false
+
+# Cria diretório compartilhado de métricas
+RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
 # =========================================================
 # 🛠 Prestart: inicialização de banco e Redis
 # =========================================================
@@ -61,4 +67,4 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=5 CMD curl -f http://localhost
 # 🧩 Entrada padrão
 # =========================================================
 ENTRYPOINT ["/app/prestart.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

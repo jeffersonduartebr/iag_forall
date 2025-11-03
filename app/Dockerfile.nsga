@@ -27,7 +27,7 @@ COPY ./app/requirements.nsga.txt /app/requirements.nsga.txt
 # =========================================================
 # Troca o repositório para o CDN oficial antes de fazer o update
 RUN sed -i 's/deb.debian.org/cdn-aws.deb.debian.org/g' /etc/apt/sources.list.d/debian.sources
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential libmariadb-dev netcat-openbsd pkg-config curl vim && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libmariadb-dev netcat-openbsd pkg-config curl mariadb-client redis-tools && rm -rf /var/lib/apt/lists/*
 
 # =========================================================
 # 🧩 Instala dependências Python
@@ -42,7 +42,6 @@ RUN pip install --upgrade pip && \
 # 3. Define explicitamente o PYTHONPATH
 #    Isto diz ao Python para procurar pacotes em /app
 ENV PYTHONPATH=/app
-ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom/nsga_updater
 ENV REDIS_HOST=redis
 ENV REDIS_PORT=6379
 ENV DB_HOST=mariadb
@@ -51,9 +50,16 @@ ENV DB_PASS=router_pass
 ENV DB_NAME=routerdb
 ENV DEAP_DEBUG=false
 ENV REDIS_PASSWORD=SenhaForte
+ENV REDIS_PASS=SenhaForte
 
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
+    PYTHONUNBUFFERED=1 \
+    CHROMA_TELEMETRY_ENABLED=false
+
+# Cria diretório compartilhado de métricas
+RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
 # =========================================================
-# 🔧 Script de inicialização (Correto)
+# 🔧 Script de inicialização 
 # =========================================================
 # 4. Usa 'python -m app.db_manager'
 RUN echo '#!/bin/bash\n\
@@ -70,12 +76,15 @@ HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -f http://localhost
 # =========================================================
 # 🔧 Prestart script — garante que Redis tenha modelos
 # =========================================================
-COPY ./prestart_nsga_populate.sh /app/prestart_nsga_populate.sh
-RUN chmod +x /app/prestart_nsga_populate.sh
+RUN ls -laht .
+RUN pwd
 
-ENTRYPOINT ["/app/prestart_nsga_populate.sh"]
+COPY ./app/prestart_nsga.sh /app/prestart_nsga.sh
+RUN chmod +x /app/prestart_nsga.sh
+
+ENTRYPOINT ["/app/prestart_nsga.sh"]
 
 # 6. CORRIGIDO: Executa como módulo 'app.nsga_weights_updater'
 # O Python (com PYTHONPATH=/app) procura o pacote 'app' (em /app/app)
 # e depois executa 'nsga_weights_updater'
-CMD ["python", "-m", "app.app.nsga_weights_updater"]
+CMD ["python", "-m", "app.nsga_weights_updater"]

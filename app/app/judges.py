@@ -2,17 +2,16 @@
 judges.py
 ----------------------------------------------------
 Sistema de avaliação de respostas (juízes LLM + heurístico + RAG)
-com fallback automático e auditoria em banco de dados.
+com fallback dinâmico e auditoria em banco de dados.
 ----------------------------------------------------
 Novidades:
-✅ Fallback automático para GPT-4.1 quando um juiz falha ou retorna 0.00
-✅ Registro detalhado de todos os eventos de fallback em judge_logs
+✅ Fallback dinâmico baseado em JUDGE_MODELS (Redis)
+✅ Registro detalhado de todos os eventos de fallback
 ✅ Total rastreabilidade das decisões de avaliação
 """
 
 import logging
 import re
-import os
 from typing import List, Dict, Any
 from sqlalchemy import create_engine, text
 from .settings_dynamic import settings
@@ -25,7 +24,6 @@ logger = logging.getLogger(__name__)
 # ======================================================
 # 🔧 Banco de dados (para auditoria)
 # ======================================================
-# ✅ CORRIGIDO: Lê as credenciais do settings (Redis > DB > .env)
 DB_HOST = settings.DB_HOST
 DB_USER = settings.DB_USER
 DB_PASS = settings.DB_PASS
@@ -40,10 +38,8 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
     """Recupera contexto relevante da base vetorial (ChromaDB)."""
     try:
         query_vec = await embed_text(query)
-        # ✅ CORRIGIDO: Lê o nome da coleção RAG do settings
         collection_name = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
         results = await query_embedding(collection_name, query_vec, n_results=n_results)
-        
         if not results or "documents" not in results or not results["documents"]:
             logger.info("[Judges] Nenhum contexto RAG recuperado.")
             return ""
@@ -55,7 +51,6 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
     except Exception as e:
         logger.error(f"[Judges] Falha ao obter contexto RAG: {e}")
         return ""
-
 
 # ======================================================
 # 🔹 Função principal de julgamento
@@ -76,21 +71,17 @@ async def judge_answer(query: str, answer: str, use_rag: bool = False) -> List[D
             results.append({"judge_id": "heuristic", "score": round(base_score, 3)})
             logger.info(f"[Judges] Heurístico: {base_score:.2f}")
 
-        # 2️⃣ LLM-based (com RAG e fallback)
+        # 2️⃣ LLM-based (com RAG e fallback dinâmico)
         if mode in ("llm", "hybrid"):
             llm_score = await llm_based_score(query, answer, use_rag)
             results.append({"judge_id": "llm", "score": round(llm_score, 3)})
             logger.info(f"[Judges] LLM: {llm_score:.2f}")
 
         valid_results = [r for r in results if "score" in r]
-        if not valid_results:
-            return [{"judge_id": "fallback", "score": 0.0}]
-        return valid_results
-
+        return valid_results or [{"judge_id": "fallback", "score": 0.0}]
     except Exception as e:
         logger.error(f"[Judges] Erro inesperado no julgamento: {e}")
         return [{"judge_id": "error", "score": 0.0}]
-
 
 # ======================================================
 # 🔹 Heurística simples
@@ -108,24 +99,15 @@ def heuristic_score(answer: str) -> float:
     except Exception:
         return 0.0
 
-
 # ======================================================
-# 🔹 Avaliação via modelos LLM (com fallback e auditoria)
+# 🔹 Avaliação via modelos LLM (com fallback dinâmico)
 # ======================================================
 async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
-    """Executa julgamento dinâmico com fallback para GPT-4.1 e registra auditoria."""
+    """Executa julgamento dinâmico com fallback baseado na lista JUDGE_MODELS."""
     try:
         judge_models = getattr(settings, "JUDGE_MODELS", [])
         if not judge_models:
-            # Fallback para uma propriedade antiga, se existir
-            old_prop = getattr(settings, "JUDGE_LLM_MODEL", None)
-            if old_prop:
-                judge_models = [old_prop] * getattr(settings, "JUDGE_LLM_N", 1)
-            else:
-                judge_models = ["openai/gpt-4o-mini"] # Default seguro
-
-        # ✅ CORRIGIDO: Lê o fallback do settings
-        fallback_model = settings.get("JUDGE_FALLBACK_MODEL", "openai/gpt-4.1")
+            judge_models = ["openai/gpt-4o-mini"]
 
         context = ""
         if use_rag:
@@ -156,26 +138,29 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
                 numeric = extract_score(text)
                 logger.info(f"[Judges] {model} → nota={numeric:.2f} (juiz {idx}/{len(judge_models)})")
 
+                # Fallback dinâmico se nota 0
                 if numeric == 0.0:
-                    logger.warning(f"[Judges] {model} retornou 0.00 — aplicando fallback {fallback_model}")
-                    fb_text, _ = call_model(model=fallback_model, prompt=prompt, temperature=0.2, max_tokens=32)
+                    logger.warning(f"[Judges] {model} retornou 0.00 — alternando para o próximo modelo.")
+                    next_model = judge_models[(idx) % len(judge_models)]
+                    fb_text, _ = call_model(model=next_model, prompt=prompt, temperature=0.2, max_tokens=32)
                     fb_score = extract_score(fb_text)
                     numeric = fb_score
-                    log_fallback_event(query, answer, model, 0.0, fallback_model, fb_score, "zero_score")
-                    logger.info(f"[Judges] Fallback {fallback_model} → nota={fb_score:.2f}")
+                    log_fallback_event(query, answer, model, 0.0, next_model, fb_score, "zero_score")
+                    logger.info(f"[Judges] Fallback dinâmico {next_model} → nota={fb_score:.2f}")
 
                 scores.append(numeric)
 
             except Exception as e:
                 logger.warning(f"[Judges] Falha no julgamento com {model}: {e}")
                 try:
-                    fb_text, _ = call_model(model=fallback_model, prompt=prompt, temperature=0.2, max_tokens=32)
+                    next_model = judge_models[(idx) % len(judge_models)]
+                    fb_text, _ = call_model(model=next_model, prompt=prompt, temperature=0.2, max_tokens=32)
                     fb_score = extract_score(fb_text)
-                    log_fallback_event(query, answer, model, None, fallback_model, fb_score, "exception")
-                    logger.info(f"[Judges] Fallback {fallback_model} → nota={fb_score:.2f}")
+                    log_fallback_event(query, answer, model, None, next_model, fb_score, "exception")
+                    logger.info(f"[Judges] Fallback dinâmico {next_model} → nota={fb_score:.2f}")
                     scores.append(fb_score)
                 except Exception as e2:
-                    logger.error(f"[Judges] Fallback {fallback_model} também falhou: {e2}")
+                    logger.error(f"[Judges] Fallback {next_model} também falhou: {e2}")
                     scores.append(0.0)
 
         if not scores:
@@ -184,11 +169,9 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
 
         avg = sum(scores) / len(scores)
         return round(avg / 10.0, 3)
-
     except Exception as e:
         logger.error(f"[Judges] Erro no julgamento via LLM: {e}")
         return 0.0
-
 
 # ======================================================
 # 🔹 Auditoria de fallback
@@ -198,7 +181,6 @@ def log_fallback_event(query: str, answer: str, model: str, score_before: float,
     """Registra evento de fallback ou substituição de nota no banco."""
     try:
         with engine.begin() as conn:
-            # ✅ CORRIGIDO: DDL para 'judge_logs'
             ddl_judge_logs = """
             CREATE TABLE IF NOT EXISTS judge_logs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -213,23 +195,16 @@ def log_fallback_event(query: str, answer: str, model: str, score_before: float,
             );
             """
             conn.execute(text(ddl_judge_logs))
-            
             conn.execute(text("""
                 INSERT INTO judge_logs
                 (query, answer, judge_model, score_before, fallback_model, score_after, event_type)
                 VALUES (:q, :a, :jm, :sb, :fb, :sa, :ev)
             """), {
-                "q": query,
-                "a": answer,
-                "jm": model,
-                "sb": score_before,
-                "fb": fallback_model,
-                "sa": score_after,
-                "ev": event_type
+                "q": query, "a": answer, "jm": model, "sb": score_before,
+                "fb": fallback_model, "sa": score_after, "ev": event_type
             })
     except Exception as e:
         logger.error(f"[Judges] Erro ao registrar evento de auditoria: {e}")
-
 
 # ======================================================
 # 🔹 Extração de nota reforçada

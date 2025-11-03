@@ -4,3 +4,4 @@ chromadb
 numpy
 redis
 sqlalchemy
+pymysql

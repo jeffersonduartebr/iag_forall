@@ -48,6 +48,12 @@ ENV DB_PASS=router_pass
 ENV DB_NAME=routerdb
 ENV PROM_PORT=8050
 
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
+    PYTHONUNBUFFERED=1 \
+    CHROMA_TELEMETRY_ENABLED=false
+
+# Cria diretório compartilhado de métricas
+RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
 # ---------------------------------------------------------
 # 🚀 Inicialização (aguarda dependências)
 # ---------------------------------------------------------
