@@ -1,4 +1,4 @@
-# db_manager.py
+# -*- coding: utf-8 -*-
 """
 db_manager.py
 ----------------------------------------------------
@@ -109,7 +109,7 @@ TABLES_DDL = {
         );
     """,
 
-    # Cache semântico (dados auxiliares, separado do Chroma)
+    # Cache semântico (dados auxiliares)
     "semantic_cache": """
         CREATE TABLE IF NOT EXISTS semantic_cache (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -138,7 +138,7 @@ TABLES_DDL = {
         );
     """,
 
-    # ✅ Schema único e atualizado de métricas detalhadas
+    # Métricas detalhadas de desempenho dos modelos
     "model_metrics": """
         CREATE TABLE IF NOT EXISTS model_metrics (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -160,6 +160,7 @@ TABLES_DDL = {
 # ============================================================
 
 def _execute_init_sql():
+    """Executa o script init_db.sql, se existir no diretório /db."""
     sql_path = os.path.join(os.getcwd(), "db", "init_db.sql")
     if not os.path.exists(sql_path):
         logger.info("[db_manager] Nenhum init_db.sql encontrado — prosseguindo.")
@@ -187,10 +188,13 @@ def initialize_tables():
     try:
         with engine.begin() as conn:
             for name, ddl in TABLES_DDL.items():
-                conn.execute(text(ddl))
-                logger.info(f"✅ Tabela verificada/criada: {name}")
+                try:
+                    conn.execute(text(ddl))
+                    logger.info(f"✅ Tabela verificada/criada: {name}")
+                except SQLAlchemyError as e:
+                    logger.error(f"[db_manager] Falha ao criar tabela {name}: {e}")
     except SQLAlchemyError as e:
-        logger.error(f"[db_manager] Erro ao criar tabelas: {e}")
+        logger.error(f"[db_manager] Erro geral ao criar tabelas: {e}")
 
 # ============================================================
 # 🚀 Inicialização completa

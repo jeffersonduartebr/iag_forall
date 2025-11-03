@@ -69,7 +69,7 @@ def _load_ema_from_db():
     try:
         with engine.connect() as conn:
             result = conn.execute(text("SELECT * FROM ema_history"))
-            EMA_HISTORY = {row["model"]: dict(row._mapping) for row in result}
+            EMA_HISTORY = {row["model"]: dict(row) for row in result.mappings()}
         logger.info(f"[EMA] Histórico EMA carregado ({len(EMA_HISTORY)} modelos).")
     except SQLAlchemyError as e:
         logger.warning(f"[EMA] Falha ao carregar histórico EMA: {e}")

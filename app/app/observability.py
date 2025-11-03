@@ -2,22 +2,24 @@
 observability.py
 ----------------------------------------------------
 Gerencia métricas Prometheus (modo multiprocess ou single-process)
-e logging estruturado via Structlog, com um único CollectorRegistry
-compartilhado por toda a aplicação.
+e logging estruturado via Structlog, com suporte a UTF-8 (acentos legíveis).
 
 Principais pontos:
 - NÃO apaga arquivos do diretório multiprocess (evita perda de métricas).
 - Exporta helpers para renderizar /metrics com o registry correto.
-- Mantém as métricas já utilizadas no projeto.
+- Configura logs JSON legíveis em UTF-8 (sem XXXX).
 """
+# -*- coding: utf-8 -*-
 
 from __future__ import annotations
 
 import os
+import sys
+import json
 import logging
 import structlog
+from datetime import datetime
 from typing import Optional
-
 from prometheus_client import (
     Counter,
     Histogram,
@@ -27,6 +29,7 @@ from prometheus_client import (
     multiprocess,
 )
 from prometheus_client.exposition import CONTENT_TYPE_LATEST
+
 
 # ============================================================
 # ⚙️ Preparação do diretório multiprocess (sem limpeza destrutiva)
@@ -40,7 +43,6 @@ def _ensure_prometheus_dir() -> Optional[str]:
     """
     prom_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
     if not prom_dir:
-        # Operando em modo single-process
         print("[observability] PROMETHEUS_MULTIPROC_DIR não definido — modo single-process.")
         return None
 
@@ -49,22 +51,19 @@ def _ensure_prometheus_dir() -> Optional[str]:
         print(f"[observability] Diretório multiprocess ativo: {prom_dir}")
         return prom_dir
     except Exception as e:
-        # Se não conseguir criar o diretório, segue em modo single-process
         print(f"[observability] Aviso: falha ao preparar diretório multiprocess ({prom_dir}): {e}")
         return None
 
 
 _prom_dir = _ensure_prometheus_dir()
 
+
 # ============================================================
 # 🧠 Inicialização do CollectorRegistry (único e compartilhado)
 # ============================================================
 
 def _build_registry() -> CollectorRegistry:
-    """
-    Cria o CollectorRegistry global.
-    Se PROMETHEUS_MULTIPROC_DIR estiver definido, ativa MultiProcessCollector.
-    """
+    """Cria o CollectorRegistry global."""
     reg = CollectorRegistry()
     try:
         if _prom_dir:
@@ -73,7 +72,6 @@ def _build_registry() -> CollectorRegistry:
         else:
             print("[observability] Prometheus em modo single-process.")
     except Exception as e:
-        # Fallback de segurança para evitar crash em bootstrap
         print(f"[observability] Falha ao inicializar MultiProcessCollector: {e}")
         reg = CollectorRegistry()
     return reg
@@ -82,6 +80,7 @@ def _build_registry() -> CollectorRegistry:
 # Registry único exportado para o restante do sistema
 registry: CollectorRegistry = _build_registry()
 
+
 # ============================================================
 # 📤 Helper para expor /metrics com o registry correto
 # ============================================================
@@ -89,18 +88,10 @@ registry: CollectorRegistry = _build_registry()
 def render_metrics_response():
     """
     Retorna (body_bytes, content_type_str) para ser usado em endpoints /metrics.
-
-    Exemplo (FastAPI):
-        from fastapi import Response
-        from app.observability import render_metrics_response
-
-        @app.get("/metrics")
-        def metrics():
-            body, ctype = render_metrics_response()
-            return Response(content=body, media_type=ctype)
     """
     data = generate_latest(registry)
     return data, CONTENT_TYPE_LATEST
+
 
 # ============================================================
 # 📈 Definição das métricas (todas registradas no `registry` global)
@@ -201,34 +192,80 @@ ROUTER_LOCAL_USAGE_RATIO = Gauge(
     registry=registry,
 )
 
+
 # ============================================================
-# 🪵 Logging estruturado com Structlog (idempotente)
+# 🪵 Logging estruturado com UTF-8 (Structlog + JSON)
 # ============================================================
 
 _logger_configured = False
 logger = structlog.get_logger("observability")
 
+
+class JsonUTF8Renderer:
+    """Renderizador JSON que mantém acentuação legível."""
+
+    def __call__(self, logger, name, event_dict):
+        try:
+            return json.dumps(event_dict, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": f"Falha ao serializar log: {e}", **event_dict})
+
+
 def setup_logging(level: int = logging.INFO):
     """
-    Configura o Structlog para JSON com timestamp e nível de log.
+    Configura o Structlog para JSON com timestamp e UTF-8 legível.
     Idempotente: só configura uma vez.
     """
     global _logger_configured
     if _logger_configured:
         return
 
+    # Força UTF-8 em stdout
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        else:
+            import io
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    except Exception as e:
+        print(f"[observability] Aviso: não foi possível forçar UTF-8 no stdout: {e}")
+
+
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer(),
+            JsonUTF8Renderer(),
         ]
     )
 
     logging.basicConfig(
         level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,
     )
 
     _logger_configured = True
     logger.info("[observability] Logging configurado com sucesso.")
+
+
+# ============================================================
+# 🔧 Helper alternativo para log estruturado manual (UTF-8)
+# ============================================================
+
+def json_log(level: str, event: str, **fields):
+    """
+    Log estruturado em UTF-8 (sem escapes XXXX).
+    Exemplo:
+        json_log("info", "Nova requisição recebida", query=req.query)
+    """
+    record = {
+        "timestamp": datetime.utcnow().isoformat(timespec="microseconds") + "Z",
+        "level": level,
+        "event": event,
+        **fields,
+    }
+    msg = json.dumps(record, ensure_ascii=False)
+    log = logging.getLogger("observability")
+    getattr(log, level, log.info)(msg)

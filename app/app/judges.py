@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 judges.py
 ----------------------------------------------------
@@ -5,6 +6,7 @@ Sistema de avaliação de respostas (juízes LLM + heurístico + RAG)
 com fallback dinâmico e auditoria em banco de dados.
 ----------------------------------------------------
 Novidades:
+✅ Seleção aleatória de 2 juízes a cada julgamento
 ✅ Fallback dinâmico baseado em JUDGE_MODELS (Redis)
 ✅ Registro detalhado de todos os eventos de fallback
 ✅ Total rastreabilidade das decisões de avaliação
@@ -12,6 +14,7 @@ Novidades:
 
 import logging
 import re
+import random
 from typing import List, Dict, Any
 from sqlalchemy import create_engine, text
 from .settings_dynamic import settings
@@ -30,6 +33,8 @@ DB_PASS = settings.DB_PASS
 DB_NAME = settings.DB_NAME
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 engine = create_engine(DB_URL, pool_pre_ping=True)
+
+DISAGREE_PERCENT = 0.20 # 20% de desacordo aciona meta-avaliação
 
 # ======================================================
 # 🔹 Recuperação de contexto (RAG dinâmico)
@@ -100,14 +105,18 @@ def heuristic_score(answer: str) -> float:
         return 0.0
 
 # ======================================================
-# 🔹 Avaliação via modelos LLM (com fallback dinâmico)
+# 🔹 Avaliação via modelos LLM (com fallback dinâmico e seleção aleatória)
 # ======================================================
 async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
-    """Executa julgamento dinâmico com fallback baseado na lista JUDGE_MODELS."""
+    """Executa julgamento dinâmico com fallback baseado em 2 juízes aleatórios."""
     try:
         judge_models = getattr(settings, "JUDGE_MODELS", [])
         if not judge_models:
             judge_models = ["openai/gpt-4o-mini"]
+
+        # ✅ Seleciona dois juízes aleatórios (sem repetição)
+        selected_judges = random.sample(judge_models, min(2, len(judge_models)))
+        logger.info(f"[Judges] Selecionados {selected_judges} para avaliação desta resposta.")
 
         context = ""
         if use_rag:
@@ -132,32 +141,33 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
         ).strip()
 
         scores = []
-        for idx, model in enumerate(judge_models, start=1):
+
+        # ✅ Agora só percorremos os 2 juízes aleatórios
+        for idx, model in enumerate(selected_judges, start=1):
             try:
                 text, _ = call_model(model=model, prompt=prompt, temperature=0.2, max_tokens=32)
                 numeric = extract_score(text)
-                logger.info(f"[Judges] {model} → nota={numeric:.2f} (juiz {idx}/{len(judge_models)})")
+                logger.info(f"[Judges] {model} → nota={numeric:.2f} (juiz {idx}/{len(selected_judges)})")
 
-                # Fallback dinâmico se nota 0
-                if numeric == 0.0:
-                    logger.warning(f"[Judges] {model} retornou 0.00 — alternando para o próximo modelo.")
-                    next_model = judge_models[(idx) % len(judge_models)]
+                # fallback se nota for 0
+                if numeric == 0.0 and len(selected_judges) > 1:
+                    next_model = selected_judges[(idx) % len(selected_judges)]
                     fb_text, _ = call_model(model=next_model, prompt=prompt, temperature=0.2, max_tokens=32)
                     fb_score = extract_score(fb_text)
-                    numeric = fb_score
                     log_fallback_event(query, answer, model, 0.0, next_model, fb_score, "zero_score")
-                    logger.info(f"[Judges] Fallback dinâmico {next_model} → nota={fb_score:.2f}")
+                    logger.info(f"[Judges] Fallback {next_model} → nota={fb_score:.2f}")
+                    numeric = fb_score
 
                 scores.append(numeric)
 
             except Exception as e:
                 logger.warning(f"[Judges] Falha no julgamento com {model}: {e}")
                 try:
-                    next_model = judge_models[(idx) % len(judge_models)]
+                    next_model = selected_judges[(idx) % len(selected_judges)]
                     fb_text, _ = call_model(model=next_model, prompt=prompt, temperature=0.2, max_tokens=32)
                     fb_score = extract_score(fb_text)
                     log_fallback_event(query, answer, model, None, next_model, fb_score, "exception")
-                    logger.info(f"[Judges] Fallback dinâmico {next_model} → nota={fb_score:.2f}")
+                    logger.info(f"[Judges] Fallback {next_model} → nota={fb_score:.2f}")
                     scores.append(fb_score)
                 except Exception as e2:
                     logger.error(f"[Judges] Fallback {next_model} também falhou: {e2}")
@@ -169,6 +179,7 @@ async def llm_based_score(query: str, answer: str, use_rag: bool) -> float:
 
         avg = sum(scores) / len(scores)
         return round(avg / 10.0, 3)
+
     except Exception as e:
         logger.error(f"[Judges] Erro no julgamento via LLM: {e}")
         return 0.0

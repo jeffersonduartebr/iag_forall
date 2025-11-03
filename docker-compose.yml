@@ -44,6 +44,10 @@ services:
       - REDIS_PORT=6379
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
       - CHROMA_TELEMETRY_ENABLED=false
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=UTF-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
     volumes:
       - ./state:/app/state
       - ./data:/app/data
@@ -83,6 +87,10 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=SenhaForte
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=UTF-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
     volumes:
       - ./app:/app
       - prometheus_data:/tmp/prom
@@ -112,6 +120,10 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=SenhaForte
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=UTF-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
     ports:
       - "9105:9105"
     volumes:
