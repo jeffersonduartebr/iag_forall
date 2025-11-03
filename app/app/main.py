@@ -21,7 +21,8 @@ from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException, Header, Body, Response
 from fastapi.responses import JSONResponse
-
+from .prometheus_setup import setup_prometheus, prometheus_metrics
+from .metrics_collector import _ensure_model_metrics_table
 from .settings_dynamic import settings
 from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
 from .observability import (
@@ -50,6 +51,8 @@ os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 setup_logging()
 logging.getLogger("chromadb.telemetry").setLevel(logging.ERROR)
 
+# Inicializa Prometheus antes do app
+setup_prometheus()
 app = FastAPI(title="LLM Router (Hybrid Bandit + NSGA-II + RAG + Judges)")
 
 # ------------------------------------------------------
@@ -79,6 +82,11 @@ async def on_startup():
             r = get_redis(max_wait_s=45)
             if r is None:
                 logger.warning("[warmup] Redis indisponível — seguindo sem cache.")
+            # 0) Garante tabela de métricas para evitar erros de leitura
+            try:
+                _ensure_model_metrics_table()
+            except Exception as e:
+                logger.warning("[warmup] Falha ao garantir model_metrics: %s", e)
 
             # Garante modelos Ollama
             ollama_models = [

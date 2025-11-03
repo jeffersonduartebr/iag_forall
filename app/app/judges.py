@@ -93,7 +93,7 @@ def _adaptive_threshold(values: Sequence[float], base: float) -> float:
 
 def _ensure_judge_logs_table() -> None:
     """Cria tabelas se não existirem."""
-    ddl = """
+    ddl_logs = """
         CREATE TABLE IF NOT EXISTS judge_logs (
             id INT AUTO_INCREMENT PRIMARY KEY,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -106,6 +106,9 @@ def _ensure_judge_logs_table() -> None:
             event_type VARCHAR(50)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COLLATE=utf8mb4_unicode_ci;
+    """
+
+    ddl_perf = """
         CREATE TABLE IF NOT EXISTS judge_performance_log (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             judge_model VARCHAR(255) NOT NULL,
@@ -121,11 +124,16 @@ def _ensure_judge_logs_table() -> None:
             INDEX idx_window_end (window_end)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     """
+
     try:
         with engine.begin() as conn:
-            conn.execute(text(ddl))
+            # Executa separadamente
+            conn.execute(text(ddl_logs))
+            conn.execute(text(ddl_perf))
+        logger.info("[Judges] Tabelas verificadas/criadas com sucesso.")
     except SQLAlchemyError as exc:
         logger.warning("[Judges] Falha ao garantir tabelas: %s", exc)
+
 
 
 # ============================================================

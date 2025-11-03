@@ -12,6 +12,7 @@ Responsável por:
 import os
 import logging
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 # ============================================================
 # Logging
@@ -34,27 +35,28 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 # ============================================================
 # Garantia da tabela query_log
 # ============================================================
-def ensure_query_log():
-    """Cria a tabela query_log se não existir."""
+def ensure_query_log() -> None:
+    """Cria a tabela query_log caso ainda não exista."""
     ddl = """
-    CREATE TABLE IF NOT EXISTS query_log (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        query_text TEXT,
-        chosen_model VARCHAR(255),
-        answer MEDIUMTEXT,
-        quality FLOAT,
-        latency_s FLOAT,
-        cost_per_1k FLOAT,
-        reward FLOAT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_created_at (created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        CREATE TABLE IF NOT EXISTS query_log (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            query_text TEXT NOT NULL,
+            chosen_model VARCHAR(255) NOT NULL,
+            answer MEDIUMTEXT,
+            quality FLOAT,
+            latency_s FLOAT,
+            cost_per_1k FLOAT,
+            reward FLOAT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     """
     try:
         with engine.begin() as conn:
             conn.execute(text(ddl))
-    except Exception as e:
-        logger.warning(f"[query_service] Falha ao criar tabela query_log: {e}")
+        logger.info("[query_service] Tabela 'query_log' verificada/criada com sucesso.")
+    except SQLAlchemyError as exc:
+        logger.warning("[query_service] Falha ao garantir tabela query_log: %s", exc)
 
 # ============================================================
 # Inserção de log de consulta
