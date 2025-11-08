@@ -92,11 +92,12 @@ services:
       - LANG=C.UTF-8
       - LC_ALL=C.UTF-8
     volumes:
-      - ./app:/app
+      - ./app/app:/app/app   # 👈 Apenas o código Python é montado
       - prometheus_data:/tmp/prom
     restart: unless-stopped
     networks:
       - ai_net
+
 
   # =========================================================
   # 📈 Serviço de correlação de métricas NSGA-II

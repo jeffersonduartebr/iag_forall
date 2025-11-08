@@ -9,6 +9,8 @@ __pycache__/
 # Distribution / packaging
 ollama_data/
 chromadb-data/
+vllm_cache/
+models/
 vertex_api.json
 .env
 .Python

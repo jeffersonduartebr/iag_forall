@@ -19,8 +19,10 @@ import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 
+import requests
 from fastapi import FastAPI, HTTPException, Header, Body, Response
 from fastapi.responses import JSONResponse
+
 from .prometheus_setup import setup_prometheus, prometheus_metrics
 from .metrics_collector import _ensure_model_metrics_table
 from .settings_dynamic import settings
@@ -37,7 +39,6 @@ from .observability import (
     CANDIDATE_LAT,
     BANDIT_REWARD,
 )
-from .providers import _ensure_ollama_model
 from .router_core import route_and_answer
 from .rag_local import add_document
 from .bandits import bandit_update, compute_reward
@@ -51,26 +52,89 @@ os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 setup_logging()
 logging.getLogger("chromadb.telemetry").setLevel(logging.ERROR)
 
-# Inicializa Prometheus antes do app
 setup_prometheus()
 app = FastAPI(title="LLM Router (Hybrid Bandit + NSGA-II + RAG + Judges)")
 
 # ------------------------------------------------------
-# Roteador de RAG (upload e gestão de documentos)
+# 🔄 Validação e pré-download automático de modelos Ollama
+# ------------------------------------------------------
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"))
+
+async def preload_ollama_models():
+    """Valida e baixa automaticamente todos os modelos Ollama declarados no ambiente."""
+    try:
+        logger.info("[ollama-preload] Iniciando verificação de modelos Ollama...")
+
+        # 1️⃣ Coleta variáveis
+        candidates_raw = os.getenv("CANDIDATE_MODELS_LIST", "[]")
+        judges_raw = os.getenv("JUDGE_MODELS", "[]")
+        main_model = os.getenv("OLLAMA_MODEL", "")
+
+        all_models = []
+        for raw in (candidates_raw, judges_raw):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    all_models.extend(parsed)
+            except json.JSONDecodeError:
+                all_models.extend(raw.split(","))
+
+        if main_model:
+            all_models.append(main_model)
+        all_models = [m.strip() for m in all_models if m.strip() and m.startswith("ollama/")]
+        all_models = list(set(all_models))
+
+        if not all_models:
+            logger.info("[ollama-preload] Nenhum modelo Ollama detectado nas variáveis.")
+            return
+
+        # 2️⃣ Verifica modelos disponíveis localmente
+        try:
+            resp = await asyncio.to_thread(requests.get, f"{OLLAMA_HOST}/api/tags", 10)
+            resp.raise_for_status()
+            available = {m["name"] for m in resp.json().get("models", [])}
+        except Exception as e:
+            logger.warning(f"[ollama-preload] Falha ao listar modelos locais: {e}")
+            available = set()
+
+        # 3️⃣ Baixa modelos ausentes
+        for model in all_models:
+            name = model.split("/", 1)[1]
+            if name in available:
+                logger.info(f"[ollama-preload] Modelo '{name}' já disponível.")
+                continue
+
+            logger.info(f"[ollama-preload] Baixando modelo '{name}' via API...")
+            try:
+                with requests.post(f"{OLLAMA_HOST}/api/pull", json={"name": name}, stream=True, timeout=900) as r:
+                    for chunk in r.iter_lines(decode_unicode=True):
+                        if chunk:
+                            logger.info(f"[ollama-preload] {chunk}")
+                logger.info(f"[ollama-preload] Modelo '{name}' baixado com sucesso.")
+                await asyncio.sleep(2)
+            except Exception as e:
+                logger.error(f"[ollama-preload] Falha ao baixar '{name}': {e}")
+
+        logger.info("[ollama-preload] Verificação de modelos concluída ✅")
+
+    except Exception as e:
+        logger.exception(f"[ollama-preload] Erro geral: {e}")
+
+# ------------------------------------------------------
+# Roteador de RAG
 # ------------------------------------------------------
 app.include_router(rag_router.router)
 
 # ------------------------------------------------------
-# Métricas Prometheus (usando registry global)
+# Métricas Prometheus
 # ------------------------------------------------------
 @app.get("/metrics")
 def metrics():
-    """Endpoint Prometheus com suporte a multiprocess."""
     data, ctype = render_metrics_response()
     return Response(content=data, media_type=ctype)
 
 # ------------------------------------------------------
-# Rotina de warmup assíncrona
+# Warmup assíncrono
 # ------------------------------------------------------
 @app.on_event("startup")
 async def on_startup():
@@ -78,42 +142,24 @@ async def on_startup():
         try:
             logger.info("[warmup] Iniciando rotina de inicialização...")
 
-            # Espera Redis ficar pronto
+            # Redis
             r = get_redis(max_wait_s=45)
             if r is None:
                 logger.warning("[warmup] Redis indisponível — seguindo sem cache.")
-            # 0) Garante tabela de métricas para evitar erros de leitura
+
+            # Model metrics
             try:
                 _ensure_model_metrics_table()
             except Exception as e:
                 logger.warning("[warmup] Falha ao garantir model_metrics: %s", e)
 
-            # Garante modelos Ollama
-            ollama_models = [
-                m.replace("ollama/", "") for m in settings.CANDIDATE_MODELS_LIST
-                if isinstance(m, str) and m.startswith("ollama/")
-            ]
-            essentials = [settings.EMBED_MODEL]
-            for j in settings.JUDGE_MODELS:
-                if isinstance(j, str) and j.startswith("ollama/"):
-                    essentials.append(j.replace("ollama/", ""))
-                elif isinstance(j, str) and (":" in j and "/" not in j):
-                    essentials.append(j)
-            all_models = list({*ollama_models, *essentials})
+            # Pré-carrega modelos Ollama
+            await preload_ollama_models()
 
-            for model in all_models:
-                try:
-                    await asyncio.to_thread(_ensure_ollama_model, model)
-                except Exception as e:
-                    logger.warning(f"[warmup] Falha ao verificar modelo '{model}': {e}")
+            # Documento base
+            await add_document("intro", "NSGA-II é um algoritmo evolutivo multiobjetivo usado em otimização de Pareto.")
 
-            # Documento base de exemplo no RAG
-            await add_document(
-                "intro",
-                "NSGA-II é um algoritmo evolutivo multiobjetivo usado em otimização de Pareto.",
-            )
-
-            # Execução de teste inicial
+            # Teste inicial
             samples = [
                 "Explique o que é NSGA-II e onde é aplicado.",
                 "Escreva um código Python que calcule média de uma coluna CSV.",
@@ -134,7 +180,7 @@ async def on_startup():
     asyncio.create_task(_bg())
 
 # ------------------------------------------------------
-# Endpoint principal de inferência / roteamento
+# Endpoint principal /query
 # ------------------------------------------------------
 @app.post("/query", response_model=QueryResponse)
 async def route_query(req: QueryRequest):
@@ -164,7 +210,6 @@ async def route_query(req: QueryRequest):
     cost = float(result["cost_per_1k"])
     text = result["answer"]
 
-    # Recompensa NSGA-II / Bandit
     try:
         reward = compute_reward(chosen_model or "unknown", quality, latency)
         bandit_update(chosen_model or "unknown", req.query, reward)
@@ -173,7 +218,6 @@ async def route_query(req: QueryRequest):
         logger.warning(f"[bandit] Falha ao calcular/atualizar recompensa: {e}")
         reward = 0.0
 
-    # Persistência
     try:
         from .services.query_service import insert_query_log
         insert_query_log(

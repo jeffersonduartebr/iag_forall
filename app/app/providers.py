@@ -228,7 +228,7 @@ def call_model(
                 # - se SDK possui Responses API e o modelo é da família gpt-5/mini,
                 #   use Responses com max_output_tokens
                 if hasattr(client, "responses") and (
-                    "gpt-5" in model_name.lower() or "mini" in model_name.lower()
+                    "gpt-5" in model_name.lower() or "mini" in model_name.lower() or "nano" in model_name.lower()
                 ):
                     resp = client.responses.create(
                         model=model_name,

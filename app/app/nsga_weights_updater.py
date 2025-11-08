@@ -8,6 +8,7 @@ Serviço NSGA-II com fallback dinâmico entre modelos.
 - Executa o algoritmo multiobjetivo (latência, custo, qualidade, alinhamento)
 - Atualiza pesos ótimos no Redis e no banco
 - Expõe métricas via /metrics (Prometheus)
+- Aguarda Redis e MariaDB automaticamente (sem prestart.sh)
 """
 
 from __future__ import annotations
@@ -17,9 +18,11 @@ import os
 import random
 import threading
 import time
+import socket
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
+import pymysql
 import redis
 import uvicorn
 from deap import algorithms, base, creator, tools
@@ -28,7 +31,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import Counter, Gauge, REGISTRY, generate_latest
 from sqlalchemy import create_engine, text
 
-from .settings_dynamic import settings
+from app.settings_dynamic import settings
+
 
 # ============================================================
 # Logging
@@ -38,6 +42,77 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("nsga-updater")
+
+# ============================================================
+# 🕒 Aguarda Redis e MariaDB antes de iniciar
+# ============================================================
+
+def wait_for_service(host: str, port: int, name: str, timeout: int = 60, delay: int = 2) -> None:
+    """Aguarda disponibilidade TCP de um serviço."""
+    start = time.time()
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                logger.info(f"✅ {name} disponível em {host}:{port}")
+                return
+        except OSError:
+            elapsed = int(time.time() - start)
+            if elapsed > timeout:
+                logger.warning(f"⚠️ Timeout ao aguardar {name} ({host}:{port})")
+                return
+            logger.info(f"⏳ Aguardando {name}... ({elapsed}s)")
+            time.sleep(delay)
+
+
+def wait_for_redis(host: str, port: int, password: str, retries: int = 20, delay: int = 3) -> None:
+    """Verifica Redis até estar acessível."""
+    client = redis.Redis(host=host, port=port, password=password, socket_connect_timeout=2)
+    for i in range(1, retries + 1):
+        try:
+            if client.ping():
+                logger.info(f"✅ Redis disponível ({host}:{port})")
+                return
+        except redis.exceptions.ConnectionError:
+            logger.info(f"⏳ Tentativa {i}/{retries}: aguardando Redis...")
+        time.sleep(delay)
+    logger.warning("⚠️ Redis não respondeu após múltiplas tentativas.")
+
+
+def wait_for_mariadb(host: str, user: str, password: str, dbname: str, retries: int = 20, delay: int = 3) -> None:
+    """Verifica MariaDB até estar acessível."""
+    for i in range(1, retries + 1):
+        try:
+            conn = pymysql.connect(
+                host=host,
+                user=user,
+                password=password,
+                database=dbname,
+                connect_timeout=2,
+            )
+            conn.close()
+            logger.info(f"✅ MariaDB disponível ({host})")
+            return
+        except pymysql.err.OperationalError:
+            logger.info(f"⏳ Tentativa {i}/{retries}: aguardando MariaDB...")
+        time.sleep(delay)
+    logger.warning("⚠️ MariaDB não respondeu após múltiplas tentativas.")
+
+
+# Executa as verificações iniciais
+logger.info("🚀 Inicializando NSGA-II com verificação de dependências...")
+redis_host = os.getenv("REDIS_HOST", "redis")
+redis_port = int(os.getenv("REDIS_PORT", "6379"))
+redis_pass = os.getenv("REDIS_PASSWORD", "SenhaForte")
+db_host = os.getenv("DB_HOST", "mariadb")
+db_user = os.getenv("DB_USER", "router_user")
+db_pass = os.getenv("DB_PASS", "router_pass")
+db_name = os.getenv("DB_NAME", "routerdb")
+
+wait_for_service(db_host, 3306, "MariaDB TCP")
+wait_for_service(redis_host, redis_port, "Redis TCP")
+wait_for_redis(redis_host, redis_port, redis_pass)
+wait_for_mariadb(db_host, db_user, db_pass, db_name)
+logger.info("✅ Todas as dependências disponíveis. Iniciando NSGA-II.")
 
 # ============================================================
 # Banco e Redis
@@ -107,7 +182,6 @@ def ensure_tables():
     with engine.begin() as conn:
         conn.execute(text(ddl))
 
-
 # ============================================================
 # Leitura de dados históricos
 # ============================================================
@@ -158,7 +232,6 @@ def load_recent_query_logs(minutes_back: int, max_rows: int) -> List[Dict[str, A
     except Exception as e:
         logger.warning("[nsga] Falha ao ler query_log: %s", e)
         return []
-
 
 # ============================================================
 # NSGA-II principal
@@ -226,7 +299,6 @@ def run_nsga(models: List[str], pm_obs: Dict[str, Dict[str, float]], align: Dict
     NSGA_BEST_ALIGNMENT.set(aln)
 
     return {models[i]: float(w[i]) for i in range(n)}
-
 
 # ============================================================
 # Execução periódica
@@ -320,17 +392,14 @@ def nsga_loop():
         time.sleep(UPDATE_INTERVAL_S)
         one_iteration()
 
-
 # ============================================================
 # API FastAPI
 # ============================================================
 app = FastAPI(title="NSGA Weights Updater")
 
-
 @app.get("/metrics")
 def metrics():
     return PlainTextResponse(generate_latest(REGISTRY).decode("utf-8"))
-
 
 @app.get("/health")
 def health():
@@ -349,7 +418,6 @@ def health():
             "last_run_epoch": int(time.time()),
         }
     )
-
 
 # ============================================================
 # Entry Point

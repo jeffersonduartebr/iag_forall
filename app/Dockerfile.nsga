@@ -1,90 +1,71 @@
 # =========================================================
-# 🧠 Dockerfile.nsga — Serviço de otimização multiobjetivo
+# 🧠 Dockerfile.nsga — Serviço de otimização multiobjetivo (NSGA-II)
 # =========================================================
-FROM python:3.11-slim AS base
+FROM python:3.11-slim
 
 LABEL maintainer="Jefferson Duarte <jefferson.igorbr@gmail.com>"
 LABEL description="NSGA-II Optimizer for LLM Router (Prometheus + Redis + MariaDB)"
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+# ---------------------------------------------------------
+# 🧰 Dependências de sistema
+# ---------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libmariadb-dev \
+    pkg-config \
+    curl \
+    netcat-traditional \
+    mariadb-client \
+    redis-tools \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# 1. Define o WORKDIR. /app será o nosso diretório base.
+# ---------------------------------------------------------
+# 📁 Estrutura do app
+# ---------------------------------------------------------
 WORKDIR /app
 
-# =========================================================
-# 📁 Copia os arquivos necessários da aplicação
-# =========================================================
-# 2. Copia ./app (local) para /app/app (container)
-#    Isto cria a estrutura de pacote 'app' (em /app/app)
-#    (Isto irá agora incluir o seu novo ficheiro __init__.py)
 COPY ./app /app/app
 COPY ./app/requirements.nsga.txt /app/requirements.nsga.txt
 
-# =========================================================
-# 📦 Dependências básicas
-# =========================================================
-# Troca o repositório para o CDN oficial antes de fazer o update
-RUN sed -i 's/deb.debian.org/cdn-aws.deb.debian.org/g' /etc/apt/sources.list.d/debian.sources
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential libmariadb-dev netcat-openbsd pkg-config curl mariadb-client redis-tools && rm -rf /var/lib/apt/lists/*
+# ---------------------------------------------------------
+# 📦 Instala dependências Python
+# ---------------------------------------------------------
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install -r /app/requirements.nsga.txt
+RUN pip install --no-cache-dir prometheus_client redis sqlalchemy pymysql deap fastapi uvicorn python-dotenv
 
-# =========================================================
-# 🧩 Instala dependências Python
-# =========================================================
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.nsga.txt && \
-    pip install --no-cache-dir python-dotenv
-
-# =========================================================
+# ---------------------------------------------------------
 # ⚙️ Variáveis de ambiente padrão
-# =========================================================
-# 3. Define explicitamente o PYTHONPATH
-#    Isto diz ao Python para procurar pacotes em /app
-ENV PYTHONPATH=/app
-ENV REDIS_HOST=redis
-ENV REDIS_PORT=6379
+# ---------------------------------------------------------
+ENV PYTHONUNBUFFERED=1
 ENV DB_HOST=mariadb
 ENV DB_USER=router_user
 ENV DB_PASS=router_pass
 ENV DB_NAME=routerdb
-ENV DEAP_DEBUG=false
-ENV REDIS_PASSWORD=SenhaForte
+ENV REDIS_HOST=redis
+ENV REDIS_PORT=6379
 ENV REDIS_PASS=SenhaForte
+ENV REDIS_PASSWORD=SenhaForte
+ENV NSGA_UPDATE_INTERVAL_S=300
+ENV NSGA_LOOKBACK_MINUTES=180
+ENV NSGA_LOOKBACK_MAXROWS=2000
 
 ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
     PYTHONUNBUFFERED=1 \
     CHROMA_TELEMETRY_ENABLED=false
 
-# Cria diretório compartilhado de métricas
+# ---------------------------------------------------------
+# 📊 Diretório Prometheus
+# ---------------------------------------------------------
 RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
-# =========================================================
-# 🔧 Script de inicialização 
-# =========================================================
-# 4. Usa 'python -m app.db_manager'
-RUN echo '#!/bin/bash\n\
-echo "⏳ Aguardando Banco e Redis..."\n\
-until nc -z ${DB_HOST:-mariadb} 3306; do sleep 2; echo "Aguardando MariaDB..."; done\n\
-until nc -z ${REDIS_HOST:-redis} ${REDIS_PORT:-6379}; do sleep 2; echo "Aguardando Redis..."; done\n\
-echo "✅ Serviços disponíveis, inicializando NSGA-II..."\n\
-# O serviço db_init já faz isto, mas esta chamada é uma garantia.\n\
-python -m app.app.db_manager || echo "⚠️ Banco já sincronizado ou inicialização ignorada."\n\
-exec "$@"' > /app/prestart_nsga.sh && chmod +x /app/prestart_nsga.sh
 
-HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -f http://localhost:9999/metrics || exit 1
+# ---------------------------------------------------------
+# 🩺 Healthcheck (verifica se o endpoint /metrics está ativo)
+# ---------------------------------------------------------
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 CMD curl -sf http://localhost:9999/metrics || exit 1
 
-# =========================================================
-# 🔧 Prestart script — garante que Redis tenha modelos
-# =========================================================
-RUN ls -laht .
-RUN pwd
-
-COPY ./app/prestart_nsga.sh /app/prestart_nsga.sh
-RUN chmod +x /app/prestart_nsga.sh
-
-ENTRYPOINT ["/app/prestart_nsga.sh"]
-
-# 6. CORRIGIDO: Executa como módulo 'app.nsga_weights_updater'
-# O Python (com PYTHONPATH=/app) procura o pacote 'app' (em /app/app)
-# e depois executa 'nsga_weights_updater'
+# ---------------------------------------------------------
+# 🚀 Execução direta (sem entrypoint)
+# ---------------------------------------------------------
 CMD ["python", "-m", "app.nsga_weights_updater"]
