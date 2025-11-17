@@ -1,27 +1,67 @@
+# -*- coding: utf-8 -*-
 """
 Vectorstore manager — ChromaDB v2+ (modo local persistente)
 -----------------------------------------------------------
 Módulo centralizado para todas as interações com o ChromaDB.
 Compatível com Chroma >= 0.5.0.
+
+✅ Blindagem global:
+   - Qualquer embedding recebido como numpy.ndarray é convertido para list[float]
+   - Sanitização de inputs (ids, documents, metadatas)
+   - query() sempre recebe list[float] válida
 """
+
+from __future__ import annotations
 
 import os
 import logging
-import chromadb
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
+
+import chromadb
+import numpy as np
 
 # ✅ Importa o módulo de settings centralizado
 # (Assumindo que este arquivo está em 'app/vectorstore.py')
 from .settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] vectorstore: %(message)s")
 
 # ============================================================
 # ⚙️ Configurações
 # ============================================================
-# CORRIGIDO: Lê do .get() para configuração dinâmica (Redis > DB > .env)
 CHROMA_PATH = settings.get("CHROMA_PATH", "/data/chroma")
+
+
+# ============================================================
+# 🔧 Helpers internos
+# ============================================================
+def _ensure_list_of_floats(vec: Union[np.ndarray, List[float], tuple]) -> List[float]:
+    """
+    Converte um vetor (np.ndarray|list|tuple) em list[float] achatada.
+    """
+    if isinstance(vec, np.ndarray):
+        return vec.astype(float).ravel().tolist()
+    if isinstance(vec, (list, tuple)):
+        # Pode haver lista de listas acidentalmente:
+        if len(vec) > 0 and isinstance(vec[0], (list, tuple, np.ndarray)):
+            # achata um nível
+            arr = np.array(vec, dtype=float).ravel()
+            return arr.tolist()
+        return [float(x) for x in vec]
+    # fallback defensivo
+    return [float(vec)] if vec is not None else [0.0]
+
+
+def _safe_metadata(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Garante que metadados sejam um dict não-vazio (requisito do Chroma).
+    """
+    if isinstance(meta, dict) and meta:
+        return meta
+    return {"source": "router"}
 
 
 # ============================================================
@@ -54,11 +94,13 @@ chroma_client = _connect_local()
 # ============================================================
 # 📚 Gerenciamento de Coleções (Async)
 # ============================================================
-
 def _get_or_create_collection_sync(name: str, metadata: dict = None):
     """Função síncrona auxiliar."""
     try:
-        return chroma_client.get_or_create_collection(name=name, metadata=metadata or {"source": "router"})
+        return chroma_client.get_or_create_collection(
+            name=name,
+            metadata=_safe_metadata(metadata)
+        )
     except Exception as e:
         if "already exists" in str(e).lower():
             logger.warning(f"[vectorstore] Coleção '{name}' já existia, recuperando...")
@@ -93,23 +135,38 @@ async def delete_collection(collection_name: str):
 # ============================================================
 # 💾 Inserção e Consulta (Assíncronas via to_thread)
 # ============================================================
-
-def _insert_embedding_sync(collection_name: str, doc_id: str, text: str, embedding: list, metadata: Optional[Dict[str, Any]] = None):
+def _insert_embedding_sync(
+    collection_name: str,
+    doc_id: str,
+    text: str,
+    embedding: Union[np.ndarray, List[float], tuple],
+    metadata: Optional[Dict[str, Any]] = None
+):
     """Função síncrona auxiliar para inserção de embeddings no ChromaDB."""
+
     collection = chroma_client.get_collection(collection_name)
 
-    # ✅ Garante que o metadata nunca seja vazio (Chroma requer dict não-vazio)
-    safe_metadata = metadata if (metadata and isinstance(metadata, dict) and metadata) else {"source": "router"}
+    emb_list = _ensure_list_of_floats(embedding)
+    safe_meta = _safe_metadata(metadata)
+
+    # Sanitização mínima
+    safe_id = str(doc_id) if doc_id is not None else str(os.urandom(6).hex())
+    safe_text = "" if text is None else str(text)
 
     collection.add(
-        ids=[doc_id],
-        documents=[text],
-        embeddings=[embedding],
-        metadatas=[safe_metadata]
+        ids=[safe_id],
+        documents=[safe_text],
+        embeddings=[emb_list],
+        metadatas=[safe_meta],
     )
 
-
-async def insert_embedding(collection_name: str, doc_id: str, text: str, embedding: list, metadata: Optional[Dict[str, Any]] = None):
+async def insert_embedding(
+    collection_name: str,
+    doc_id: str,
+    text: str,
+    embedding: Union[np.ndarray, List[float], tuple],
+    metadata: Optional[Dict[str, Any]] = None
+):
     """(Async) Insere um documento e seu embedding."""
     try:
         await asyncio.to_thread(
@@ -120,13 +177,27 @@ async def insert_embedding(collection_name: str, doc_id: str, text: str, embeddi
     except Exception as e:
         logger.error(f"[vectorstore] Falha ao inserir embedding: {e}")
 
-
-def _query_embedding_sync(collection_name: str, embedding: list, n_results: int = 3):
+def _query_embedding_sync(
+    collection_name: str,
+    embedding: Union[np.ndarray, List[float], tuple],
+    n_results: int = 3
+):
     """Função síncrona auxiliar para ser usada com to_thread."""
     collection = chroma_client.get_collection(collection_name)
-    return collection.query(query_embeddings=[embedding], n_results=n_results)
+    emb_list = _ensure_list_of_floats(embedding)
 
-async def query_embedding(collection_name: str, embedding: list, n_results: int = 3):
+    # include amplia as infos retornadas (compat com versões variadas)
+    return collection.query(
+        query_embeddings=[emb_list],
+        n_results=n_results,
+        include=["documents", "embeddings", "metadatas", "distances"]
+    )
+
+async def query_embedding(
+    collection_name: str,
+    embedding: Union[np.ndarray, List[float], tuple],
+    n_results: int = 3
+):
     """(Async) Consulta os embeddings mais semelhantes."""
     try:
         results = await asyncio.to_thread(
@@ -137,6 +208,7 @@ async def query_embedding(collection_name: str, embedding: list, n_results: int 
     except Exception as e:
         logger.error(f"[vectorstore] Erro ao consultar coleção '{collection_name}': {e}")
         return None
+
 
 # ============================================================
 # 🧩 Utilitários (Assíncronos via to_thread)

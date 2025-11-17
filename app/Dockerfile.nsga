@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     netcat-traditional \
     mariadb-client \
     redis-tools \
+    ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -66,6 +67,20 @@ RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 CMD curl -sf http://localhost:9999/metrics || exit 1
 
 # ---------------------------------------------------------
-# 🚀 Execução direta (sem entrypoint)
+# 🚀 Diagnóstico e execução do prestart
 # ---------------------------------------------------------
+# Copia o script de inicialização
+COPY ./app/prestart_nsga.sh /app/prestart_nsga.sh
+
+
+# Diagnóstico: imprime confirmação visual durante o build
+RUN echo "🔍 Verificando presença do prestart_nsga.sh..." && \
+    ls -l /app | grep prestart_nsga.sh || (echo "❌ ERRO: prestart_nsga.sh não encontrado!" && exit 1) && \
+    echo "✅ prestart_nsga.sh encontrado com sucesso!" && \
+    sed -i 's/\r$//' /app/prestart_nsga.sh && \
+    chmod +x /app/prestart_nsga.sh && \
+    head -n 5 /app/prestart_nsga.sh || echo "⚠️ Não foi possível exibir preview"
+
+# Define o entrypoint para executar o prestart
+ENTRYPOINT ["/app/prestart_nsga.sh"]
 CMD ["python", "-m", "app.nsga_weights_updater"]

@@ -1,70 +1,80 @@
+#!/bin/bash
 # =========================================================
-# 🧠 Dockerfile.nsga — Serviço de otimização multiobjetivo (NSGA-II)
+# 🚀 PRESTART NSGA-II
+# ---------------------------------------------------------
+# Script de inicialização do container nsga_updater.
+# - Aguarda Redis e MariaDB ficarem acessíveis.
+# - Lê a lista de modelos do arquivo .env (CANDIDATE_MODELS_LIST).
+# - Popula a chave Redis `nsga:candidate_models` se ela ainda não existir.
+# - Em seguida, inicia o serviço principal (nsga_weights_updater.py).
 # =========================================================
-FROM python:3.11-slim
 
-LABEL maintainer="Jefferson Duarte <jefferson.igorbr@gmail.com>"
-LABEL description="NSGA-II Optimizer for LLM Router (Prometheus + Redis + MariaDB)"
+set -e
 
 # ---------------------------------------------------------
-# 🧰 Dependências de sistema
+# 🔧 Carrega variáveis do .env (se existir)
 # ---------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libmariadb-dev \
-    pkg-config \
-    curl \
-    netcat-traditional \
-    mariadb-client \
-    redis-tools \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+if [ -f ".env" ]; then
+  echo "📦 Carregando variáveis do .env..."
+  # Exporta apenas variáveis com formato KEY=VALUE (ignora comentários)
+  export $(grep -v '^#' .env | xargs)
+else
+  echo "⚠️  Arquivo .env não encontrado em /app. Continuando com variáveis de ambiente existentes."
+fi
 
 # ---------------------------------------------------------
-# 📁 Estrutura do app
+# 🔍 Definições básicas
 # ---------------------------------------------------------
-WORKDIR /app
-COPY ./app /app/app
-COPY ./app/requirements.nsga.txt /app/requirements.nsga.txt
+REDIS_HOST="${REDIS_HOST:-redis}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-SenhaForte}"
+DB_HOST="${DB_HOST:-mariadb}"
+DB_PORT="${DB_PORT:-3306}"
 
 # ---------------------------------------------------------
-# 📦 Instala dependências Python
+# 🕒 Aguarda Redis e MariaDB ficarem disponíveis
 # ---------------------------------------------------------
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-RUN pip install -r /app/requirements.nsga.txt
-RUN pip install --no-cache-dir prometheus_client redis sqlalchemy pymysql deap fastapi uvicorn python-dotenv
+echo "⏳ Aguardando Redis e MariaDB ficarem prontos..."
+until nc -z "$REDIS_HOST" "$REDIS_PORT"; do
+  echo "   → Redis ainda não disponível em ${REDIS_HOST}:${REDIS_PORT}"
+  sleep 2
+done
+
+until nc -z "$DB_HOST" "$DB_PORT"; do
+  echo "   → MariaDB ainda não disponível em ${DB_HOST}:${DB_PORT}"
+  sleep 2
+done
+
+echo "✅ Redis e MariaDB disponíveis."
 
 # ---------------------------------------------------------
-# ⚙️ Variáveis de ambiente padrão
+# 🧩 Lê lista de modelos do .env
 # ---------------------------------------------------------
-ENV PYTHONUNBUFFERED=1
-ENV DB_HOST=mariadb
-ENV DB_USER=router_user
-ENV DB_PASS=router_pass
-ENV DB_NAME=routerdb
-ENV REDIS_HOST=redis
-ENV REDIS_PORT=6379
-ENV REDIS_PASS=SenhaForte
-ENV REDIS_PASSWORD=SenhaForte
-ENV NSGA_UPDATE_INTERVAL_S=300
-ENV NSGA_LOOKBACK_MINUTES=180
-ENV NSGA_LOOKBACK_MAXROWS=2000
-
-ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
-    PYTHONUNBUFFERED=1 \
-    CHROMA_TELEMETRY_ENABLED=false
+if [ -z "$CANDIDATE_MODELS_LIST" ]; then
+  echo "⚠️  Variável CANDIDATE_MODELS_LIST não encontrada no ambiente."
+  echo "🔧 Usando lista padrão para inicialização."
+  CANDIDATE_MODELS_LIST='["ollama/deepseek-r1:8b","ollama/phi4:14b","ollama/mistral-nemo:12b","openai/gpt-4o-mini","gemini/gemini-1.5-flash"]'
+else
+  echo "✅ Lista de modelos carregada do .env:"
+  echo "   $CANDIDATE_MODELS_LIST"
+fi
 
 # ---------------------------------------------------------
-# 📊 Diretório Prometheus
+# 💾 Popula o Redis (chave nsga:candidate_models)
 # ---------------------------------------------------------
-RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
+EXISTS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" get nsga:candidate_models || true)
+
+if [ -z "$EXISTS" ]; then
+  echo "🧠 Nenhum modelo detectado no Redis — populando nsga:candidate_models..."
+  redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" \
+    set nsga:candidate_models "$CANDIDATE_MODELS_LIST" >/dev/null 2>&1 \
+    && echo "✅ Modelos adicionados ao Redis com sucesso."
+else
+  echo "✅ Modelos já existem no Redis — nenhuma ação necessária."
+fi
 
 # ---------------------------------------------------------
-# 🩺 Healthcheck (verifica se o endpoint /metrics está ativo)
+# 🚀 Inicia o serviço Python (NSGA-II Updater)
 # ---------------------------------------------------------
-HEALTHCHECK --interval=30s --timeout=10s --retries=5 CMD curl -sf http://localhost:9999/metrics || exit 1
-
-# ---------------------------------------------------------
-# 🚀 Execução direta (sem entrypoint)
-# ---------------------------------------------------------
-CMD ["python", "-u", "app/nsga_weights_updater.py"]
+echo "🚀 Iniciando nsga_weights_updater.py..."
+exec "$@"

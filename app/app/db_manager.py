@@ -198,6 +198,24 @@ TABLES_DDL: Dict[str, str] = {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COLLATE=utf8mb4_unicode_ci;
     """,
+    "nsga_meta_results": """
+        CREATE TABLE IF NOT EXISTS nsga_meta_results (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            timestamp DATETIME,
+            trial_id INT,
+            N_pop INT,
+            N_gen INT,
+            P_cx FLOAT,
+            P_mut FLOAT,
+            eta_c INT,
+            eta_m INT,
+            eff_mean FLOAT,
+            eff_std FLOAT,
+            INDEX idx_trial_id (trial_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        COLLATE=utf8mb4_unicode_ci;
+""",
+
 }
 
 # ---------------------------------------------------------------------

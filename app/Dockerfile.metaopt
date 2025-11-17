@@ -1,0 +1,25 @@
+# =========================================================
+# Dockerfile.metaopt — Serviço de Meta-Otimização Bayesiana (Optuna)
+# =========================================================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Instala dependências de compilação
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ make libmariadb-dev pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copia o código da aplicação
+COPY ./app /app
+
+# Instala requisitos específicos
+COPY ./app/requirements.metaopt.txt /app/requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+ENV PYTHONUTF8=1 \
+    PYTHONIOENCODING=UTF-8 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+CMD ["python", "-m", "app.nsga_meta_optimizer"]

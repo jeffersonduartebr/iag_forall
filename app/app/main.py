@@ -143,7 +143,7 @@ async def on_startup():
             logger.info("[warmup] Iniciando rotina de inicialização...")
 
             # Redis
-            r = get_redis(max_wait_s=45)
+            r = get_redis()
             if r is None:
                 logger.warning("[warmup] Redis indisponível — seguindo sem cache.")
 
@@ -219,7 +219,7 @@ async def route_query(req: QueryRequest):
         reward = 0.0
 
     try:
-        from .services.query_service import insert_query_log
+        from .query_service import insert_query_log
         insert_query_log(
             query=req.query,
             model=chosen_model,
@@ -301,3 +301,23 @@ def health():
         "models_preloaded": True,
         "dynamic_settings": settings.snapshot(only_known=True),
     }
+
+# ------------------------------------------------------
+# 🧬 Meta-Otimização NSGA-II (Bayesian Optimization)
+# ------------------------------------------------------
+@app.post("/admin/metaoptimize")
+def trigger_meta_optimization(x_admin_token: str = Header(None)):
+    """
+    Inicia o processo de calibração automática do NSGA-II via Bayesian Optimization (Optuna).
+    Retorna os melhores parâmetros encontrados.
+    """
+    _require_admin(x_admin_token)
+
+    try:
+        from .nsga_meta_optimizer import run_meta_optimization
+        logger.info("[admin/metaoptimize] Calibração iniciada pelo administrador.")
+        result = run_meta_optimization()
+        return JSONResponse(content={"status": "success", "result": result})
+    except Exception as e:
+        logger.exception("[admin/metaoptimize] Falha ao executar meta-otimização: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,356 +1,312 @@
+# -*- coding: utf-8 -*-
 """
 settings_dynamic.py
-----------------------------------------------------
-Camada de configuração dinâmica:
-- Lê defaults do .env (os.environ)
-- Sobrepõe com valores do MariaDB (estado atual)
-- Sobrepõe com valores do Redis (runtime)
-- Expõe propriedades tipadas p/ o restante do app
-- Registra histórico de mudanças em settings_history (auditoria)
+------------------------------------------------------
+Carrega configurações com fallback:
 
-Tabelas criadas:
-  settings_current(sk PK, svalue TEXT, updated_at TIMESTAMP)
-  settings_history(id, sk, svalue, source, actor, created_at)
+1) Redis
+2) DB
+3) .env
+4) Defaults
 
-Uso:
-  from .settings_dynamic import settings
-  models = settings.CANDIDATE_MODELS_LIST
-  settings.set("TEMPERATURE_DEFAULT", 0.4, actor="dash", source="ui")
+Inclui:
+- Configs do roteador
+- Redis
+- DB
+- Embeddings
+- Centróides online
+- Juízes automáticos (JUDGES_MODE)
 """
 
-from __future__ import annotations
 import os
-import re
 import json
 import logging
-from typing import Any, Dict, List, Optional, Union
-
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
-
-from .utils.redis_client import get_redis
+from app.utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
+REDIS_PREFIX = "settings:"
+rds = get_redis()
 
-def _as_bool(v: Any, default: bool = False) -> bool:
-    if v is None:
-        return default
-    if isinstance(v, bool):
-        return v
-    s = str(v).strip().lower()
-    if s in ("1", "true", "yes", "y", "on"):
-        return True
-    if s in ("0", "false", "no", "n", "off"):
-        return False
-    return default
+# Banco inicial (para leitura de settings)
+DB_HOST_ENV = os.getenv("DB_HOST", "mariadb")
+DB_USER_ENV = os.getenv("DB_USER", "router_user")
+DB_PASS_ENV = os.getenv("DB_PASS", "router_pass")
+DB_NAME_ENV = os.getenv("DB_NAME", "routerdb")
+DB_URL = f"mysql+pymysql://{DB_USER_ENV}:{DB_PASS_ENV}@{DB_HOST_ENV}:3306/{DB_NAME_ENV}"
 
+engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
-def _as_int(v: Any, default: int = 0) -> int:
+DDL = """
+CREATE TABLE IF NOT EXISTS settings_dynamic (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    setting_key VARCHAR(512) NOT NULL UNIQUE,
+    setting_value TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP
+);
+"""
+
+try:
+    with engine.begin() as conn:
+        conn.execute(text(DDL))
+except Exception as e:
+    logger.warning(f"[settings_dynamic] Falha ao criar tabela: {e}")
+
+# ============================================================
+# Utilitários
+# ============================================================
+
+def _get_from_redis(key: str):
     try:
-        return int(float(v))
+        if rds:
+            v = rds.get(f"{REDIS_PREFIX}{key}")
+            if v:
+                return v.decode()
     except Exception:
-        return default
+        pass
+    return None
 
-
-def _as_float(v: Any, default: float = 0.0) -> float:
+def _get_from_db(key: str):
     try:
-        return float(v)
+        with engine.connect() as conn:
+            r = conn.execute(
+                text("SELECT setting_value FROM settings_dynamic WHERE setting_key=:k LIMIT 1"),
+                {"k": key}
+            ).fetchone()
+        if r:
+            return r[0]
     except Exception:
-        return default
+        pass
+    return None
 
+def _set_to_redis(key: str, val: str):
+    try:
+        if rds:
+            rds.set(f"{REDIS_PREFIX}{key}", val)
+    except Exception:
+        pass
 
-def _as_list(v: Any, default: Optional[List[str]] = None) -> List[str]:
-    if default is None:
-        default = []
-    if v is None:
-        return default
-    if isinstance(v, list):
-        return v
-    s = str(v).strip()
-    # JSON list?
-    if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
-        try:
-            parsed = json.loads(s)
-            if isinstance(parsed, list):
-                return parsed
-        except Exception:
-            pass
-    # Comma-separated
-    if "," in s:
-        return [x.strip() for x in s.split(",") if x.strip()]
-    # Single value
-    return [s] if s else default
+def set_setting(key: str, value: str):
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO settings_dynamic (setting_key, setting_value)
+                    VALUES (:k, :v)
+                    ON DUPLICATE KEY UPDATE setting_value = :v
+                """),
+                {"k": key, "v": value}
+            )
+        _set_to_redis(key, value)
+    except Exception as e:
+        logger.warning(f"[settings_dynamic] Falha ao atualizar {key}: {e}")
 
-
-def _serialize(value: Any) -> str:
-    if isinstance(value, (dict, list, bool, int, float)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
-
-
-def _deserialize(raw: Optional[str]) -> Any:
-    if raw is None:
-        return None
-    s = raw.strip()
-    # JSON?
-    if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
-        try:
-            return json.loads(s)
-        except Exception:
-            return s
-    # bool?
-    if s.lower() in ("true", "false"):
-        return s.lower() == "true"
-    # number?
-    if re.match(r"^-?\d+(\.\d+)?$", s):
-        return float(s) if "." in s else int(s)
-    return s
-
+# ============================================================
+# Classe principal
+# ============================================================
 
 class DynamicSettings:
-    """
-    Lê configurações em camadas: Redis > DB (settings_current) > os.environ
-    Grava alterações em Redis + DB (e histórico em settings_history).
-    """
 
-    # Chaves "oficiais" mais usadas pela aplicação
-    KNOWN_KEYS = {
-        "OLLAMA_BASE_URL",
-        "OLLAMA_MODEL",
-        "EMBED_MODEL",
-        "CANDIDATE_MODELS_LIST",
-        "JUDGE_MODELS",
-        "JUDGES_MODE",
-        "JUDGE_USE_RAG",
-        "ENABLE_RAG_FOR_JUDGES",
-        "BANDIT_STATE_PATH",
-        "PROMETHEUS_PORT",
-        "OLLAMA_SERVERS",
-        "OLLAMA_MAX_PARALLEL",
-        "OLLAMA_TIMEOUT",
-        "DB_HOST", "DB_USER", "DB_PASS", "DB_NAME",
-        "REDIS_HOST", "REDIS_PORT", "REDIS_DB",
-        "CACHE_TTL",
-        "TEMPERATURE_DEFAULT",
-        "MAX_TOKENS_DEFAULT",
-        "ADMIN_TOKEN",
+    DEFAULTS = {
+        # -------------------
+        # Router core
+        # -------------------
+        "MAX_TOKENS_DEFAULT": "2000",
+        "TEMPERATURE_DEFAULT": "0.55",
+        "BANDIT_EPSILON": "0.12",
+        "QUERY_LOG_RETENTION_DAYS": "7",
+
+        # -------------------
+        # Redis compat
+        # -------------------
+        "REDIS_HOST": "redis",
+        "REDIS_PORT": "6379",
+        "REDIS_DB": "0",
+        "REDIS_PASSWORD": "",
+
+        # -------------------
+        # Embeddings
+        # -------------------
+        "EMBED_MODEL": "nomic-embed-text",
+        "EMBED_PROVIDER": "ollama",
+        "EMBED_DEVICE": "cpu",
+
+        # -------------------
+        # Centróides online
+        # -------------------
+        "CENTROIDS_DIM": "768",
+        "CENTROIDS_K": "20",
+        "CENTROIDS_MIN_SIM_CREATE": "0.35",
+        "CENTROIDS_ENABLE_ONLINE": "1",
+        "CENTROIDS_UPDATE_INTERVAL_S": "1800",
+        "CENTROIDS_MIN_RECORDS_FOR_TRAIN": "50",
+        "CENTROIDS_MAX_HISTORY": "50000",
+
+        # -------------------
+        # Judges (novo!)
+        # -------------------
+        "JUDGES_ENABLED": "1",
+        "JUDGES_MODE": "hybrid",  # local | remote | hybrid
+        "JUDGES_LOCAL_MODEL": "ollama/phi4:latest",
+        "JUDGES_REMOTE_MODEL": "gpt-4o-mini",
+        "JUDGES_TIMEOUT_S": "15",
+        # -------------------
+        # Ollama
+        # -------------------
+        "OLLAMA_BASE_URL": "http://ollama:11434",
+        "OLLAMA_HOST": "http://ollama:11434",
+        
     }
 
-    def __init__(self) -> None:
-        self.env = os.environ
-        self.logger = logging.getLogger("settings_dynamic")
-        self._engine = self._make_engine()
-        self._ensure_tables()
-        self._db_cache: Dict[str, str] = self._load_db_settings()
-        self._redis = get_redis()
+    def get(self, key: str, fallback=None):
+        v = _get_from_redis(key)
+        if v is not None:
+            return v
+        v = _get_from_db(key)
+        if v is not None:
+            return v
+        v = os.getenv(key)
+        if v is not None:
+            return v
+        return self.DEFAULTS.get(key, fallback)
 
-    # ---------- Infra DB ----------
-    def _make_engine(self):
-        host = self.env.get("DB_HOST", "mariadb")
-        user = self.env.get("DB_USER", "router_user")
-        pwd = self.env.get("DB_PASS", "router_pass")
-        name = self.env.get("DB_NAME", "routerdb")
-        url = f"mysql+pymysql://{user}:{pwd}@{host}:3306/{name}"
-        return create_engine(url, pool_pre_ping=True, pool_recycle=3600)
+    # -------------------------
+    # DB configs
+    # -------------------------
+    @property
+    def DB_HOST(self): return self.get("DB_HOST", DB_HOST_ENV)
 
-    def _ensure_tables(self) -> None:
-        ddl_current = """
-        CREATE TABLE IF NOT EXISTS settings_current (
-            sk VARCHAR(128) PRIMARY KEY,
-            svalue TEXT NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                ON UPDATE CURRENT_TIMESTAMP
-        );
-        """
-        ddl_history = """
-        CREATE TABLE IF NOT EXISTS settings_history (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            sk VARCHAR(128) NOT NULL,
-            svalue TEXT NOT NULL,
-            source VARCHAR(32) DEFAULT 'api',
-            actor VARCHAR(128) NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            INDEX idx_sk_created (sk, created_at)
-        );
-        """
+    @property
+    def DB_USER(self): return self.get("DB_USER", DB_USER_ENV)
+
+    @property
+    def DB_PASS(self): return self.get("DB_PASS", DB_PASS_ENV)
+
+    @property
+    def DB_NAME(self): return self.get("DB_NAME", DB_NAME_ENV)
+
+    # -------------------------
+    # Redis configs
+    # -------------------------
+    @property
+    def REDIS_HOST(self): return self.get("REDIS_HOST")
+
+    @property
+    def REDIS_PORT(self): return int(self.get("REDIS_PORT"))
+
+    @property
+    def REDIS_DB(self): return int(self.get("REDIS_DB"))
+
+    @property
+    def REDIS_PASSWORD(self): return self.get("REDIS_PASSWORD")
+
+    # -------------------------
+    # Models
+    # -------------------------
+    @property
+    def CANDIDATE_MODELS_LIST(self):
         try:
-            with self._engine.begin() as conn:
-                conn.execute(text(ddl_current))
-                conn.execute(text(ddl_history))
-        except SQLAlchemyError as e:
-            self.logger.warning(f"[settings] Falha ao criar tabelas de settings: {e}")
+            raw = self.get("CANDIDATE_MODELS_LIST", "[]")
+            return json.loads(raw)
+        except Exception:
+            return []
 
-    def _load_db_settings(self) -> Dict[str, str]:
-        try:
-            with self._engine.connect() as conn:
-                rows = conn.execute(text("SELECT sk, svalue FROM settings_current")).fetchall()
-                return {str(r[0]): str(r[1]) for r in rows}
-        except SQLAlchemyError as e:
-            self.logger.warning(f"[settings] Falha ao carregar settings do DB: {e}")
-            return {}
+    # -------------------------
+    # Router core
+    # -------------------------
+    @property
+    def MAX_TOKENS_DEFAULT(self): return int(self.get("MAX_TOKENS_DEFAULT"))
 
-    # ---------- Get/Set ----------
-    def get(self, key: str, default: Any = None) -> Any:
-        # 1) Redis
-        try:
-            if self._redis:
-                raw = self._redis.get(f"cfg:{key}")
-                if raw is not None:
-                    return _deserialize(raw)
-        except Exception as e:
-            self.logger.warning(f"[settings] Falha ao consultar Redis para {key}: {e}")
+    @property
+    def TEMPERATURE_DEFAULT(self): return float(self.get("TEMPERATURE_DEFAULT"))
 
-        # 2) DB cache
-        raw_db = self._db_cache.get(key)
-        if raw_db is not None:
-            return _deserialize(raw_db)
+    @property
+    def BANDIT_EPSILON(self): return float(self.get("BANDIT_EPSILON"))
 
-        # 3) .env
-        raw_env = self.env.get(key)
-        if raw_env is not None:
-            return _deserialize(raw_env)
+    @property
+    def QUERY_LOG_RETENTION_DAYS(self): return int(self.get("QUERY_LOG_RETENTION_DAYS"))
 
-        return default
+    # -------------------------
+    # Embeddings
+    # -------------------------
+    @property
+    def EMBED_MODEL(self): return self.get("EMBED_MODEL")
 
-    def set(self, key: str, value: Any, *, actor: str = "system", source: str = "api") -> None:
-        sval = _serialize(value)
+    @property
+    def EMBED_PROVIDER(self): return self.get("EMBED_PROVIDER")
 
-        # Redis
-        try:
-            if self._redis:
-                self._redis.set(f"cfg:{key}", sval)
-        except Exception as e:
-            self.logger.warning(f"[settings] Falha ao gravar Redis ({key}): {e}")
+    @property
+    def EMBED_DEVICE(self): return self.get("EMBED_DEVICE")
 
-        # DB + histórico
-        try:
-            with self._engine.begin() as conn:
-                conn.execute(
-                    text("""
-                        INSERT INTO settings_current (sk, svalue)
-                        VALUES (:k, :v)
-                        ON DUPLICATE KEY UPDATE svalue = :v, updated_at = CURRENT_TIMESTAMP
-                    """),
-                    {"k": key, "v": sval},
-                )
-                conn.execute(
-                    text("""
-                        INSERT INTO settings_history (sk, svalue, source, actor)
-                        VALUES (:k, :v, :src, :act)
-                    """),
-                    {"k": key, "v": sval, "src": source, "act": actor},
-                )
-            self._db_cache[key] = sval
-        except SQLAlchemyError as e:
-            self.logger.warning(f"[settings] Falha ao persistir setting {key}: {e}")
+    # -------------------------
+    # Judges
+    # -------------------------
+    @property
+    def JUDGES_ENABLED(self): return self.get("JUDGES_ENABLED") == "1"
 
-    def snapshot(self, only_known: bool = True) -> Dict[str, Any]:
-        keys = self.KNOWN_KEYS if only_known else set(self.env.keys()) | set(self._db_cache.keys())
-        out: Dict[str, Any] = {}
-        for k in sorted(keys):
-            out[k] = self.get(k, None)
+    @property
+    def JUDGES_MODE(self): return self.get("JUDGES_MODE")
+
+    @property
+    def JUDGES_LOCAL_MODEL(self): return self.get("JUDGES_LOCAL_MODEL")
+
+    @property
+    def JUDGES_REMOTE_MODEL(self): return self.get("JUDGES_REMOTE_MODEL")
+
+    @property
+    def JUDGES_TIMEOUT_S(self): return int(self.get("JUDGES_TIMEOUT_S"))
+
+    # -------------------------
+    # Centróides online
+    # -------------------------
+    @property
+    def CENTROIDS_DIM(self): return int(self.get("CENTROIDS_DIM"))
+
+    @property
+    def CENTROIDS_K(self): return int(self.get("CENTROIDS_K"))
+
+    @property
+    def CENTROIDS_MIN_SIM_CREATE(self): return float(self.get("CENTROIDS_MIN_SIM_CREATE"))
+
+    @property
+    def CENTROIDS_ENABLE_ONLINE(self): return self.get("CENTROIDS_ENABLE_ONLINE") == "1"
+
+    @property
+    def CENTROIDS_UPDATE_INTERVAL_S(self): return int(self.get("CENTROIDS_UPDATE_INTERVAL_S"))
+
+    @property
+    def CENTROIDS_MIN_RECORDS_FOR_TRAIN(self): return int(self.get("CENTROIDS_MIN_RECORDS_FOR_TRAIN"))
+
+    @property
+    def CENTROIDS_MAX_HISTORY(self): return int(self.get("CENTROIDS_MAX_HISTORY"))
+    @property
+    def OLLAMA_HOST(self):
+        return self.get("OLLAMA_HOST") or "http://ollama:11434"
+
+    @property
+    def OLLAMA_BASE_URL(self):
+        # alias para compatibilidade retroativa
+        return self.get("OLLAMA_BASE_URL") or self.OLLAMA_HOST
+
+
+    # -------------------------
+    # Snapshot para /health
+    # -------------------------
+    def snapshot(self, only_known=False):
+        out = {}
+        keys = list(self.DEFAULTS.keys())
+
+        if not only_known:
+            keys += ["DB_HOST", "DB_USER", "DB_NAME"]
+
+        for k in keys:
+            try:
+                out[k] = self.get(k)
+            except Exception:
+                out[k] = None
         return out
 
-    # ---------- Propriedades tipadas ----------
-    @property
-    def OLLAMA_BASE_URL(self) -> str:
-        return str(self.get("OLLAMA_BASE_URL", "http://ollama:11434"))
 
-    @property
-    def OLLAMA_MODEL(self) -> str:
-        return str(self.get("OLLAMA_MODEL", "ollama/gemma3:4b-it-qat"))
-
-    @property
-    def EMBED_MODEL(self) -> str:
-        return str(self.get("EMBED_MODEL", "nomic-embed-text"))
-
-    @property
-    def CANDIDATE_MODELS_LIST(self) -> List[str]:
-        default = _as_list(self.env.get("CANDIDATE_MODELS_LIST", ""), [])
-        return _as_list(self.get("CANDIDATE_MODELS_LIST", default), default)
-
-    @property
-    def JUDGE_MODELS(self) -> List[str]:
-        default = _as_list(self.env.get("JUDGE_MODELS", ""), [])
-        return _as_list(self.get("JUDGE_MODELS", default), default)
-
-    @property
-    def JUDGES_MODE(self) -> str:
-        return str(self.get("JUDGES_MODE", "hybrid")).lower()
-
-    @property
-    def JUDGE_USE_RAG(self) -> bool:
-        return _as_bool(self.get("JUDGE_USE_RAG", True), True)
-
-    @property
-    def ENABLE_RAG_FOR_JUDGES(self) -> bool:
-        return _as_bool(self.get("ENABLE_RAG_FOR_JUDGES", True), True)
-
-    @property
-    def BANDIT_STATE_PATH(self) -> str:
-        return str(self.get("BANDIT_STATE_PATH", "/app/state/bandit.json"))
-
-    @property
-    def PROMETHEUS_PORT(self) -> int:
-        return _as_int(self.get("PROMETHEUS_PORT", 9090), 9090)
-
-    @property
-    def OLLAMA_SERVERS(self) -> str:
-        return str(self.get("OLLAMA_SERVERS", self.OLLAMA_BASE_URL))
-
-    @property
-    def OLLAMA_MAX_PARALLEL(self) -> int:
-        return _as_int(self.get("OLLAMA_MAX_PARALLEL", 2), 2)
-
-    @property
-    def OLLAMA_TIMEOUT(self) -> int:
-        return _as_int(self.get("OLLAMA_TIMEOUT", 90), 90)
-
-    @property
-    def DB_HOST(self) -> str:
-        return str(self.get("DB_HOST", "mariadb"))
-
-    @property
-    def DB_USER(self) -> str:
-        return str(self.get("DB_USER", "router_user"))
-
-    @property
-    def DB_PASS(self) -> str:
-        return str(self.get("DB_PASS", "router_pass"))
-
-    @property
-    def DB_NAME(self) -> str:
-        return str(self.get("DB_NAME", "routerdb"))
-
-    @property
-    def REDIS_HOST(self) -> str:
-        return str(self.get("REDIS_HOST", "redis"))
-
-    @property
-    def REDIS_PORT(self) -> int:
-        return _as_int(self.get("REDIS_PORT", 6379), 6379)
-
-    @property
-    def REDIS_DB(self) -> int:
-        return _as_int(self.get("REDIS_DB", 0), 0)
-
-    @property
-    def CACHE_TTL(self) -> int:
-        return _as_int(self.get("CACHE_TTL", 86400), 86400)
-
-    @property
-    def TEMPERATURE_DEFAULT(self) -> float:
-        return _as_float(self.get("TEMPERATURE_DEFAULT", 0.5), 0.5)
-
-    @property
-    def MAX_TOKENS_DEFAULT(self) -> int:
-        return _as_int(self.get("MAX_TOKENS_DEFAULT", 1024), 1024)
-
-    @property
-    def ADMIN_TOKEN(self) -> str:
-        return str(self.get("ADMIN_TOKEN", "changeme-please"))
-
-
-# Instância única
 settings = DynamicSettings()

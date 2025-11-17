@@ -78,6 +78,8 @@ services:
         condition: service_completed_successfully
     ports:
       - "9999:9999"
+    env_file:
+      - .env
     environment:
       - DB_HOST=mariadb
       - DB_USER=router_user
@@ -134,33 +136,33 @@ services:
       - ai_net
     restart: unless-stopped
 
-  # =========================================================
-  # 🎛 Painel Dash de Controle
-  # =========================================================
-  dash_control_panel:
-    build:
-      context: .
-      dockerfile: app/Dockerfile.dash
-    container_name: dash_control_panel
-    command: python app/app/dash_control_panel.py
-    ports:
-      - "8050:8050"
-    depends_on:
-      db_init:
-        condition: service_completed_successfully
-    volumes:
-      - ./app:/app
-      - prometheus_data:/tmp/prom
-    environment:
-      - REDIS_HOST=redis
-      - DB_HOST=mariadb
-      - DB_USER=router_user
-      - DB_PASS=router_pass
-      - DB_NAME=routerdb
-      - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
-    networks:
-      - ai_net
-    restart: unless-stopped
+  # # =========================================================
+  # # 🎛 Painel Dash de Controle
+  # # =========================================================
+  # dash_control_panel:
+  #   build:
+  #     context: .
+  #     dockerfile: app/Dockerfile.dash
+  #   container_name: dash_control_panel
+  #   command: python app/app/dash_control_panel.py
+  #   ports:
+  #     - "8050:8050"
+  #   depends_on:
+  #     db_init:
+  #       condition: service_completed_successfully
+  #   volumes:
+  #     - ./app:/app
+  #     - prometheus_data:/tmp/prom
+  #   environment:
+  #     - REDIS_HOST=redis
+  #     - DB_HOST=mariadb
+  #     - DB_USER=router_user
+  #     - DB_PASS=router_pass
+  #     - DB_NAME=routerdb
+  #     - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+  #   networks:
+  #     - ai_net
+  #   restart: unless-stopped
 
   # =========================================================
   # 🧩 Servidor Ollama (modelos locais)
@@ -190,6 +192,40 @@ services:
       retries: 20
     networks:
       - ai_net
+
+  # =========================================================
+  # 🤖 Serviço de Calibração Bayesiana (Meta-Otimização)
+  # =========================================================
+  meta_optimizer:
+    build:
+      context: .
+      dockerfile: app/Dockerfile.metaopt
+    container_name: meta_optimizer
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db_init:
+        condition: service_completed_successfully
+    environment:
+      - DB_HOST=mariadb
+      - DB_USER=router_user
+      - DB_PASS=router_pass
+      - DB_NAME=routerdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=SenhaForte
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+      - METAOPT_TRIALS=60
+      - METAOPT_REPEATS=3
+    volumes:
+      - ./app/app:/app/app
+      - prometheus_data:/tmp/prom
+    networks:
+      - ai_net
+
 
   # =========================================================
   # 📈 Prometheus (com correção de path)
