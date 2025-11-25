@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-update_nsga_best_params.py
+update_nsga_best_params.py  (VERSÃO MULTIMODAL)
 ------------------------------------------------------------
-Lê a tabela nsga_meta_results → identifica o melhor trial →
-atualiza:
+Atualiza os melhores parâmetros e pesos NSGA-II para:
 
-1) Tabela nsga_weights (DB)
-2) Redis (chave "nsga:weights")
-3) Tabela nsga_params (melhores hiperparâmetros para execução futura)
+    - text
+    - vision
+    - multimodal
 
-Esse script é chamado automaticamente ao final do
-nsga_meta_optimizer.py, mas também pode ser executado manualmente:
+Salva em:
+  1) nsga_params (modalidade)
+  2) nsga_weights (modalidade + modelo)
+  3) Redis (nsga:weights:<modality>)
+
+Chamado pelo nsga_meta_optimizer ou manualmente via:
 
     docker exec -it metaopt python /app/app/update_nsga_best_params.py
 """
@@ -20,18 +23,17 @@ import os
 import json
 import logging
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-
 import redis
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [update_nsga] %(message)s")
 logger = logging.getLogger("update_nsga")
 
 # ============================================================
-# 🔧 Conexões
+# 🔌 Conexões
 # ============================================================
 
 DB_HOST = os.getenv("DB_HOST", "mariadb")
@@ -56,21 +58,13 @@ except Exception as e:
 
 
 # ============================================================
-# 🧱 Tabelas necessárias
+# 🧱 Tabelas (MODIFICADAS PARA SUPORTE MULTIMODAL)
 # ============================================================
-
-DDL_WEIGHTS = """
-CREATE TABLE IF NOT EXISTS nsga_weights (
-    model VARCHAR(255) PRIMARY KEY,
-    weight FLOAT NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-"""
 
 DDL_PARAMS = """
 CREATE TABLE IF NOT EXISTS nsga_params (
     id INT PRIMARY KEY,
+    modality VARCHAR(32) NOT NULL,
     N_pop INT NOT NULL,
     N_gen INT NOT NULL,
     cxpb FLOAT NOT NULL,
@@ -79,7 +73,18 @@ CREATE TABLE IF NOT EXISTS nsga_params (
     eta_m FLOAT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+);
+"""
+
+DDL_WEIGHTS = """
+CREATE TABLE IF NOT EXISTS nsga_weights (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    modality VARCHAR(32) NOT NULL,
+    model VARCHAR(255) NOT NULL,
+    weight FLOAT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_mod_model (modality, model)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
 DDL_RESULTS = """
@@ -87,6 +92,7 @@ CREATE TABLE IF NOT EXISTS nsga_meta_results (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     trial_id INT NOT NULL,
+    modality VARCHAR(32) NOT NULL,
     N_pop INT NOT NULL,
     N_gen INT NOT NULL,
     cxpb FLOAT NOT NULL,
@@ -95,69 +101,76 @@ CREATE TABLE IF NOT EXISTS nsga_meta_results (
     eta_m FLOAT NOT NULL,
     eff_mean FLOAT NOT NULL,
     eff_std  FLOAT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
+
 
 def init_tables():
     try:
         with engine.begin() as conn:
-            conn.execute(text(DDL_WEIGHTS))
             conn.execute(text(DDL_PARAMS))
+            conn.execute(text(DDL_WEIGHTS))
             conn.execute(text(DDL_RESULTS))
-        logger.info("[update_nsga] Tabelas verificadas/criadas.")
+        logger.info("[update_nsga] Tabelas multimodais verificadas/criadas.")
     except SQLAlchemyError as e:
         logger.error(f"[update_nsga] Falha ao criar tabelas: {e}")
+
 
 init_tables()
 
 
 # ============================================================
-# 📥 Buscar melhores resultados do NSGA-meta
+# 📥 Carregar melhor trial por modalidade
 # ============================================================
 
-def load_best_trial() -> Dict[str, Any] | None:
-    """
-    Retorna o melhor trial baseado em eff_mean.
-    """
+def load_best_trial(modality: str) -> Optional[Dict[str, Any]]:
     try:
         with engine.connect() as conn:
             row = conn.execute(
-                text("""
+                text(
+                    """
                     SELECT *
                     FROM nsga_meta_results
+                    WHERE modality = :m
                     ORDER BY eff_mean DESC, eff_std ASC
                     LIMIT 1;
-                """)
+                    """
+                ),
+                {"m": modality},
             ).mappings().first()
 
         if not row:
-            logger.warning("[update_nsga] Nenhum trial encontrado em nsga_meta_results.")
+            logger.warning(f"[update_nsga] Nenhum trial para modality={modality}.")
             return None
 
-        logger.info(f"[update_nsga] Melhor trial encontrado: trial_id={row['trial_id']}, eff_mean={row['eff_mean']:.6f}")
+        logger.info(
+            f"[update_nsga] Melhor trial para {modality}: trial_id={row['trial_id']} "
+            f"eff_mean={row['eff_mean']:.6f}"
+        )
         return dict(row)
 
     except SQLAlchemyError as e:
-        logger.error(f"[update_nsga] Erro ao buscar melhor trial: {e}")
+        logger.error(f"[update_nsga] Erro load_best_trial modality={modality}: {e}")
         return None
 
 
 # ============================================================
-# 📤 Atualizar hiperparâmetros (N_pop, N_gen, cxpb, mutpb, eta_c, eta_m)
+# 📤 Atualizar melhores hiperparâmetros (por modalidade)
 # ============================================================
 
-def update_best_params(row: Dict[str, Any]) -> None:
-    """
-    Salva o melhor trial na tabela nsga_params (linha única id=1).
-    """
+def update_best_params(modality: str, row: Dict[str, Any]) -> None:
     try:
+        modal_id = {"text": 1, "vision": 2, "multimodal": 3}[modality]
+
         with engine.begin() as conn:
             conn.execute(
-                text("""
+                text(
+                    """
                     INSERT INTO nsga_params
-                    (id, N_pop, N_gen, cxpb, mutpb, eta_c, eta_m)
-                    VALUES (1, :np, :ng, :cx, :mu, :ec, :em)
+                    (id, modality, N_pop, N_gen, cxpb, mutpb, eta_c, eta_m)
+                    VALUES (:id, :mod, :np, :ng, :cx, :mu, :ec, :em)
                     ON DUPLICATE KEY UPDATE
+                        modality = :mod,
                         N_pop = :np,
                         N_gen = :ng,
                         cxpb = :cx,
@@ -165,41 +178,43 @@ def update_best_params(row: Dict[str, Any]) -> None:
                         eta_c = :ec,
                         eta_m = :em,
                         updated_at = CURRENT_TIMESTAMP;
-                """),
+                    """
+                ),
                 dict(
+                    id=modal_id,
+                    mod=modality,
                     np=row["N_pop"],
                     ng=row["N_gen"],
                     cx=row["cxpb"],
                     mu=row["mutpb"],
                     ec=row["eta_c"],
                     em=row["eta_m"],
-                )
+                ),
             )
-        logger.info("[update_nsga] Tabela nsga_params atualizada com sucesso.")
 
-    except SQLAlchemyError as e:
-        logger.error(f"[update_nsga] Falha ao salvar melhores parâmetros: {e}")
+        logger.info(f"[update_nsga] nsga_params atualizado para {modality}.")
+
+    except Exception as e:
+        logger.error(f"[update_nsga] Falha ao atualizar params modality={modality}: {e}")
 
 
 # ============================================================
-# 🧮 Gerar pesos para cada modelo
+# 🧮 Calcular pesos por modalidade
 # ============================================================
 
-def compute_model_weights() -> Dict[str, float]:
-    """
-    Calcula pesos relativos para cada modelo com base nas métricas EMA.
-    Apenas meta-opt serve para calibrar hiperparâmetros do NSGA;
-    aqui calculamos pesos dos modelos pela tabela ema_history.
-    """
+def compute_model_weights(modality: str) -> Dict[str, float]:
     try:
         with engine.connect() as conn:
-            rows = conn.execute(text("SELECT * FROM ema_history")).mappings().all()
+            rows = conn.execute(
+                text("SELECT * FROM ema_history WHERE modality = :m"),
+                {"m": modality},
+            ).mappings().all()
 
         if not rows:
-            logger.warning("[update_nsga] Nenhum dado encontrado em ema_history.")
+            logger.warning(f"[update_nsga] Nenhum EMA disponível para modality={modality}.")
             return {}
 
-        # Converte para score usando a mesma lógica da eficiência global
+        # converter para score
         scores = {}
         for row in rows:
             model = row["model"]
@@ -207,31 +222,27 @@ def compute_model_weights() -> Dict[str, float]:
             qual = float(row["ema_quality"])
             cost = float(row["ema_cost"])
 
-            # Score simples, consistente com eff usada no NSGA:
             score = (qual / 10.0) / (lat + 1e-6) / (cost + 1e-6)
             scores[model] = max(0.0, score)
 
         total = sum(scores.values()) or 1.0
         weights = {m: v / total for m, v in scores.items()}
-        logger.info(f"[update_nsga] Pesos normalizados gerados: {weights}")
 
+        logger.info(f"[update_nsga] Pesos {modality}: {weights}")
         return weights
 
-    except SQLAlchemyError as e:
-        logger.error(f"[update_nsga] Falha ao calcular pesos: {e}")
+    except Exception as e:
+        logger.error(f"[update_nsga] Erro ao calcular pesos para {modality}: {e}")
         return {}
 
 
 # ============================================================
-# 📤 Persistir pesos em DB + Redis
+# 📤 Persistir pesos (DB + Redis)
 # ============================================================
 
-def persist_weights(weights: Dict[str, float]) -> None:
-    """
-    Persiste os pesos dos modelos no banco + Redis.
-    """
+def persist_weights(modality: str, weights: Dict[str, float]) -> None:
     if not weights:
-        logger.warning("[update_nsga] Nenhum peso para persistir.")
+        logger.warning(f"[update_nsga] Nenhum peso para persistir modality={modality}.")
         return
 
     # DB
@@ -239,26 +250,28 @@ def persist_weights(weights: Dict[str, float]) -> None:
         with engine.begin() as conn:
             for model, weight in weights.items():
                 conn.execute(
-                    text("""
-                        INSERT INTO nsga_weights (model, weight)
-                        VALUES (:model, :w)
+                    text(
+                        """
+                        INSERT INTO nsga_weights (modality, model, weight)
+                        VALUES (:mod, :model, :w)
                         ON DUPLICATE KEY UPDATE
                             weight = :w,
                             updated_at = CURRENT_TIMESTAMP;
-                    """),
-                    dict(model=model, w=float(weight))
+                        """
+                    ),
+                    dict(mod=modality, model=model, w=float(weight)),
                 )
-        logger.info("[update_nsga] Pesos atualizados em nsga_weights.")
+        logger.info(f"[update_nsga] Pesos gravados em nsga_weights ({modality}).")
     except SQLAlchemyError as e:
-        logger.error(f"[update_nsga] Falha ao salvar nsga_weights no DB: {e}")
+        logger.error(f"[update_nsga] Falha ao gravar pesos DB modality={modality}: {e}")
 
     # Redis
     try:
         if rds:
-            rds.set("nsga:weights", json.dumps(weights))
-            logger.info("[update_nsga] Pesos publicados no Redis (nsga:weights).")
+            rds.set(f"nsga:weights:{modality}", json.dumps(weights))
+            logger.info(f"[update_nsga] Pesos publicados no Redis nsga:weights:{modality}.")
     except Exception as e:
-        logger.warning(f"[update_nsga] Falha ao publicar pesos no Redis: {e}")
+        logger.warning(f"[update_nsga] Redis erro modality={modality}: {e}")
 
 
 # ============================================================
@@ -266,21 +279,19 @@ def persist_weights(weights: Dict[str, float]) -> None:
 # ============================================================
 
 if __name__ == "__main__":
-    logger.info("[update_nsga] Iniciando atualização dos melhores parâmetros e pesos...")
+    logger.info("[update_nsga] Iniciando atualização MULTIMODAL...")
 
-    # 1) Carrega melhor trial
-    row = load_best_trial()
-    if not row:
-        logger.warning("[update_nsga] Abortado: nenhum trial disponível.")
-        exit(0)
+    for modality in ["text", "vision", "multimodal"]:
 
-    # 2) Atualiza hiperparâmetros
-    update_best_params(row)
+        logger.info(f"[update_nsga] --- PROCESSANDO MODALIDADE: {modality} ---")
 
-    # 3) Recalcula pesos dos modelos
-    weights = compute_model_weights()
+        best = load_best_trial(modality)
+        if not best:
+            continue
 
-    # 4) Salva pesos (DB + Redis)
-    persist_weights(weights)
+        update_best_params(modality, best)
 
-    logger.info("[update_nsga] Atualização concluída com sucesso ✅")
+        weights = compute_model_weights(modality)
+        persist_weights(modality, weights)
+
+    logger.info("[update_nsga] Atualização multimodal concluída com sucesso. ✅")

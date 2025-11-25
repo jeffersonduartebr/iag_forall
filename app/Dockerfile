@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     curl \
     vim \
+    tesseract-ocr \
+    tesseract-ocr-por \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================================================
@@ -53,10 +56,10 @@ RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
 # 🛠 Prestart: inicialização de banco e Redis
 # =========================================================
 RUN echo '#!/bin/bash\n\
-echo "🚀 Executando prestart: inicializando banco e Redis..."\n\
-python /app/app/db_manager.py || echo "⚠️ Falha na inicialização automática do banco"\n\
-echo "✅ Prestart finalizado."\n\
-exec "$@"' > /app/prestart.sh && chmod +x /app/prestart.sh
+    echo "🚀 Executando prestart: inicializando banco e Redis..."\n\
+    python /app/app/db_manager.py || echo "⚠️ Falha na inicialização automática do banco"\n\
+    echo "✅ Prestart finalizado."\n\
+    exec "$@"' > /app/prestart.sh && chmod +x /app/prestart.sh
 
 # =========================================================
 # 🔧 Healthcheck básico

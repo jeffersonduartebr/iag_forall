@@ -1,39 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-bandits.py
-----------------------------------------------------
-Bandit contextual dinâmico + centróides semânticos online:
+bandits.py — Meta-Bandit Multimodal Completo
+==========================================================
+Compatível com:
+- router_core.py
+- settings_dynamic.py
+- embeddings multimodais
+- judges
+- RAG multimodal
+- query_log multimodal
 
-- Contextos granulares (12+ categorias) via análise de texto.
-- Centróides semânticos ONLINE (incremental) em Redis:
-    * Embeddings via embeddings.embed_text (np.ndarray normalizado).
-    * Atribui query ao centróide mais próximo (cosine).
-    * Se sim < MIN_SIM_CREATE e #centroides < K → cria novo centróide.
-    * Atualização incremental (exponencial) c_{t+1} = (1-α) c_t + α x, com renormalização.
-    * Mantém contagem por centróide.
-    * Persistência em Redis (chaves bandit:centroids:*).
-
-- Rotina horária (thread) para manutenção:
-    * Só ativa se houver pelo menos 50 linhas em query_log (DB).
-    * Se há mais que K centróides → mescla pares mais similares até K.
-    * Atualiza metadados em Redis.
-
-- Bandit ε-greedy contextual:
-    * Estatísticas por (contexto, modelo) em Redis e MariaDB.
-    * Welford para variância (armazenada no Redis).
-    * Integra a etiqueta "semctx:<id>" (centróide mais próximo) à lista de contextos.
+Inclui:
+- ε-greedy + UCB1 + Thompson Sampling (Meta-Bandit)
+- Contextos automáticos via clustering dinâmico
+- Centróides semânticos vetorizados (NumPy)
+- Reinicialização automática de centróides degenerados
+- NSGA-II weight-aware reward
+- Toda persistência em Redis + MariaDB
 
 APIs públicas:
-- select_model(valid_models: list[str], query: str) -> str
-- bandit_update(model: str, query: str, reward: float) -> None
-- compute_reward(model: str, quality: float, latency_s: float, cost_per_1k: float | None = None) -> float
-
-Este módulo NÃO altera embeddings.py. Usa:
-    from app.embeddings import embed_text, embed_many
+- select_model(valid_models, query, modality="text")
+- bandit_update(model, query, reward, modality="text")
+- compute_reward(model, quality, latency_s, cost_per_1k)
 """
 
 from __future__ import annotations
-
 import os
 import json
 import math
@@ -41,7 +32,6 @@ import time
 import random
 import logging
 import threading
-import statistics
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
@@ -50,565 +40,673 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.settings_dynamic import settings
 from app.utils.redis_client import get_redis
-from app.observability import BANDIT_SELECT, BANDIT_UPDATE, BANDIT_REWARD
-from app.embeddings import embed_text  # <- compatível com seu embeddings.py
+from app.embeddings import embed_text
+from app.observability import (
+    BANDIT_SELECT,
+    BANDIT_UPDATE,
+    BANDIT_REWARD,
+)
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] bandit: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] [%(levelname)s] bandit: %(message)s",
+    )
 
 # ============================================================
-# 🔧 Conexões / Config
+# DB
 # ============================================================
+DB_HOST = settings.DB_HOST
+DB_USER = settings.DB_USER
+DB_PASS = settings.DB_PASS
+DB_NAME = settings.DB_NAME
 
-DB_HOST = settings.get("DB_HOST", os.getenv("DB_HOST", "mariadb"))
-DB_USER = settings.get("DB_USER", os.getenv("DB_USER", "router_user"))
-DB_PASS = settings.get("DB_PASS", os.getenv("DB_PASS", "router_pass"))
-DB_NAME = settings.get("DB_NAME", os.getenv("DB_NAME", "routerdb"))
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
+# ============================================================
+# Redis
+# ============================================================
 rds = get_redis()
 
-# Chaves Redis
-R_KEY_BANDIT_CTXT_PREFIX = "bandit:ctx"       # bandit:ctx:<ctx> -> hash {model: json(stats)}
-R_KEY_BANDIT_CTXT_META   = "bandit:ctx:meta"
-R_KEY_CENTROIDS_V        = "bandit:centroids:v"        # versão de schema (p/ futura evolução)
-R_KEY_CENTROIDS          = "bandit:centroids:data"     # lista de centróides [{"id":int,"vec":[...],"count":int}]
-R_KEY_CENTROIDS_META     = "bandit:centroids:meta"     # {"updated_at": ts, "k":K, "dim":D}
-R_KEY_CENTROIDS_LOCK     = "bandit:centroids:lock"     # simples lock
+# Redis Keys (ajustadas)
+R_CTX_PREFIX = "meta:bandit:ctx"                  # por contexto → stats
+R_META_STRATEGY = "meta:bandit:strategy"          # qual estratégia meta-bandit venceu
+R_CENTROIDS = "meta:bandit:centroids"             # lista completa de centróides
+R_CENTROIDS_META = "meta:bandit:centroids:meta"
+R_CENTROIDS_LOCK = "meta:bandit:centroids:lock"
+R_CLUSTERING_MODEL = "meta:bandit:cluster:model"  # clustering automático
+R_CLUSTERING_LOCK = "meta:bandit:cluster:lock"
 
-# Defaults inteligentes
-DEFAULT_EPSILON = 0.12
-MIN_OBS_FOR_EXPLOIT = 3
-EPSILON_BOOST_UNDEREXP = 0.10
-CONTEXT_VARIANCE_BOOST = 0.08
-
-# Centróides (com defaults se não existirem no settings_dynamic)
-CENTROIDS_DIM = int(settings.get("CENTROIDS_DIM", 768))
+# ============================================================
+# Hyperparams
+# ============================================================
+DEFAULT_EPSILON = float(settings.get("BANDIT_EPSILON", 0.12))
 CENTROIDS_K = int(settings.get("CENTROIDS_K", 20))
+CENTROIDS_DIM = int(settings.get("CENTROIDS_DIM", 768))
+CENTROIDS_LEARN_RATE = float(settings.get("CENTROIDS_LEARN_RATE", 0.15))
 CENTROIDS_MIN_SIM_CREATE = float(settings.get("CENTROIDS_MIN_SIM_CREATE", 0.35))
-CENTROIDS_LEARN_RATE = float(settings.get("CENTROIDS_LEARN_RATE", 0.15))  # α do update exponencial
-CENTROIDS_HOURLY_REFRESH_ENABLED = str(settings.get("CENTROIDS_HOURLY_REFRESH_ENABLED", "true")).lower() in ("1","true","yes","on")
-CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH = int(settings.get("CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH", 50))
+CENTROIDS_MIN_RECORDS_FOR_TRAIN = int(settings.get("CENTROIDS_MIN_RECORDS_FOR_TRAIN", 50))
+
+# Meta-Bandit: estratégias
+META_STRATEGIES = ["epsilon_greedy", "ucb1", "thompson"]
 
 # ============================================================
-# 🧱 DDL: Estatísticas contextuais do bandit
+# Utils NumPy
+# ============================================================
+def _unit(v: np.ndarray) -> np.ndarray:
+    n = np.linalg.norm(v)
+    return v if n == 0 else v / n
+
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0:
+        return 0.0
+    return float(np.dot(a, b) / denom)
+
+def _ensure_dim(v: np.ndarray) -> np.ndarray:
+    v = v.astype(np.float32).reshape(-1)
+    if len(v) != CENTROIDS_DIM:
+        # fallback seguro: pad/trim
+        if len(v) > CENTROIDS_DIM:
+            v = v[:CENTROIDS_DIM]
+        else:
+            pad = CENTROIDS_DIM - len(v)
+            v = np.concatenate([v, np.zeros(pad, dtype=np.float32)])
+    return _unit(v)
+
+# ============================================================
+# DDL — tabela “bandit_context_stats”
 # ============================================================
 
-DDL_BANDIT_CONTEXT = """
+DDL = """
 CREATE TABLE IF NOT EXISTS bandit_context_stats (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    context_type VARCHAR(50) NOT NULL,
+    context_label VARCHAR(255) NOT NULL,
     model VARCHAR(255) NOT NULL,
     avg_reward FLOAT DEFAULT 0,
     count INT DEFAULT 0,
-    last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uq_ctx_model (context_type, model)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    var FLOAT DEFAULT 0,
+    M2 FLOAT DEFAULT 0,
+    last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_ctx_model (context_label, model)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
 def _init_tables():
     try:
         with engine.begin() as conn:
-            conn.execute(text(DDL_BANDIT_CONTEXT))
-        logger.info("[bandit] Tabela bandit_context_stats verificada/criada.")
-    except SQLAlchemyError as e:
-        logger.warning(f"[bandit] Falha ao criar tabela bandit_context_stats: {e}")
+            conn.execute(text(DDL))
+        logger.info("[bandit] Tabela bandit_context_stats criada/verificada.")
+    except Exception as e:
+        logger.warning(f"[bandit] Falha ao criar tabelas: {e}")
 
 _init_tables()
 
-# ============================================================
-# 🔢 Utilidades numéricas
-# ============================================================
-
-def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
-    if a.ndim != 1 or b.ndim != 1:
-        a = a.reshape(-1)
-        b = b.reshape(-1)
-    denom = (np.linalg.norm(a) * np.linalg.norm(b))
-    if denom == 0.0:
-        return 0.0
-    return float(np.dot(a, b) / denom)
-
-def _unit(x: np.ndarray) -> np.ndarray:
-    n = np.linalg.norm(x)
-    return x if n == 0 else (x / n)
 
 # ============================================================
-# 🧭 Contextos
+# Centróides semânticos (NumPy vetorizado) + clustering dinâmico
 # ============================================================
 
-def _token_count(text: str) -> int:
-    return len((text or "").split())
-
-def detect_contexts(query: str) -> List[str]:
-    """
-    Contextos estruturais/domínio + etiqueta semântica de centróide (se houver).
-    """
-    q = (query or "").lower()
-    toks = _token_count(q)
-
-    contexts: List[str] = []
-
-    # Estruturais
-    if toks < 40:   contexts.append("short")
-    if toks > 250:  contexts.append("long")
-
-    # Técnicos
-    if any(x in q for x in ["def ", "class ", "import ", "public ", "{", "}", "console.log", "async ", "await ", "=> "]):
-        contexts.append("code")
-    if any(x in q for x in ["select ", "from ", "json", "csv", "tabela", "dataframe", "parquet", "sql "]):
-        contexts.append("data")
-    if any(x in q for x in ["http", "https", "port ", "socket", "tcp", "udp", "dns", "bind9", "api "]):
-        contexts.append("network")
-    if any(x in q for x in [" if ", " then ", " else ", " while ", " loop ", " state ", " fsm "]):
-        contexts.append("logic")
-    if any(x in q for x in ["∑", "√", " integral", " derivada", " teorema", " álgebra", "matriz", "vetor"]):
-        contexts.append("math")
-
-    # Acadêmico/científico/negócios/legal
-    if any(x in q for x in ["referência", "metodologia", "introdução", "revisão", "abnt", "doi", "citação"]):
-        contexts.append("academic")
-    if any(x in q for x in ["experimento", "hipótese", "teoria", "modelo", "observação"]):
-        contexts.append("scientific")
-    if any(x in q for x in ["custo", "lucro", "capex", "opex", "negócio", "vendas", "mercado"]):
-        contexts.append("business")
-    if any(x in q for x in ["lei", "artigo", "parágrafo", "constituição", "jurídico"]):
-        contexts.append("legal")
-
-    # Domínios usuais do seu projeto
-    if any(x in q for x in ["aviário", "granjas", "amônia", "irrigação", "bomba submersa", "gotejador"]):
-        contexts.append("agribusiness")
-    if any(x in q for x in ["moodle", "udl", "rubrica", "docência", "ifrn", "ppgite"]):
-        contexts.append("education")
-
-    # Fallback
-    if not contexts:
-        contexts.append("generic")
-
-    # Anexa rótulo semântico de centróide (se existir)
-    sem_label = _nearest_centroid_label(query)
-    if sem_label:
-        contexts.append(sem_label)
-
-    # Remover duplicatas mantendo ordem
-    seen = set()
-    ordered = []
-    for c in contexts:
-        if c not in seen:
-            seen.add(c)
-            ordered.append(c)
-    return ordered
-
-# ============================================================
-# 🧠 Centróides semânticos (ONLINE) em Redis
-# ============================================================
-
-def _load_centroids() -> List[dict]:
-    try:
-        if not rds:
-            return []
-        payload = rds.get(R_KEY_CENTROIDS)
-        if not payload:
-            return []
-        arr = json.loads(payload)
-        # validação leve
-        out = []
-        for it in arr:
-            if isinstance(it, dict) and "id" in it and "vec" in it and "count" in it:
-                # converte vetor para np.array normalizado
-                v = np.array([float(x) for x in it["vec"]], dtype=np.float32)
-                out.append({"id": int(it["id"]), "vec": _unit(v), "count": int(it["count"])})
-        return out
-    except Exception as e:
-        logger.warning(f"[centroids] Falha ao carregar do Redis: {e}")
-        return []
-
-def _save_centroids(items: List[dict]) -> None:
-    try:
-        if not rds:
-            return
-        serial = []
-        for it in items:
-            serial.append({
-                "id": int(it["id"]),
-                "vec": [float(x) for x in _unit(it["vec"]).tolist()],
-                "count": int(it["count"])
-            })
-        pipe = rds.pipeline()
-        pipe.set(R_KEY_CENTROIDS, json.dumps(serial))
-        pipe.hset(R_KEY_CENTROIDS_META, mapping={
-            "updated_at": str(int(time.time())),
-            "k": str(CENTROIDS_K),
-            "dim": str(CENTROIDS_DIM),
-        })
-        pipe.set(R_KEY_CENTROIDS_V, "1")
-        pipe.execute()
-    except Exception as e:
-        logger.warning(f"[centroids] Falha ao salvar no Redis: {e}")
-
-def _acquire_lock(name: str, ttl: int = 10) -> bool:
+def _acquire_lock(key: str, ttl: int = 10) -> bool:
     if not rds:
         return False
     try:
-        return bool(rds.set(name, "1", nx=True, ex=ttl))
+        return bool(rds.set(key, "1", nx=True, ex=ttl))
     except Exception:
         return False
 
-def _release_lock(name: str) -> None:
+
+def _release_lock(key: str) -> None:
     if not rds:
         return
     try:
-        rds.delete(name)
+        rds.delete(key)
     except Exception:
         pass
 
-def _ensure_dim(v: np.ndarray) -> np.ndarray:
-    # não forçamos dimensão; assumimos que embeddings já vêm com a dimensão correta do modelo
-    return _unit(v.astype(np.float32).reshape(-1))
 
-def _nearest_centroid(v: np.ndarray, centroids: List[dict]) -> Tuple[Optional[int], float]:
-    if not centroids:
-        return None, 0.0
-    best_idx = None
-    best_sim = -1.0
-    for idx, it in enumerate(centroids):
-        sim = _cosine_sim(v, it["vec"])  # ambos unit norm
-        if sim > best_sim:
-            best_sim = sim
-            best_idx = idx
-    return best_idx, float(best_sim)
+def _load_centroids() -> List[dict]:
+    """
+    Carrega centróides de Redis:
+    [
+      {"id": int, "vec": np.ndarray(D,), "count": int, "last": int}
+    ]
+    """
+    if not rds:
+        return []
+    try:
+        raw = rds.get(R_CENTROIDS)
+        if not raw:
+            return []
+        arr = json.loads(raw)
+        cents: List[dict] = []
+        for it in arr:
+            if not isinstance(it, dict):
+                continue
+            if "id" not in it or "vec" not in it:
+                continue
+            vec = np.array(it["vec"], dtype=np.float32)
+            vec = _ensure_dim(vec)
+            cnt = int(it.get("count", 0))
+            last = int(it.get("last", int(time.time())))
+            cents.append({"id": int(it["id"]), "vec": vec, "count": cnt, "last": last})
+        return cents
+    except Exception as e:
+        logger.warning(f"[centroids] Falha ao carregar: {e}")
+        return []
 
-def _new_centroid_id(centroids: List[dict]) -> int:
-    used = {int(it["id"]) for it in centroids}
+
+def _save_centroids(cents: List[dict]) -> None:
+    """
+    Persiste centróides com reinicialização automática de degenerados.
+    """
+    if not rds:
+        return
+    serial = []
+    now_ts = int(time.time())
+
+    for it in cents:
+        vec = np.array(it["vec"], dtype=np.float32).reshape(-1)
+        # reinicialização de degenerados
+        if not np.isfinite(vec).all() or np.linalg.norm(vec) < 1e-4:
+            vec = np.random.normal(size=(CENTROIDS_DIM,)).astype(np.float32)
+            vec = _unit(vec)
+            cnt = 0
+        else:
+            vec = _unit(vec)
+            cnt = int(it.get("count", 0))
+
+        serial.append(
+            {
+                "id": int(it["id"]),
+                "vec": vec.tolist(),
+                "count": cnt,
+                "last": int(it.get("last", now_ts)),
+            }
+        )
+
+    try:
+        pipe = rds.pipeline()
+        pipe.set(R_CENTROIDS, json.dumps(serial))
+        pipe.hset(
+            R_CENTROIDS_META,
+            mapping={
+                "updated_at": str(now_ts),
+                "k": str(CENTROIDS_K),
+                "dim": str(CENTROIDS_DIM),
+                "count": str(len(serial)),
+            },
+        )
+        pipe.execute()
+    except Exception as e:
+        logger.warning(f"[centroids] Falha ao salvar: {e}")
+
+
+def _new_centroid_id(cents: List[dict]) -> int:
+    used = {c["id"] for c in cents}
     cid = 0
     while cid in used:
         cid += 1
     return cid
 
+
+def _nearest_centroid_vec(
+    v: np.ndarray, cents: List[dict]
+) -> Tuple[Optional[int], float]:
+    """
+    Versão vetorizada: empilha centróides e faz produto escalar.
+    Assumimos vetores unitários.
+    """
+    if not cents:
+        return None, 0.0
+
+    C = np.stack([c["vec"] for c in cents], axis=0)  # (K, D)
+    sims = C @ v  # produto escalar (unit vectors → cosine)
+    idx = int(np.argmax(sims))
+    return idx, float(sims[idx])
+
+
 def centroids_online_update(query_text: str) -> Optional[int]:
     """
-    Atualização ON-LINE de centróides:
-      - calcula embedding via embed_text(query_text) -> np.ndarray (normalizado).
-      - atribui ao centróide mais próximo (cosine).
-      - se sim < MIN_SIM_CREATE e len < K -> cria novo centróide (inicial = x).
-      - senão atualiza centróide com c = (1-α)c + α x; re-normaliza.
-    Retorna id do centróide atribuído (ou None).
+    Atualização ONLINE:
+      - embed_text(query_text) → v (np.ndarray normalizado)
+      - se não há centróides: cria o primeiro
+      - senão: acha centróide mais próximo
+           * se sim < CENTROIDS_MIN_SIM_CREATE e len < K → cria novo
+           * senão: update exponencial c := (1-α)c + αv ; renorma; count++
+    Retorna ID do centróide associado ou None em caso de falha.
     """
     try:
-        v = _ensure_dim(embed_text(query_text))
+        v = embed_text(query_text)
+        if not isinstance(v, np.ndarray):
+            v = np.array(v, dtype=np.float32)
+        v = _ensure_dim(v)
     except Exception as e:
-        logger.debug(f"[centroids] Falha ao embedar query para update online: {e}")
+        logger.debug(f"[centroids] Falha ao gerar embedding: {e}")
         return None
 
-    # lock simples para evitar corridas
-    if not _acquire_lock(R_KEY_CENTROIDS_LOCK, ttl=5):
-        # sem lock, apenas desiste silenciosamente
+    if not _acquire_lock(R_CENTROIDS_LOCK, ttl=5):
         return None
 
     try:
         cents = _load_centroids()
-        idx, sim = _nearest_centroid(v, cents)
-        if idx is None or sim < CENTROIDS_MIN_SIM_CREATE:
-            if len(cents) < CENTROIDS_K:
-                # cria novo centróide
-                cid = _new_centroid_id(cents)
-                cents.append({"id": cid, "vec": v.copy(), "count": 1})
-                _save_centroids(cents)
-                return cid
-            # sem vaga para criar; atualiza o mais próximo mesmo assim
-            if idx is None:
-                return None
+        if not cents:
+            cid = 0
+            cents = [{"id": cid, "vec": v, "count": 1, "last": int(time.time())}]
+            _save_centroids(cents)
+            return cid
 
-        # atualização exponencial
+        idx, sim = _nearest_centroid_vec(v, cents)
+
+        if (idx is None) or (sim < CENTROIDS_MIN_SIM_CREATE and len(cents) < CENTROIDS_K):
+            cid = _new_centroid_id(cents)
+            cents.append(
+                {"id": cid, "vec": v, "count": 1, "last": int(time.time())}
+            )
+            _save_centroids(cents)
+            return cid
+
+        # Update exponencial no centróide existente
         c = cents[idx]
-        cvec = c["vec"]
-        new_vec = _unit((1.0 - CENTROIDS_LEARN_RATE) * cvec + CENTROIDS_LEARN_RATE * v)
+        new_vec = (1.0 - CENTROIDS_LEARN_RATE) * c["vec"] + CENTROIDS_LEARN_RATE * v
+        new_vec = _unit(new_vec.astype(np.float32))
         c["vec"] = new_vec
         c["count"] = int(c.get("count", 0)) + 1
+        c["last"] = int(time.time())
         _save_centroids(cents)
         return c["id"]
     finally:
-        _release_lock(R_KEY_CENTROIDS_LOCK)
+        _release_lock(R_CENTROIDS_LOCK)
+
 
 def _nearest_centroid_label(query_text: str) -> Optional[str]:
     """
-    Retorna etiqueta 'semctx:<id>' do centróide mais próximo se existir algum.
-    Não cria centróides; somente leitura.
+    Somente leitura: retorna 'semctx:<id>' do centróide mais próximo.
+    NÃO cria centróides novos (usa embedding atual).
+    Usado pelo router_core para logging.
     """
     try:
-        v = _ensure_dim(embed_text(query_text))
+        v = embed_text(query_text)
+        if not isinstance(v, np.ndarray):
+            v = np.array(v, dtype=np.float32)
+        v = _ensure_dim(v)
     except Exception:
         return None
+
     cents = _load_centroids()
-    idx, sim = _nearest_centroid(v, cents)
+    if not cents:
+        return None
+
+    idx, sim = _nearest_centroid_vec(v, cents)
     if idx is None:
         return None
-    cid = cents[idx]["id"]
+    cid = int(cents[idx]["id"])
     return f"semctx:{cid}"
 
 # ============================================================
-# 🧹 Tarefa horária de manutenção (merge até K; só com ≥ 50 logs)
+# Contextos automáticos via clustering dinâmico
 # ============================================================
 
-def _count_query_log_rows() -> int:
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(text("SELECT COUNT(*) AS c FROM query_log")).fetchone()
-            return int(row[0] if row else 0)
-    except Exception:
-        return 0
-
-def _merge_closest_pairs(cents: List[dict], target_k: int) -> List[dict]:
+def _auto_context_labels(query: str, modality: str = "text") -> List[str]:
     """
-    Estratégia simples: enquanto len(cents) > target_k, mescla o par mais similar:
-      c_ij = unit( (w_i * c_i + w_j * c_j) / (w_i + w_j) ), count = w_i + w_j
+    Gera contextos automáticos:
+      - 'cluster:<id>' baseado em centróide mais próximo / atualizado online
+      - 'mod:<modality>'
+      - 'global'
     """
-    cents = list(cents)
-    while len(cents) > target_k and len(cents) >= 2:
-        best = (-1.0, None, None)  # (sim, i, j)
-        for i in range(len(cents)):
-            for j in range(i + 1, len(cents)):
-                sim = _cosine_sim(cents[i]["vec"], cents[j]["vec"])
-                if sim > best[0]:
-                    best = (sim, i, j)
-        _, i, j = best
-        if i is None or j is None:
-            break
-        ci, cj = cents[i], cents[j]
-        wi, wj = float(ci["count"]), float(cj["count"])
-        new_vec = _unit((wi * ci["vec"] + wj * cj["vec"]) / max(1.0, wi + wj))
-        new_id = min(ci["id"], cj["id"])
-        new_count = int(wi + wj)
-        # remove j>i para manter índices
-        for idx in sorted([i, j], reverse=True):
-            del cents[idx]
-        cents.append({"id": new_id, "vec": new_vec, "count": new_count})
-    return cents
+    labels: List[str] = []
 
-def _hourly_centroids_maintenance():
-    while True:
-        try:
-            if not CENTROIDS_HOURLY_REFRESH_ENABLED:
-                time.sleep(3600)
-                continue
-
-            total = _count_query_log_rows()
-            if total < CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH:
-                logger.info(f"[centroids] Manutenção: ignorada (query_log={total} < {CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH}).")
-                time.sleep(3600)
-                continue
-
-            if not _acquire_lock(R_KEY_CENTROIDS_LOCK, ttl=30):
-                time.sleep(3600)
-                continue
-
-            try:
-                cents = _load_centroids()
-                if len(cents) > CENTROIDS_K:
-                    cents = _merge_closest_pairs(cents, CENTROIDS_K)
-                    _save_centroids(cents)
-                    logger.info(f"[centroids] Mesclados até K={CENTROIDS_K}. Total atual: {len(cents)}")
-                else:
-                    # Nada para fazer além de marcar meta
-                    if rds:
-                        rds.hset(R_KEY_CENTROIDS_META, mapping={"touched_at": str(int(time.time()))})
-            finally:
-                _release_lock(R_KEY_CENTROIDS_LOCK)
-
-        except Exception as e:
-            logger.warning(f"[centroids] Manutenção horária falhou: {e}")
-
-        time.sleep(3600)  # uma vez por hora
-
-# dispara thread de manutenção
-threading.Thread(target=_hourly_centroids_maintenance, daemon=True).start()
-
-# ============================================================
-# 📥 Leitura de modelos
-# ============================================================
-
-def load_candidate_models() -> List[str]:
+    # 1) cluster automático (atualiza centróides online)
     try:
-        models = settings.CANDIDATE_MODELS_LIST
-        if models and isinstance(models, list):
-            return models
-    except Exception as e:
-        logger.warning(f"[bandit] Falha ao ler modelos do settings_dynamic: {e}")
-    logger.warning("[bandit] Nenhuma lista de modelos encontrada; retornando lista vazia.")
-    return []
-
-# ============================================================
-# 🧮 Estatísticas por (contexto, modelo)
-# ============================================================
-
-def _redis_ctx_key(ctx: str) -> str:
-    return f"{R_KEY_BANDIT_CTXT_PREFIX}:{ctx}"
-
-def _get_ctx_stats_from_redis(ctx: str) -> Dict[str, Dict[str, float]]:
-    try:
-        if not rds:
-            return {}
-        key = _redis_ctx_key(ctx)
-        if not rds.exists(key):
-            return {}
-        raw = rds.hgetall(key)
-        stats: Dict[str, Dict[str, float]] = {}
-        for model, payload in raw.items():
-            try:
-                item = json.loads(payload)
-                if isinstance(item, dict):
-                    stats[model.decode() if isinstance(model, bytes) else model] = {
-                        "avg": float(item.get("avg", 0.0)),
-                        "count": int(item.get("count", 0)),
-                        "var": float(item.get("var", 0.0)),
-                        "mean": float(item.get("mean", item.get("avg", 0.0))),
-                        "M2": float(item.get("M2", 0.0)),
-                    }
-            except Exception:
-                continue
-        return stats
-    except Exception as e:
-        logger.warning(f"[bandit] Falha ao ler contexto {ctx} do Redis: {e}")
-        return {}
-
-def _set_ctx_stats_to_redis(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
-    try:
-        if not rds:
-            return
-        key = _redis_ctx_key(ctx)
-        pipe = rds.pipeline()
-        for model, s in stats.items():
-            payload = json.dumps({
-                "avg": float(s.get("avg", s.get("mean", 0.0))),
-                "count": int(s.get("count", 0)),
-                "var": float(s.get("var", 0.0)),
-                "mean": float(s.get("mean", s.get("avg", 0.0))),
-                "M2": float(s.get("M2", 0.0)),
-            })
-            pipe.hset(key, model, payload)
-        pipe.execute()
-    except Exception as e:
-        logger.warning(f"[bandit] Falha ao persistir stats do contexto {ctx} no Redis: {e}")
-
-def _load_ctx_from_db(ctx: str) -> Dict[str, Dict[str, float]]:
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT model, avg_reward, count FROM bandit_context_stats WHERE context_type = :ctx"),
-                {"ctx": ctx}
-            ).fetchall()
-        out = {}
-        for row in rows:
-            model = row[0]
-            out[model] = {"avg": float(row[1] or 0.0), "count": int(row[2] or 0), "var": 0.0, "mean": float(row[1] or 0.0), "M2": 0.0}
-        return out
-    except SQLAlchemyError as e:
-        logger.warning(f"[bandit] Falha ao carregar stats de {ctx} do DB: {e}")
-        return {}
-
-def _upsert_ctx_model_to_db(ctx: str, model: str, avg: float, count: int) -> None:
-    try:
-        with engine.begin() as conn:
-            conn.execute(
-                text("""
-                    INSERT INTO bandit_context_stats (context_type, model, avg_reward, count)
-                    VALUES (:ctx, :model, :avg, :count)
-                    ON DUPLICATE KEY UPDATE
-                        avg_reward = :avg,
-                        count = :count,
-                        last_update = CURRENT_TIMESTAMP
-                """),
-                {"ctx": ctx, "model": model, "avg": float(avg), "count": int(count)}
-            )
-    except SQLAlchemyError as e:
-        logger.warning(f"[bandit] Falha no upsert de ({ctx}, {model}) no DB: {e}")
-
-# ============================================================
-# 🧠 Seleção ε-greedy contextual
-# ============================================================
-
-def _dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]]) -> float:
-    try:
-        eps = float(settings.get("BANDIT_EPSILON", DEFAULT_EPSILON))
-    except Exception:
-        eps = DEFAULT_EPSILON
-
-    if not ctx_stats:
-        return min(1.0, eps + 0.1)
-
-    counts = [s.get("count", 0) for s in ctx_stats.values()]
-    if counts and min(counts) < MIN_OBS_FOR_EXPLOIT:
-        eps += EPSILON_BOOST_UNDEREXP
-
-    variances = [s.get("var", 0.0) for s in ctx_stats.values()]
-    if variances and statistics.mean(variances) > 0.05:
-        eps += CONTEXT_VARIANCE_BOOST
-
-    return max(0.0, min(1.0, eps))
-
-def _score_for_exploit(stats: Dict[str, float]) -> float:
-    cnt = stats.get("count", 0)
-    var = stats.get("var", 0.0)
-    return (1.0 / (1.0 + cnt)) + (0.5 * var)
-
-def select_model(valid_models: List[str], query: str) -> str:
-    if not valid_models:
-        valid_models = load_candidate_models()
-    if not valid_models:
-        logger.warning("[bandit] Sem modelos válidos; fallback 'ollama/gemma3:4b'.")
-        return "ollama/gemma3:4b"
-
-    # Atualização online de centróides com a query atual (não bloqueante)
-    try:
-        centroids_online_update(query)
+        cid = centroids_online_update(query)
+        if cid is not None:
+            labels.append(f"cluster:{cid}")
     except Exception:
         pass
 
-    contexts = detect_contexts(query)
+    # 2) modalidade (text|vision|multimodal)
+    mod = (modality or "text").strip().lower()
+    labels.append(f"mod:{mod}")
 
-    # Coletar estatísticas de cada contexto
-    per_ctx_stats = []
-    for ctx in contexts:
-        stats = _get_ctx_stats_from_redis(ctx)
-        if not stats:
-            stats = _load_ctx_from_db(ctx)
-            if stats:
-                _set_ctx_stats_to_redis(ctx, stats)
-        per_ctx_stats.append((ctx, stats))
+    # 3) global
+    labels.append("global")
 
-    # Agregar por modelo: média dos avg por contexto
-    agg: Dict[str, Dict[str, float]] = {m: {"avg": 0.0, "count": 0, "var": 0.0} for m in valid_models}
-    for m in valid_models:
-        avgs, counts, vars_ = [], [], []
-        for _, s in per_ctx_stats:
-            if m in s:
-                avgs.append(s[m].get("avg", 0.0))
-                counts.append(s[m].get("count", 0))
-                vars_.append(s[m].get("var", 0.0))
-        if avgs:
-            agg[m]["avg"] = float(sum(avgs) / len(avgs))
-        if counts:
-            agg[m]["count"] = int(sum(counts))
-        if vars_:
-            agg[m]["var"] = float(sum(vars_) / max(1, len(vars_)))
+    # remove duplicatas preservando ordem
+    seen = set()
+    out: List[str] = []
+    for c in labels:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
 
-    # Epsilon dinâmico com base no contexto principal
-    main_ctx = contexts[0] if contexts else "generic"
-    eps = _dynamic_epsilon(_get_ctx_stats_from_redis(main_ctx))
 
-    # Explora vs. Explora
+# ============================================================
+# Stats de contexto em Redis + DB
+# ============================================================
+
+def _ctx_key(ctx: str) -> str:
+    return f"{R_CTX_PREFIX}:{ctx}"
+
+
+def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
+    """
+    Lê stats de um contexto:
+    {
+      "modelA": {"mean":..., "count":..., "var":..., "M2":..., "alpha":..., "beta":...},
+      ...
+    }
+    """
+    stats: Dict[str, Dict[str, float]] = {}
+
+    # Redis
+    if rds:
+        try:
+            raw = rds.hgetall(_ctx_key(ctx))
+            for k, v in raw.items():
+                model = k.decode() if isinstance(k, bytes) else k
+                try:
+                    obj = json.loads(v)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                stats[model] = {
+                    "mean": float(obj.get("mean", obj.get("avg", 0.0))),
+                    "count": int(obj.get("count", 0)),
+                    "var": float(obj.get("var", 0.0)),
+                    "M2": float(obj.get("M2", 0.0)),
+                    "alpha": float(obj.get("alpha", 1.0)),
+                    "beta": float(obj.get("beta", 1.0)),
+                }
+        except Exception as e:
+            logger.warning(f"[bandit] Falha Redis ctx={ctx}: {e}")
+
+    # Se vazio, tenta DB
+    if not stats:
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        """
+                        SELECT model, avg_reward, count, var, M2
+                        FROM bandit_context_stats
+                        WHERE context_label = :ctx
+                        """
+                    ),
+                    {"ctx": ctx},
+                ).fetchall()
+            for row in rows:
+                model = row[0]
+                stats[model] = {
+                    "mean": float(row[1] or 0.0),
+                    "count": int(row[2] or 0),
+                    "var": float(row[3] or 0.0),
+                    "M2": float(row[4] or 0.0),
+                    "alpha": 1.0 + float(row[1] or 0.0) * float(row[2] or 0.0),
+                    "beta": 1.0 + max(
+                        0.0,
+                        float(row[2] or 0.0)
+                        - float(row[1] or 0.0) * float(row[2] or 0.0),
+                    ),
+                }
+        except Exception as e:
+            logger.warning(f"[bandit] Falha DB ctx={ctx}: {e}")
+
+    return stats
+
+
+def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
+    if not rds:
+        return
+    try:
+        key = _ctx_key(ctx)
+        pipe = rds.pipeline()
+        for model, s in stats.items():
+            payload = json.dumps(
+                {
+                    "mean": float(s.get("mean", 0.0)),
+                    "count": int(s.get("count", 0)),
+                    "var": float(s.get("var", 0.0)),
+                    "M2": float(s.get("M2", 0.0)),
+                    "alpha": float(s.get("alpha", 1.0)),
+                    "beta": float(s.get("beta", 1.0)),
+                }
+            )
+            pipe.hset(key, model, payload)
+        pipe.execute()
+    except Exception as e:
+        logger.warning(f"[bandit] Falha ao salvar ctx={ctx} no Redis: {e}")
+
+
+def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO bandit_context_stats
+                      (context_label, model, avg_reward, count, var, M2)
+                    VALUES (:ctx, :model, :avg, :count, :var, :M2)
+                    ON DUPLICATE KEY UPDATE
+                      avg_reward = :avg,
+                      count = :count,
+                      var = :var,
+                      M2 = :M2,
+                      last_update = CURRENT_TIMESTAMP
+                    """
+                ),
+                {
+                    "ctx": ctx,
+                    "model": model,
+                    "avg": float(s.get("mean", 0.0)),
+                    "count": int(s.get("count", 0)),
+                    "var": float(s.get("var", 0.0)),
+                    "M2": float(s.get("M2", 0.0)),
+                },
+            )
+    except Exception as e:
+        logger.warning(
+            f"[bandit] Falha no upsert DB ctx={ctx}, model={model}: {e}"
+        )
+# ============================================================
+
+
+# ============================================================
+# Estratégias básicas: ε-greedy, UCB1, Thompson Sampling
+# ============================================================
+
+def _dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]]) -> float:
+    eps = DEFAULT_EPSILON
+    if not ctx_stats:
+        return min(1.0, eps + 0.15)
+
+    counts = [s.get("count", 0) for s in ctx_stats.values()]
+    if counts and min(counts) < 3:
+        eps += 0.10
+
+    vars_ = [s.get("var", 0.0) for s in ctx_stats.values()]
+    if vars_ and float(np.mean(vars_)) > 0.05:
+        eps += 0.08
+
+    return max(0.0, min(1.0, eps))
+
+
+def _choose_epsilon_greedy(
+    models: List[str], ctx_stats: Dict[str, Dict[str, float]]
+) -> str:
+    eps = _dynamic_epsilon(ctx_stats)
     if random.random() < eps:
-        scored = [(m, _score_for_exploit(agg[m])) for m in valid_models]
+        # exploração: escolhe modelo com maior variância / menor count
+        scored = []
+        for m in models:
+            s = ctx_stats.get(m, {})
+            cnt = s.get("count", 0)
+            var = s.get("var", 0.0)
+            expl = (1.0 / (1.0 + cnt)) + 0.5 * var
+            scored.append((m, expl))
         scored.sort(key=lambda x: x[1], reverse=True)
-        chosen = scored[0][0]
-        logger.info(f"[bandit] Exploração (ε={eps:.2f}) → {chosen} | ctx={contexts}")
+        return scored[0][0]
     else:
-        scored = [(m, agg[m]["avg"]) for m in valid_models]
+        # aproveitamento: maior média
+        scored = []
+        for m in models:
+            s = ctx_stats.get(m, {})
+            mean = s.get("mean", 0.0)
+            scored.append((m, mean))
         scored.sort(key=lambda x: x[1], reverse=True)
-        chosen = scored[0][0]
-        logger.info(f"[bandit] Aproveitamento (ε={eps:.2f}) → {chosen} | ctx={contexts}")
+        return scored[0][0]
+
+
+def _choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
+    total = sum(s.get("count", 0) for s in ctx_stats.values())
+    if total <= 0:
+        total = 1
+    C = 1.4
+    scores = []
+    for m in models:
+        s = ctx_stats.get(m, {})
+        mean = s.get("mean", 0.0)
+        cnt = s.get("count", 0)
+        if cnt <= 0:
+            bonus = float("inf")  # força serem escolhidos ao menos uma vez
+        else:
+            bonus = C * math.sqrt(math.log(total + 1.0) / cnt)
+        scores.append((m, mean + bonus))
+    scores.sort(key=lambda x: x[1], reverse=True)
+    return scores[0][0]
+
+
+def _choose_thompson(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
+    cand = []
+    for m in models:
+        s = ctx_stats.get(m, {})
+        alpha = float(s.get("alpha", 1.0))
+        beta = float(s.get("beta", 1.0))
+        # proteção contra degeneração
+        if alpha <= 0 or beta <= 0 or not math.isfinite(alpha) or not math.isfinite(beta):
+            alpha, beta = 1.0, 1.0
+        sample = np.random.beta(alpha, beta)
+        cand.append((m, float(sample)))
+    cand.sort(key=lambda x: x[1], reverse=True)
+    return cand[0][0]
+
+
+# ============================================================
+# Meta-Bandit: combinação híbrida ε-greedy + UCB1 + TS
+# ============================================================
+
+def _meta_choose_strategy() -> str:
+    """
+    Estratégia meta:
+      - Se houver override em Redis/settings → usa.
+      - Caso contrário, combinação leve favorecendo UCB1 em estáveis,
+        TS em dados ricos e ε-greedy em dados escassos.
+    """
+    # override via Redis
+    if rds:
+        try:
+            raw = rds.get(R_META_STRATEGY)
+            if raw:
+                val = raw.decode() if isinstance(raw, bytes) else raw
+                val = val.strip().lower()
+                if val in META_STRATEGIES:
+                    return val
+        except Exception:
+            pass
+
+    # fallback simples: usar UCB1 como default
+    return "ucb1"
+
+
+def _meta_combine_choices(
+    models: List[str],
+    ctx_stats: Dict[str, Dict[str, float]],
+) -> Tuple[str, Dict[str, str]]:
+    """
+    Executa as três estratégias e combina por:
+      1) voto majoritário; se empate total, prioriza meta-stratégia.
+    Retorna (modelo_escolhido, {"eps":..., "ucb1":..., "ts":...}).
+    """
+    if not models:
+        raise RuntimeError("Nenhum modelo recebido em _meta_combine_choices.")
+
+    eps_choice = _choose_epsilon_greedy(models, ctx_stats)
+    ucb_choice = _choose_ucb1(models, ctx_stats)
+    ts_choice = _choose_thompson(models, ctx_stats)
+
+    votes: Dict[str, int] = {}
+    for m in (eps_choice, ucb_choice, ts_choice):
+        votes[m] = votes.get(m, 0) + 1
+
+    # modelo com maior número de votos
+    best_model = None
+    best_votes = -1
+    for m, v in votes.items():
+        if v > best_votes:
+            best_model = m
+            best_votes = v
+
+    if best_votes >= 2:
+        chosen = best_model  # maioria absoluta
+    else:
+        # todos diferentes → consulta meta-stratégia default
+        strat = _meta_choose_strategy()
+        if strat == "epsilon_greedy":
+            chosen = eps_choice
+        elif strat == "thompson":
+            chosen = ts_choice
+        else:  # ucb1
+            chosen = ucb_choice
+
+    return chosen, {
+        "epsilon_greedy": eps_choice,
+        "ucb1": ucb_choice,
+        "thompson": ts_choice,
+    }
+
+
+# ============================================================
+# API principal de seleção
+# ============================================================
+
+def select_model(
+    valid_models: List[str],
+    query: str,
+    modality: str = "text",
+) -> str:
+    """
+    Seleção de modelo via Meta-Bandit híbrido.
+
+    Compatível com router_core:
+      select_model(top2, query, modality=modality)
+    """
+    if not valid_models:
+        logger.warning("[bandit] Lista de modelos vazia; retornando default.")
+        return "ollama/gemma3:4b"
+
+    # Contextos automáticos por clustering + modalidade
+    contexts = _auto_context_labels(query, modality)
+    main_ctx = contexts[0] if contexts else "global"
+
+    # Stats do contexto principal
+    ctx_stats = _get_ctx_stats(main_ctx)
+
+    # Meta-bandit híbrido
+    chosen, debug_choices = _meta_combine_choices(valid_models, ctx_stats)
+
+    logger.info(
+        "[bandit] ctx=%s | models=%s | chosen=%s | eps=%s | ucb1=%s | ts=%s",
+        main_ctx,
+        valid_models,
+        chosen,
+        debug_choices["epsilon_greedy"],
+        debug_choices["ucb1"],
+        debug_choices["thompson"],
+    )
 
     try:
         BANDIT_SELECT.labels(model=chosen).inc()
@@ -618,86 +716,164 @@ def select_model(valid_models: List[str], query: str) -> str:
     return chosen
 
 # ============================================================
-# 📝 Atualização do bandit com recompensa observada
+
+# ============================================================
+# Atualização do bandit com recompensa observada
 # ============================================================
 
-def bandit_update(model: str, query: str, reward: float) -> None:
+def bandit_update(
+    model: str,
+    query: str,
+    reward: float,
+    modality: str = "text",
+) -> None:
     """
-    Atualiza (contexto, modelo) com Welford + Redis + DB.
-    Também realiza update online dos centróides com a query corrente.
+    Atualiza estatísticas Welford (mean/var) + Beta(α,β) por contexto e modelo.
+    Compatível com router_core.bandit_update(model, query, reward, modality=...).
     """
-    # Atualiza centróides (online) — robusto a falhas
+    # normaliza reward
+    try:
+        r = float(reward)
+    except Exception:
+        r = 0.0
+    r = max(0.0, min(1.0, r))
+
+    # reforça centróides com a query atual (não crítico se falhar)
     try:
         centroids_online_update(query)
     except Exception:
         pass
 
-    contexts = detect_contexts(query)
+    contexts = _auto_context_labels(query, modality)
     for ctx in contexts:
         try:
-            # Estado atual
-            stats = _get_ctx_stats_from_redis(ctx)
-            cur = stats.get(model, {"avg": 0.0, "count": 0, "var": 0.0, "mean": 0.0, "M2": 0.0})
+            stats = _get_ctx_stats(ctx)
+            cur = stats.get(
+                model,
+                {
+                    "mean": 0.0,
+                    "count": 0,
+                    "var": 0.0,
+                    "M2": 0.0,
+                    "alpha": 1.0,
+                    "beta": 1.0,
+                },
+            )
 
-            mean = float(cur.get("mean", cur.get("avg", 0.0)))
-            M2 = float(cur.get("M2", 0.0))
+            mean = float(cur.get("mean", 0.0))
             count = int(cur.get("count", 0))
+            M2 = float(cur.get("M2", 0.0))
 
-            # Welford
+            # ---- Welford para mean/var ----
             count += 1
-            delta = reward - mean
-            mean += delta / count
-            delta2 = reward - mean
+            delta = r - mean
+            mean += delta / max(1, count)
+            delta2 = r - mean
             M2 += delta * delta2
-            var = (M2 / (count - 1)) if count > 1 else 0.0
+            var = M2 / (count - 1) if count > 1 else 0.0
 
-            # Update local
-            stats[model] = {"avg": mean, "count": count, "var": var, "mean": mean, "M2": M2}
+            # ---- Beta para TS ----
+            alpha = float(cur.get("alpha", 1.0)) + r
+            beta = float(cur.get("beta", 1.0)) + (1.0 - r)
+            if alpha <= 0 or not math.isfinite(alpha):
+                alpha = 1.0
+            if beta <= 0 or not math.isfinite(beta):
+                beta = 1.0
 
-            # Redis
-            _set_ctx_stats_to_redis(ctx, stats)
+            stats[model] = {
+                "mean": mean,
+                "count": count,
+                "var": var,
+                "M2": M2,
+                "alpha": alpha,
+                "beta": beta,
+            }
 
-            # DB
-            _upsert_ctx_model_to_db(ctx, model, mean, count)
+            # Redis + DB
+            _set_ctx_stats(ctx, stats)
+            _upsert_ctx_db(ctx, model, stats[model])
 
         except Exception as e:
-            logger.warning(f"[bandit] Falha ao atualizar bandit para ({ctx}, {model}): {e}")
+            logger.warning(
+                f"[bandit] Falha ao atualizar contexto ctx={ctx}, model={model}: {e}"
+            )
 
     try:
         BANDIT_UPDATE.labels(model=model).inc()
-        BANDIT_REWARD.observe(float(reward))
+        BANDIT_REWARD.observe(float(r))
     except Exception:
         pass
 
+
 # ============================================================
-# 🎯 Recompensa
+# Recompensa NSGA-II aware
 # ============================================================
 
-def compute_reward(model: str, quality: float, latency_s: float, cost_per_1k: float | None = None) -> float:
+def _load_nsga_weights() -> Tuple[float, float, float]:
     """
-    Converte métricas em recompensa [0..1].
-    - quality: [0..10] → [0..1]
-    - latência: logística com x0=20s
-    - custo: penaliza acima do baseline; bonifica locais por natureza
+    Lê pesos NSGA-II de Redis (nsga:weights) ou usa defaults.
+    Formato esperado:
+      {"quality": 0.55, "latency": 0.30, "cost": 0.15}
+    """
+    w_q, w_l, w_c = 0.55, 0.30, 0.15
+    if not rds:
+        return w_q, w_l, w_c
+    try:
+        raw = rds.get("nsga:weights")
+        if not raw:
+            return w_q, w_l, w_c
+        obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            return w_q, w_l, w_c
+        w_q = float(obj.get("quality", w_q))
+        w_l = float(obj.get("latency", w_l))
+        w_c = float(obj.get("cost", w_c))
+        total = w_q + w_l + w_c
+        if total <= 0:
+            return 0.55, 0.30, 0.15
+        w_q, w_l, w_c = w_q / total, w_l / total, w_c / total
+        return w_q, w_l, w_c
+    except Exception as e:
+        logger.warning(f"[bandit] Falha ao carregar nsga:weights: {e}")
+        return w_q, w_l, w_c
+
+
+def compute_reward(
+    model: str,
+    quality: float,
+    latency_s: float,
+    cost_per_1k: Optional[float] = None,
+) -> float:
+    """
+    Converte métricas em recompensa [0..1] com pesos NSGA-II dinâmicos.
+
+    - quality  ∈ [0..10] → normalizado [0..1]
+    - latência: logística com x0=20s (quanto menor melhor)
+    - custo: penaliza custos acima de baseline; bonifica próximos ao local
     """
     try:
+        w_q, w_l, w_c = _load_nsga_weights()
+
+        # qualidade
         q = max(0.0, min(10.0, float(quality))) / 10.0
 
-        # penalização latência
+        # latência (logística invertida)
         L, k, x0 = 1.0, 0.12, 20.0
-        lat_factor = L / (1.0 + math.exp(k * (latency_s - x0)))
-        lat_factor = max(0.0, min(1.0, lat_factor))
+        lat_score = L / (1.0 + math.exp(k * (latency_s - x0)))
+        lat_score = max(0.0, min(1.0, lat_score))
 
-        cost_factor = 1.0
+        # custo
+        cost_score = 1.0
         if cost_per_1k is not None:
             baseline = 0.12
             ratio = float(cost_per_1k) / baseline if baseline > 0 else 1.0
-            cost_factor = 1.0 / (1.0 + max(0.0, ratio - 1.0))
-            cost_factor = max(0.3, min(1.0, cost_factor))
+            # >1 significa mais caro que baseline
+            cost_score = 1.0 / (1.0 + max(0.0, ratio - 1.0))
+            cost_score = max(0.3, min(1.0, cost_score))
 
-        reward = 0.55 * q + 0.30 * lat_factor + 0.15 * cost_factor
-        return float(max(0.0, min(1.0, reward)))
+        reward = w_q * q + w_l * lat_score + w_c * cost_score
+        reward = max(0.0, min(1.0, float(reward)))
+        return reward
     except Exception as e:
-        logger.warning(f"[bandit] Falha ao calcular reward: {e}")
+        logger.warning(f"[bandit] Falha em compute_reward: {e}")
         return 0.0
-# ============================================================

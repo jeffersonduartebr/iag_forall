@@ -1,14 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-Vectorstore manager — ChromaDB v2+ (modo local persistente)
------------------------------------------------------------
-Módulo centralizado para todas as interações com o ChromaDB.
-Compatível com Chroma >= 0.5.0.
+vectorstore.py — RAG Multimodal (Texto / Visão / Multimodal)
+----------------------------------------------------------------------
+Compatível com o novo embeddings.py:
 
-✅ Blindagem global:
-   - Qualquer embedding recebido como numpy.ndarray é convertido para list[float]
-   - Sanitização de inputs (ids, documents, metadatas)
-   - query() sempre recebe list[float] válida
+    - embed_text()
+    - embed_image()
+    - embed_multimodal()
+
+Coleções:
+    • text_embeddings
+    • image_embeddings
+    • multimodal_embeddings
+
+Funções expostas:
+    - init_vectorstore()
+    - add_document()
+    - query_embedding()
+    - reset_collections()
+    - health_async()
+
+Robustez extra:
+    • criação automática de coleções
+    • fallback para erros do Chroma
+    • normalização avançada de modalidade
 """
 
 from __future__ import annotations
@@ -21,208 +36,201 @@ from typing import List, Dict, Any, Optional, Union
 import chromadb
 import numpy as np
 
-# ✅ Importa o módulo de settings centralizado
-# (Assumindo que este arquivo está em 'app/vectorstore.py')
+from .embeddings import embed_text, embed_image, embed_multimodal
 from .settings_dynamic import settings
 
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] vectorstore: %(message)s")
 
 # ============================================================
-# ⚙️ Configurações
+# Logging
+# ============================================================
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] [%(levelname)s] vectorstore: %(message)s"
+    )
+
+
+# ============================================================
+# Configurações
 # ============================================================
 CHROMA_PATH = settings.get("CHROMA_PATH", "/data/chroma")
 
+TEXT_COLLECTION = "text_embeddings"
+IMAGE_COLLECTION = "image_embeddings"
+MULTIMODAL_COLLECTION = "multimodal_embeddings"
 
-# ============================================================
-# 🔧 Helpers internos
-# ============================================================
-def _ensure_list_of_floats(vec: Union[np.ndarray, List[float], tuple]) -> List[float]:
-    """
-    Converte um vetor (np.ndarray|list|tuple) em list[float] achatada.
-    """
-    if isinstance(vec, np.ndarray):
-        return vec.astype(float).ravel().tolist()
-    if isinstance(vec, (list, tuple)):
-        # Pode haver lista de listas acidentalmente:
-        if len(vec) > 0 and isinstance(vec[0], (list, tuple, np.ndarray)):
-            # achata um nível
-            arr = np.array(vec, dtype=float).ravel()
-            return arr.tolist()
-        return [float(x) for x in vec]
-    # fallback defensivo
-    return [float(vec)] if vec is not None else [0.0]
-
-
-def _safe_metadata(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Garante que metadados sejam um dict não-vazio (requisito do Chroma).
-    """
-    if isinstance(meta, dict) and meta:
-        return meta
-    return {"source": "router"}
+VALID_MODALITIES = {"text", "vision", "multimodal", "image"}
 
 
 # ============================================================
-# 🧠 Inicialização Local Persistente
+# Conexão com ChromaDB
 # ============================================================
 def _connect_local():
-    """
-    (Função Síncrona)
-    Inicializa o cliente ChromaDB em modo local persistente.
-    """
+    """Inicializa cliente persistente do ChromaDB."""
     try:
         os.makedirs(CHROMA_PATH, exist_ok=True)
-        logger.info(f"[vectorstore] Inicializando Chroma local persistente em {CHROMA_PATH}")
-
-        # Novo cliente persistente (Chroma >= 0.5)
+        logger.info(f"[vectorstore] Inicializando ChromaDB em {CHROMA_PATH}")
         client = chromadb.PersistentClient(path=CHROMA_PATH)
-
-        logger.info("[vectorstore] ✅ Chroma PersistentClient inicializado com sucesso.")
+        logger.info("[vectorstore] Chroma PersistentClient inicializado.")
         return client
-
     except Exception as e:
-        logger.error(f"[vectorstore] ❌ Falha ao iniciar Chroma local: {e}")
+        logger.error(f"[vectorstore] Falha ao iniciar ChromaDB: {e}")
         raise
 
-# Cliente global (Criado de forma síncrona na inicialização)
-# Este é o ÚNICO cliente na aplicação.
+
 chroma_client = _connect_local()
 
 
 # ============================================================
-# 📚 Gerenciamento de Coleções (Async)
+# Helpers
 # ============================================================
-def _get_or_create_collection_sync(name: str, metadata: dict = None):
-    """Função síncrona auxiliar."""
+def _ensure_list_of_floats(vec):
+    """Converte embedding para list[float]."""
+    if isinstance(vec, np.ndarray):
+        return vec.astype(float).ravel().tolist()
+    if isinstance(vec, (list, tuple)):
+        return [float(x) for x in np.array(vec, dtype=float).ravel()]
+    return [0.0]
+
+
+def _safe_metadata(meta):
+    return meta if isinstance(meta, dict) else {"source": "router"}
+
+
+def _normalize_modality(modality: Optional[str]) -> str:
+    if not modality:
+        return "text"
+    m = modality.lower().strip()
+    if m == "image":
+        return "vision"
+    return m if m in VALID_MODALITIES else "text"
+
+
+def _collection_for_modality(modality: str) -> str:
+    m = _normalize_modality(modality)
+    if m == "text":
+        return TEXT_COLLECTION
+    if m == "vision":
+        return IMAGE_COLLECTION
+    return MULTIMODAL_COLLECTION
+
+
+# ============================================================
+# Inicialização
+# ============================================================
+def init_vectorstore():
+    """Cria coleções básicas se não existirem."""
     try:
-        return chroma_client.get_or_create_collection(
-            name=name,
-            metadata=_safe_metadata(metadata)
-        )
+        for name in (TEXT_COLLECTION, IMAGE_COLLECTION, MULTIMODAL_COLLECTION):
+            chroma_client.get_or_create_collection(
+                name=name,
+                metadata={"modality": name},
+            )
+        logger.info("[vectorstore] Coleções base criadas.")
     except Exception as e:
-        if "already exists" in str(e).lower():
-            logger.warning(f"[vectorstore] Coleção '{name}' já existia, recuperando...")
-            return chroma_client.get_collection(name)
+        logger.error(f"[vectorstore] Falha ao inicializar coleções: {e}")
         raise
 
-async def get_or_create_collection_async(name: str, metadata: dict = None):
-    """(Async) Obtém ou cria uma coleção local persistente."""
-    try:
-        return await asyncio.to_thread(
-            _get_or_create_collection_sync, name, metadata
-        )
-    except Exception as e:
-        logger.error(f"[vectorstore] Falha ao obter/criar coleção '{name}': {e}")
-        return None
-
-def _delete_collection_sync(collection_name: str):
-    """Função síncrona auxiliar para deletar coleção."""
-    chroma_client.delete_collection(name=collection_name)
-
-async def delete_collection(collection_name: str):
-    """(Async) Deleta uma coleção do ChromaDB."""
-    try:
-        await asyncio.to_thread(_delete_collection_sync, collection_name)
-        logger.info(f"[vectorstore] Coleção '{collection_name}' deletada.")
-        return True
-    except Exception as e:
-        logger.error(f"[vectorstore] Falha ao deletar '{collection_name}': {e}")
-        return False
-
 
 # ============================================================
-# 💾 Inserção e Consulta (Assíncronas via to_thread)
+# Inserção
 # ============================================================
 def _insert_embedding_sync(
     collection_name: str,
     doc_id: str,
-    text: str,
-    embedding: Union[np.ndarray, List[float], tuple],
-    metadata: Optional[Dict[str, Any]] = None
+    text: Optional[str],
+    embedding: List[float],
+    metadata: Optional[Dict[str, Any]],
 ):
-    """Função síncrona auxiliar para inserção de embeddings no ChromaDB."""
-
-    collection = chroma_client.get_collection(collection_name)
-
-    emb_list = _ensure_list_of_floats(embedding)
-    safe_meta = _safe_metadata(metadata)
-
-    # Sanitização mínima
-    safe_id = str(doc_id) if doc_id is not None else str(os.urandom(6).hex())
-    safe_text = "" if text is None else str(text)
-
-    collection.add(
-        ids=[safe_id],
-        documents=[safe_text],
-        embeddings=[emb_list],
-        metadatas=[safe_meta],
+    col = chroma_client.get_or_create_collection(
+        name=collection_name,
+        metadata=_safe_metadata(metadata),
     )
 
-async def insert_embedding(
-    collection_name: str,
+    col.add(
+        ids=[str(doc_id)],
+        documents=[text or ""],
+        embeddings=[_ensure_list_of_floats(embedding)],
+        metadatas=[_safe_metadata(metadata)],
+    )
+
+
+async def add_document(
+    modality: str,
     doc_id: str,
-    text: str,
-    embedding: Union[np.ndarray, List[float], tuple],
-    metadata: Optional[Dict[str, Any]] = None
+    text: Optional[str] = None,
+    image_b64: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ):
-    """(Async) Insere um documento e seu embedding."""
-    try:
-        await asyncio.to_thread(
-            _insert_embedding_sync,
-            collection_name, doc_id, text, embedding, metadata
-        )
-        logger.debug(f"[vectorstore] Documento '{doc_id}' inserido em '{collection_name}'.")
-    except Exception as e:
-        logger.error(f"[vectorstore] Falha ao inserir embedding: {e}")
+    """Insere documento multimodal completo."""
+    modality = _normalize_modality(modality)
 
-def _query_embedding_sync(
-    collection_name: str,
-    embedding: Union[np.ndarray, List[float], tuple],
-    n_results: int = 3
-):
-    """Função síncrona auxiliar para ser usada com to_thread."""
-    collection = chroma_client.get_collection(collection_name)
-    emb_list = _ensure_list_of_floats(embedding)
+    # --- gerar embedding ---
+    if modality == "text":
+        embedding = await asyncio.to_thread(embed_text, text or "")
+    elif modality == "vision":
+        embedding = await asyncio.to_thread(embed_image, image_b64 or "")
+    else:  # multimodal
+        emb = await asyncio.to_thread(embed_multimodal, text or "", image_b64)
+        embedding = emb.get("multimodal")
 
-    # include amplia as infos retornadas (compat com versões variadas)
-    return collection.query(
-        query_embeddings=[emb_list],
-        n_results=n_results,
-        include=["documents", "embeddings", "metadatas", "distances"]
+    collection_name = _collection_for_modality(modality)
+
+    # --- inserir ---
+    await asyncio.to_thread(
+        _insert_embedding_sync,
+        collection_name,
+        doc_id,
+        text,
+        embedding,
+        metadata,
     )
 
-async def query_embedding(
-    collection_name: str,
-    embedding: Union[np.ndarray, List[float], tuple],
-    n_results: int = 3
-):
-    """(Async) Consulta os embeddings mais semelhantes."""
-    try:
-        results = await asyncio.to_thread(
-            _query_embedding_sync,
-            collection_name, embedding, n_results
-        )
-        return results
-    except Exception as e:
-        logger.error(f"[vectorstore] Erro ao consultar coleção '{collection_name}': {e}")
-        return None
+    logger.info(f"[vectorstore] Inserido doc_id={doc_id} modality={modality}")
 
 
 # ============================================================
-# 🧩 Utilitários (Assíncronos via to_thread)
+# Consulta
+# ============================================================
+def _query_embedding_sync(collection_name: str, embedding, n_results: int):
+    try:
+        col = chroma_client.get_or_create_collection(name=collection_name)
+        return col.query(
+            query_embeddings=[_ensure_list_of_floats(embedding)],
+            n_results=n_results,
+            include=["documents", "metadatas", "distances"],
+        )
+    except Exception as e:
+        logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
+        return {}
+
+
+async def query_embedding(modality: str, embedding, n_results: int = 3):
+    modality = _normalize_modality(modality)
+    collection_name = _collection_for_modality(modality)
+
+    return await asyncio.to_thread(
+        _query_embedding_sync,
+        collection_name,
+        embedding,
+        n_results,
+    )
+
+
+# ============================================================
+# Health / Reset
 # ============================================================
 async def reset_collections():
-    """(Async) Remove todas as coleções (útil para testes)."""
+    """Apaga todas as coleções."""
     try:
         await asyncio.to_thread(chroma_client.reset)
-        logger.info("[vectorstore] Todas as coleções foram removidas com sucesso.")
+        logger.warning("[vectorstore] Todas coleções resetadas.")
     except Exception as e:
-        logger.error(f"[vectorstore] Falha ao resetar coleções: {e}")
+        logger.error(f"[vectorstore] Erro ao resetar: {e}")
+
 
 async def health_async() -> bool:
-    """(Async) Verifica se o cliente Chroma está vivo."""
     try:
         await asyncio.to_thread(chroma_client.heartbeat)
         return True

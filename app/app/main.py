@@ -1,15 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-main.py
-----------------------------------------------------
-Ponto de entrada da API principal do LLM Router Stack.
-
-Inclui:
-- Endpoint /metrics integrado ao registry global (Prometheus multiprocess).
-- Warmup assíncrono com preload de modelos Ollama e base RAG.
-- Roteamento híbrido (Bandit + NSGA-II + RAG + Juízes).
-- Administração dinâmica via Redis + MariaDB.
-- Persistência de logs (query_log) com recompensa.
+main.py (CORRIGIDO: Parse de Payload JSON)
+------------------------------------------
+Corrige o erro 500 convertendo raw_payload (str) -> dict antes da resposta.
 """
 
 import json
@@ -20,10 +13,10 @@ import logging
 from typing import List, Dict, Any, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException, Header, Body, Response
+from fastapi import FastAPI, HTTPException, Header, Body, Response, BackgroundTasks
 from fastapi.responses import JSONResponse
 
-from .prometheus_setup import setup_prometheus, prometheus_metrics
+from .prometheus_setup import setup_prometheus
 from .metrics_collector import _ensure_model_metrics_table
 from .settings_dynamic import settings
 from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
@@ -37,38 +30,54 @@ from .observability import (
     ROUTER_CHOSEN,
     CANDIDATE_COST,
     CANDIDATE_LAT,
-    BANDIT_REWARD,
 )
-from .router_core import route_and_answer
-from .rag_local import add_document
-from .bandits import bandit_update, compute_reward
+from .router_core import route_and_answer, process_background_feedback
 from .utils.redis_client import get_redis
 from .routers import rag_router
+from .vectorstore import init_vectorstore, add_document as vs_add_document
 
-# ------------------------------------------------------
-# Inicialização e configuração global
-# ------------------------------------------------------
+
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 setup_logging()
 logging.getLogger("chromadb.telemetry").setLevel(logging.ERROR)
 
 setup_prometheus()
-app = FastAPI(title="LLM Router (Hybrid Bandit + NSGA-II + RAG + Judges)")
 
-# ------------------------------------------------------
-# 🔄 Validação e pré-download automático de modelos Ollama
-# ------------------------------------------------------
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"))
+app = FastAPI(
+    title="LLM/VLM Router (Hybrid Bandit + RAG + Background Judges)",
+    version="3.0.1",
+    description="API de Roteamento Inteligente Multimodal."
+)
+
+# --- HELPER DE CONVERSÃO ---
+def safe_parse_json(payload: Any) -> Any:
+    """
+    Tenta converter string JSON para Dict/List.
+    Se falhar, retorna o original (ou string).
+    Isso evita que a API quebre se o provider retornar string.
+    """
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except Exception:
+            return payload # Retorna a string mesmo se não for JSON válido
+    return payload
+
+
+OLLAMA_HOST = os.getenv(
+    "OLLAMA_HOST",
+    os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
+)
+VLM_OLLAMA_MODELS = list(getattr(settings, "VLM_OLLAMA_MODELS", []))
+
 
 async def preload_ollama_models():
-    """Valida e baixa automaticamente todos os modelos Ollama declarados no ambiente."""
     try:
-        logger.info("[ollama-preload] Iniciando verificação de modelos Ollama...")
-
-        # 1️⃣ Coleta variáveis
+        logger.info("[ollama-preload] Iniciando verificação...")
         candidates_raw = os.getenv("CANDIDATE_MODELS_LIST", "[]")
         judges_raw = os.getenv("JUDGE_MODELS", "[]")
         main_model = os.getenv("OLLAMA_MODEL", "")
+        embed_model = settings.get("EMBED_TEXT_MODEL", "all-minilm")
 
         all_models = []
         for raw in (candidates_raw, judges_raw):
@@ -81,243 +90,215 @@ async def preload_ollama_models():
 
         if main_model:
             all_models.append(main_model)
-        all_models = [m.strip() for m in all_models if m.strip() and m.startswith("ollama/")]
+
+        for name in VLM_OLLAMA_MODELS:
+            all_models.append(f"ollama/{name}")
+
+        if embed_model:
+            if not embed_model.startswith("ollama/"):
+                all_models.append(f"ollama/{embed_model}")
+            else:
+                all_models.append(embed_model)
+        
+        all_models.append("ollama/all-minilm")
+
+        all_models = [m.strip() for m in all_models if m.strip().startswith("ollama/")]
         all_models = list(set(all_models))
 
         if not all_models:
-            logger.info("[ollama-preload] Nenhum modelo Ollama detectado nas variáveis.")
             return
 
-        # 2️⃣ Verifica modelos disponíveis localmente
         try:
-            resp = await asyncio.to_thread(requests.get, f"{OLLAMA_HOST}/api/tags", 10)
+            resp = await asyncio.to_thread(requests.get, f"{OLLAMA_HOST}/api/tags", timeout=10)
             resp.raise_for_status()
             available = {m["name"] for m in resp.json().get("models", [])}
-        except Exception as e:
-            logger.warning(f"[ollama-preload] Falha ao listar modelos locais: {e}")
+        except Exception:
             available = set()
 
-        # 3️⃣ Baixa modelos ausentes
         for model in all_models:
             name = model.split("/", 1)[1]
-            if name in available:
-                logger.info(f"[ollama-preload] Modelo '{name}' já disponível.")
+            if any(name in avail for avail in available) or f"{name}:latest" in available:
+                logger.info(f"[ollama-preload] '{name}' já disponível.")
                 continue
 
-            logger.info(f"[ollama-preload] Baixando modelo '{name}' via API...")
+            logger.info(f"[ollama-preload] Baixando '{name}'...")
             try:
-                with requests.post(f"{OLLAMA_HOST}/api/pull", json={"name": name}, stream=True, timeout=900) as r:
-                    for chunk in r.iter_lines(decode_unicode=True):
-                        if chunk:
-                            logger.info(f"[ollama-preload] {chunk}")
-                logger.info(f"[ollama-preload] Modelo '{name}' baixado com sucesso.")
-                await asyncio.sleep(2)
+                with requests.post(
+                    f"{OLLAMA_HOST}/api/pull",
+                    json={"name": name},
+                    stream=True,
+                    timeout=1200,
+                ) as r:
+                    for _ in r.iter_lines(decode_unicode=True): pass 
+                logger.info(f"[ollama-preload] '{name}' OK.")
             except Exception as e:
                 logger.error(f"[ollama-preload] Falha ao baixar '{name}': {e}")
 
-        logger.info("[ollama-preload] Verificação de modelos concluída ✅")
-
+        logger.info("[ollama-preload] Concluído. ✅")
     except Exception as e:
         logger.exception(f"[ollama-preload] Erro geral: {e}")
 
-# ------------------------------------------------------
-# Roteador de RAG
-# ------------------------------------------------------
+
 app.include_router(rag_router.router)
 
-# ------------------------------------------------------
-# Métricas Prometheus
-# ------------------------------------------------------
+
 @app.get("/metrics")
 def metrics():
     data, ctype = render_metrics_response()
     return Response(content=data, media_type=ctype)
 
-# ------------------------------------------------------
-# Warmup assíncrono
-# ------------------------------------------------------
+
 @app.on_event("startup")
-async def on_startup():
+async def startup_event():
     async def _bg():
         try:
-            logger.info("[warmup] Iniciando rotina de inicialização...")
-
-            # Redis
+            logger.info("[warmup] Iniciando serviços...")
             r = get_redis()
-            if r is None:
-                logger.warning("[warmup] Redis indisponível — seguindo sem cache.")
+            if r is None: logger.warning("[warmup] Redis indisponível.")
+            
+            try: _ensure_model_metrics_table()
+            except: pass
 
-            # Model metrics
             try:
-                _ensure_model_metrics_table()
+                init_vectorstore()
+                logger.info("[warmup] Vectorstore OK.")
             except Exception as e:
-                logger.warning("[warmup] Falha ao garantir model_metrics: %s", e)
+                logger.warning(f"[warmup] Vectorstore init falhou: {e}")
 
-            # Pré-carrega modelos Ollama
             await preload_ollama_models()
 
-            # Documento base
-            await add_document("intro", "NSGA-II é um algoritmo evolutivo multiobjetivo usado em otimização de Pareto.")
+            try:
+                await vs_add_document(
+                    modality="text", doc_id="intro",
+                    text="NSGA-II é um algoritmo de otimização multiobjetivo.",
+                    metadata={"warmup": True},
+                )
+            except Exception as e:
+                logger.warning(f"[warmup] Falha doc teste: {e}")
 
-            # Teste inicial
-            samples = [
-                "Explique o que é NSGA-II e onde é aplicado.",
-                "Escreva um código Python que calcule média de uma coluna CSV.",
-                "O que é RAG em sistemas de IA?",
-            ]
-            for s in samples:
+            tests = ["O que é RAG?", 
+                     "Por que o céu é azul?",
+                    # --- Tradução & Nuance Cultural ---
+                    "Traduza a palavra 'Saudade' para o inglês explicando seu contexto cultural brasileiro.",
+                    "Como se diz 'break a leg' em português e qual o significado real?",
+                    
+                    # --- Inteligência Emocional & Soft Skills ---
+                    "Escreva uma mensagem de apoio para um amigo que acabou de perder o emprego.",
+                    "Como dar um feedback negativo para um colega de trabalho de forma construtiva?",
+                    
+                    # --- Planejamento & Utilidade ---
+                    "Crie um roteiro de viagem de 3 dias para Roma focado em gastronomia.",
+                    "Quais são os benefícios da meditação para a saúde mental?",
+                    
+                    # --- Análise Comparativa ---
+                    "Compare as vantagens do trabalho remoto versus trabalho presencial.",
+                    "Qual a diferença entre clima e tempo?",
+                     ]
+            logger.info("[warmup] Executando smoke tests...")
+            for t in tests:
                 try:
-                    _ = await route_and_answer(s)
-                    logger.info(f"[warmup] Execução de teste concluída: '{s[:40]}...'")
-                except Exception as e:
-                    logger.warning(f"[warmup] Falha no teste de prompt: {e}")
+                    await route_and_answer(query=t, modality="text")
+                    logger.info(f"[warmup] OK: '{t}'")
+                except Exception: pass
 
-            logger.info("[warmup] Inicialização concluída ✅")
-
+            logger.info("[warmup] Sistema pronto. ✅")
         except Exception as e:
-            logger.exception(f"[warmup] Falhou: {e}")
+            logger.exception(f"[warmup] Erro crítico: {e}")
 
     asyncio.create_task(_bg())
 
-# ------------------------------------------------------
-# Endpoint principal /query
-# ------------------------------------------------------
+
 @app.post("/query", response_model=QueryResponse)
-async def route_query(req: QueryRequest):
+async def route_query(req: QueryRequest, background_tasks: BackgroundTasks):
     start = time.time()
     API_REQUESTS.inc()
-    if not req or not isinstance(req.query, str) or not req.query.strip():
-        raise HTTPException(status_code=400, detail="Campo 'query' é obrigatório.")
-    logger.info(f"[query] Nova requisição recebida: '{req.query[:80]}...'")
+
+    if not req or not req.query.strip():
+        raise HTTPException(status_code=400, detail="Query obrigatória.")
+
+    logger.info(f"[query] '{req.query[:60]}...' (mod={req.modality})")
+
+    modality = (req.modality or "text").lower()
+    image_input = req.image_b64
+    if not image_input and req.images and len(req.images) > 0:
+        image_input = req.images[0]
+    
+    if image_input and modality == "text":
+        modality = "vision"
 
     try:
         result = await route_and_answer(
             query=req.query,
-            system_prompt=(getattr(req, "system_prompt", "") or ""),
-            use_rag=getattr(req, "enable_rag_for_answer", False),
-            max_tokens=(req.max_tokens or settings.MAX_TOKENS_DEFAULT),
-            temperature=(req.temperature or settings.TEMPERATURE_DEFAULT),
+            system_prompt=req.system_prompt or "",
+            use_rag=bool(req.enable_rag_for_answer or req.enable_rag_for_image),
+            max_tokens=req.max_tokens or settings.MAX_TOKENS_DEFAULT,
+            temperature=req.temperature or settings.TEMPERATURE_DEFAULT,
+            modality=modality,
+            image_b64=image_input,
+            rag_modality=(req.rag_modality or "text").lower(),
+            use_cache=req.use_cache
         )
     except Exception as e:
-        logger.exception(f"[router] Erro interno durante o roteamento: {e}")
+        logger.exception(f"[router] Erro: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    API_LATENCY.observe(time.time() - start)
+    duration = time.time() - start
+    API_LATENCY.observe(duration)
 
     chosen_model = result["model"]
-    latency = float(result["latency_s"])
-    quality = float(result["quality"])
-    cost = float(result["cost_per_1k"])
-    text = result["answer"]
+    ROUTER_CHOSEN.labels(model=chosen_model).inc()
+    CANDIDATE_COST.observe(result["cost_per_1k"])
+    CANDIDATE_LAT.observe(result["latency_s"])
 
-    try:
-        reward = compute_reward(chosen_model or "unknown", quality, latency)
-        bandit_update(chosen_model or "unknown", req.query, reward)
-        BANDIT_REWARD.observe(reward)
-    except Exception as e:
-        logger.warning(f"[bandit] Falha ao calcular/atualizar recompensa: {e}")
-        reward = 0.0
-
-    try:
-        from .query_service import insert_query_log
-        insert_query_log(
-            query=req.query,
-            model=chosen_model,
-            response=text,
-            latency=latency,
-            cost=cost,
-            quality=quality,
-            reward=reward,
-        )
-        logger.info(f"[db] query_log registrado para modelo={chosen_model}")
-    except Exception as e:
-        logger.warning(f"[db] Falha ao registrar query_log: {e}")
-
-    ROUTER_CHOSEN.labels(model=chosen_model or "cached").inc()
-    CANDIDATE_COST.observe(cost)
-    CANDIDATE_LAT.observe(latency)
-
-    route = RouteDecision(
-        chosen_model=chosen_model or "cached",
-        objectives={"cost": cost, "latency": latency, "neg_quality": max(0.0, 10.0 - quality)},
-        pareto_front=[],
-        explanation=f"q={quality:.2f}, c={cost:.4f}, l={latency:.2f}",
+    # Extrai payload bruto
+    raw_payload_str = result.get("metadata", {}).get("raw_payload")
+    
+    background_tasks.add_task(
+        process_background_feedback,
+        query=req.query,
+        answer=result["answer"],
+        chosen_model=chosen_model,
+        modality=result["modality"],
+        latency_s=result["latency_s"],
+        cost_val=result["cost_per_1k"],
+        image_b64=image_input,
+        raw_payload=raw_payload_str # passa string para o banco
     )
 
-    candidate = CandidateResult(
-        model=chosen_model or "cached",
-        output=text,
-        latency_s=latency,
-        prompt_tokens=0,
-        completion_tokens=0,
-        estimated_cost_usd=cost,
-        judge_scores=[],
-        quality_score=quality,
+    # Prepara resposta para o Pydantic (converte string JSON para dict se possível)
+    parsed_payload = safe_parse_json(raw_payload_str)
+
+    route_raw = result.get("route", {})
+    candidates_raw = result.get("candidates", [])
+
+    return QueryResponse(
+        answer=result["answer"],
+        model=chosen_model,
+        modality=result["modality"],
+        image_output_b64=result.get("image_output_b64"),
+        route=RouteDecision(**route_raw),
+        candidates=[CandidateResult(**c) for c in candidates_raw],
+        payload=parsed_payload # Aqui vai o objeto parseado ou string segura
     )
 
-    return QueryResponse(answer=text, model=chosen_model, route=route, candidates=[candidate])
 
-# ------------------------------------------------------
-# Administração de settings
-# ------------------------------------------------------
 def _require_admin(token: Optional[str]):
     if token != settings.ADMIN_TOKEN:
         raise HTTPException(status_code=401, detail="Token inválido.")
 
-@app.get("/admin/settings")
-def get_all_settings(x_admin_token: Optional[str] = Header(None)):
+@app.get("/admin/settings", tags=["Admin"])
+def get_settings(x_admin_token: Optional[str] = Header(None)):
     _require_admin(x_admin_token)
-    return settings.snapshot(only_known=False)
+    return settings.snapshot()
 
-@app.put("/admin/settings")
-def set_settings(payload: Dict[str, Any] = Body(...), x_admin_token: Optional[str] = Header(None)):
+@app.put("/admin/settings", tags=["Admin"])
+def update_settings(payload: Dict[str, Any], x_admin_token: Optional[str] = Header(None)):
     _require_admin(x_admin_token)
-    if not isinstance(payload, dict) or not payload:
-        raise HTTPException(status_code=400, detail="Payload inválido.")
     for k, v in payload.items():
-        settings.set(k, v, actor="api", source="admin")
-    return {"ok": True, "applied": sorted(payload.keys())}
+        val = json.dumps(v) if isinstance(v, (list, dict)) else str(v)
+        settings.set(k, val, actor="api", source="admin")
+    return {"status": "updated"}
 
-@app.get("/admin/judges", response_model=List[str])
-async def get_judges():
-    return settings.JUDGE_MODELS
-
-@app.post("/admin/judges", response_model=List[str])
-async def update_judges(models: List[str], x_admin_token: str = Header(None)):
-    _require_admin(x_admin_token)
-    if not models or not all(isinstance(m, str) for m in models):
-        raise HTTPException(status_code=400, detail="A lista de juízes deve conter strings válidas.")
-    settings.set("JUDGE_MODELS", models, actor="api", source="admin")
-    return settings.JUDGE_MODELS
-
-# ------------------------------------------------------
-# Healthcheck
-# ------------------------------------------------------
-@app.get("/health")
+@app.get("/health", tags=["Ops"])
 def health():
-    return {
-        "status": "ok",
-        "ollama_base": settings.OLLAMA_BASE_URL,
-        "models_preloaded": True,
-        "dynamic_settings": settings.snapshot(only_known=True),
-    }
-
-# ------------------------------------------------------
-# 🧬 Meta-Otimização NSGA-II (Bayesian Optimization)
-# ------------------------------------------------------
-@app.post("/admin/metaoptimize")
-def trigger_meta_optimization(x_admin_token: str = Header(None)):
-    """
-    Inicia o processo de calibração automática do NSGA-II via Bayesian Optimization (Optuna).
-    Retorna os melhores parâmetros encontrados.
-    """
-    _require_admin(x_admin_token)
-
-    try:
-        from .nsga_meta_optimizer import run_meta_optimization
-        logger.info("[admin/metaoptimize] Calibração iniciada pelo administrador.")
-        result = run_meta_optimization()
-        return JSONResponse(content={"status": "success", "result": result})
-    except Exception as e:
-        logger.exception("[admin/metaoptimize] Falha ao executar meta-otimização: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok", "timestamp": time.time()}

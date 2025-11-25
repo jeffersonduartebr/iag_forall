@@ -2,14 +2,15 @@
 """
 rag_healthcheck.py
 ----------------------------------------------------
-Validador automático de saúde do pipeline RAG.
+Validador automático de saúde do pipeline RAG (multimodal-aware).
 
 Checa:
-1) Embeddings (embed_text) — síncrono
-2) Chroma client up (get_or_create_collection_async)
-3) Insert + Query no Chroma (async)
-4) Redis opcional funcionando para cache semântico (best-effort)
-5) Latências básicas de cada etapa
+1) Embeddings de texto (embed_text) — assíncrono
+2) Embeddings multimodais (embed_multimodal) — assíncrono (best-effort)
+3) Chroma client up (get_or_create_collection_async)
+4) Insert + Query no Chroma (async)
+5) Redis opcional funcionando para cache semântico (best-effort)
+6) Latências básicas de cada etapa
 
 Expõe:
 - async def rag_healthcheck(): -> dict
@@ -22,7 +23,10 @@ import time
 import asyncio
 from typing import Any, Dict
 
-from app.embeddings import embed_text           # ⚠️ SÍNCRONO
+from app.embeddings import (
+    embed_text,         # assíncrono
+    embed_multimodal,   # assíncrono (texto + imagem opcional)
+)
 from app.vectorstore import (
     get_or_create_collection_async,
     insert_embedding,
@@ -30,7 +34,7 @@ from app.vectorstore import (
 )
 from app.utils.redis_client import get_redis
 
-
+# Coleção dedicada ao healthcheck
 COLLECTION = "rag_healthcheck"
 DOC_TEXT = "Documento de verificação do pipeline RAG (healthcheck)."
 QUERY_TEXT = "Verificação do pipeline RAG e conectividade com a base vetorial."
@@ -44,50 +48,87 @@ async def rag_healthcheck() -> Dict[str, Any]:
 
     t0 = time.time()
 
-    # 1) Embedding síncrono
+    # 1) Embeddings de TEXTO (obrigatório)
     t = time.time()
     try:
-        q_vec = embed_text(QUERY_TEXT)  # SÍNCRONO — sem await
-        d_vec = embed_text(DOC_TEXT)    # idem
-        report["steps"]["embeddings"] = {"ok": True, "latency_s": round(time.time() - t, 3)}
+        q_vec = await embed_text(QUERY_TEXT)
+        d_vec = await embed_text(DOC_TEXT)
+        report["steps"]["embeddings_text"] = {
+            "ok": True,
+            "latency_s": round(time.time() - t, 3),
+        }
     except Exception as e:
-        report["steps"]["embeddings"] = {"ok": False, "error": str(e)}
+        report["steps"]["embeddings_text"] = {"ok": False, "error": str(e)}
         return _finalize(report, t0)
 
-    # 2) Chroma: garantir coleção
+    # 2) Embeddings MULTIMODAIS (best-effort, não bloqueia o ok geral)
     t = time.time()
     try:
-        col = await get_or_create_collection_async(COLLECTION, metadata={"source": "healthcheck"})
-        report["steps"]["vectorstore_collection"] = {"ok": bool(col), "latency_s": round(time.time() - t, 3)}
+        _ = await embed_multimodal(QUERY_TEXT, image_b64=None)
+        report["steps"]["embeddings_multimodal"] = {
+            "ok": True,
+            "latency_s": round(time.time() - t, 3),
+        }
+    except Exception as e:
+        # Não derruba o healthcheck inteiro, apenas registra o erro
+        report["steps"]["embeddings_multimodal"] = {
+            "ok": False,
+            "error": str(e),
+        }
+
+    # 3) Chroma: garantir coleção
+    t = time.time()
+    try:
+        col = await get_or_create_collection_async(
+            COLLECTION,
+            metadata={"source": "healthcheck"},
+        )
+        report["steps"]["vectorstore_collection"] = {
+            "ok": bool(col),
+            "latency_s": round(time.time() - t, 3),
+        }
         if not col:
             return _finalize(report, t0)
     except Exception as e:
         report["steps"]["vectorstore_collection"] = {"ok": False, "error": str(e)}
         return _finalize(report, t0)
 
-    # 3) Inserção + Query
-    #    Usa IDs com timestamp para evitar conflitos
+    # 4) Inserção no vectorstore
     t = time.time()
     try:
-        doc_id = f"hc:{int(time.time()*1000)}"
-        await insert_embedding(COLLECTION, doc_id, DOC_TEXT, d_vec.tolist(), metadata={"kind": "hc"})
-        report["steps"]["vectorstore_insert"] = {"ok": True, "latency_s": round(time.time() - t, 3)}
+        doc_id = f"hc:{int(time.time() * 1000)}"
+        # d_vec pode ser np.ndarray ou list — o vectorstore já faz a blindagem
+        await insert_embedding(
+            COLLECTION,
+            doc_id,
+            DOC_TEXT,
+            d_vec,
+            metadata={"kind": "hc"},
+        )
+        report["steps"]["vectorstore_insert"] = {
+            "ok": True,
+            "latency_s": round(time.time() - t, 3),
+        }
     except Exception as e:
         report["steps"]["vectorstore_insert"] = {"ok": False, "error": str(e)}
         return _finalize(report, t0)
 
+    # 5) Query no vectorstore
     t = time.time()
     try:
-        res = await query_embedding(COLLECTION, q_vec.tolist(), n_results=1)
+        res = await query_embedding(COLLECTION, q_vec, n_results=1)
         ok = bool(res and "documents" in res and res["documents"])
-        report["steps"]["vectorstore_query"] = {"ok": ok, "latency_s": round(time.time() - t, 3)}
+        report["steps"]["vectorstore_query"] = {
+            "ok": ok,
+            "latency_s": round(time.time() - t, 3),
+        }
         if not ok:
             return _finalize(report, t0)
     except Exception as e:
         report["steps"]["vectorstore_query"] = {"ok": False, "error": str(e)}
         return _finalize(report, t0)
 
-    # 4) Redis (opcional)
+    # 6) Redis (opcional)
     t = time.time()
     try:
         r = get_redis()
@@ -95,21 +136,34 @@ async def rag_healthcheck() -> Dict[str, Any]:
             k = "rag_hc:ping"
             r.setex(k, 5, "pong")
             val = r.get(k)
-            report["steps"]["redis"] = {"ok": val == b"pong", "latency_s": round(time.time() - t, 3)}
+            # dependendo da config, pode vir str ou bytes
+            ok_redis = val in (b"pong", "pong")
+            report["steps"]["redis"] = {
+                "ok": ok_redis,
+                "latency_s": round(time.time() - t, 3),
+            }
         else:
-            report["steps"]["redis"] = {"ok": False, "warning": "Redis não configurado"}
+            report["steps"]["redis"] = {
+                "ok": False,
+                "warning": "Redis não configurado",
+            }
     except Exception as e:
         report["steps"]["redis"] = {"ok": False, "error": str(e)}
 
-    # Tudo ok se todos os steps 'ok' True (exceto redis opcional)
-    mandatory = ["embeddings", "vectorstore_collection", "vectorstore_insert", "vectorstore_query"]
+    # Para o ok geral, apenas passos mandatórios de TEXTO e vectorstore contam
+    mandatory = [
+        "embeddings_text",
+        "vectorstore_collection",
+        "vectorstore_insert",
+        "vectorstore_query",
+    ]
     report["ok"] = all(report["steps"].get(s, {}).get("ok") for s in mandatory)
     return _finalize(report, t0)
 
 
 def rag_healthcheck_sync(timeout_s: int = 10) -> Dict[str, Any]:
     """
-    Wrapper síncrono — útil para scripts, CLIs e endpoints WSGI.
+    Wrapper síncrono — útil para scripts, CLIs e contexts não-async.
     """
     async def _runner():
         return await rag_healthcheck()
