@@ -2,28 +2,15 @@
 """
 vectorstore.py — RAG Multimodal (Texto / Visão / Multimodal)
 ----------------------------------------------------------------------
-Compatível com o novo embeddings.py:
+Gerencia a persistência de embeddings no ChromaDB.
 
-    - embed_text()
-    - embed_image()
-    - embed_multimodal()
-
-Coleções:
-    • text_embeddings
-    • image_embeddings
-    • multimodal_embeddings
-
-Funções expostas:
+Funções exportadas:
     - init_vectorstore()
+    - get_or_create_collection_async()  <-- ADICIONADO
     - add_document()
     - query_embedding()
     - reset_collections()
     - health_async()
-
-Robustez extra:
-    • criação automática de coleções
-    • fallback para erros do Chroma
-    • normalização avançada de modalidade
 """
 
 from __future__ import annotations
@@ -117,17 +104,35 @@ def _collection_for_modality(modality: str) -> str:
 
 
 # ============================================================
-# Inicialização
+# Gerenciamento de Coleções (Async Wrapper) - ADICIONADO
+# ============================================================
+
+def _get_or_create_sync(name: str, metadata: Optional[Dict] = None):
+    """Wrapper síncrono para o client do Chroma."""
+    # Garante que o client está conectado
+    return chroma_client.get_or_create_collection(name=name, metadata=metadata)
+
+async def get_or_create_collection_async(name: str, metadata: Optional[Dict] = None):
+    """
+    Cria ou recupera uma coleção de forma assíncrona (threadpool).
+    Usado pelo populate_vectorstore.py para garantir que a coleção existe.
+    """
+    # 
+    return await asyncio.to_thread(_get_or_create_sync, name, metadata)
+
+
+# ============================================================
+# Inicialização Padrão
 # ============================================================
 def init_vectorstore():
-    """Cria coleções básicas se não existirem."""
+    """Cria coleções básicas se não existirem (Síncrono, usado no boot)."""
     try:
         for name in (TEXT_COLLECTION, IMAGE_COLLECTION, MULTIMODAL_COLLECTION):
             chroma_client.get_or_create_collection(
                 name=name,
                 metadata={"modality": name},
             )
-        logger.info("[vectorstore] Coleções base criadas.")
+        logger.info("[vectorstore] Coleções base verificadas.")
     except Exception as e:
         logger.error(f"[vectorstore] Falha ao inicializar coleções: {e}")
         raise
@@ -188,6 +193,7 @@ async def add_document(
     )
 
     logger.info(f"[vectorstore] Inserido doc_id={doc_id} modality={modality}")
+    return True
 
 
 # ============================================================
@@ -207,8 +213,12 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int):
 
 
 async def query_embedding(modality: str, embedding, n_results: int = 3):
-    modality = _normalize_modality(modality)
-    collection_name = _collection_for_modality(modality)
+    """Consulta embeddings no Chroma."""
+    # Se a modalidade for o nome direto da coleção (ex: knowledge_base), usa direto
+    if modality not in VALID_MODALITIES:
+        collection_name = modality
+    else:
+        collection_name = _collection_for_modality(modality)
 
     return await asyncio.to_thread(
         _query_embedding_sync,

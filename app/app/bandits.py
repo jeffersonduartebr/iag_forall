@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-bandits.py — Meta-Bandit Multimodal Completo
+bandits.py — Meta-Bandit Multimodal Completo + UQ Support
 ==========================================================
 Compatível com:
 - router_core.py
@@ -17,6 +17,7 @@ Inclui:
 - Reinicialização automática de centróides degenerados
 - NSGA-II weight-aware reward
 - Toda persistência em Redis + MariaDB
+- NOVO: Persistência de centróides para Quantificação de Incerteza (UQ)
 
 APIs públicas:
 - select_model(valid_models, query, modality="text")
@@ -73,7 +74,7 @@ rds = get_redis()
 # Redis Keys (ajustadas)
 R_CTX_PREFIX = "meta:bandit:ctx"                  # por contexto → stats
 R_META_STRATEGY = "meta:bandit:strategy"          # qual estratégia meta-bandit venceu
-R_CENTROIDS = "meta:bandit:centroids"             # lista completa de centróides
+R_CENTROIDS = "meta:bandit:centroids"             # lista completa de centróides (UQ)
 R_CENTROIDS_META = "meta:bandit:centroids:meta"
 R_CENTROIDS_LOCK = "meta:bandit:centroids:lock"
 R_CLUSTERING_MODEL = "meta:bandit:cluster:model"  # clustering automático
@@ -115,36 +116,6 @@ def _ensure_dim(v: np.ndarray) -> np.ndarray:
             pad = CENTROIDS_DIM - len(v)
             v = np.concatenate([v, np.zeros(pad, dtype=np.float32)])
     return _unit(v)
-
-# ============================================================
-# DDL — tabela “bandit_context_stats”
-# ============================================================
-
-DDL = """
-CREATE TABLE IF NOT EXISTS bandit_context_stats (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    context_label VARCHAR(255) NOT NULL,
-    model VARCHAR(255) NOT NULL,
-    avg_reward FLOAT DEFAULT 0,
-    count INT DEFAULT 0,
-    var FLOAT DEFAULT 0,
-    M2 FLOAT DEFAULT 0,
-    last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uq_ctx_model (context_label, model)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-"""
-
-def _init_tables():
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(DDL))
-        logger.info("[bandit] Tabela bandit_context_stats criada/verificada.")
-    except Exception as e:
-        logger.warning(f"[bandit] Falha ao criar tabelas: {e}")
-
-_init_tables()
-
 
 # ============================================================
 # Centróides semânticos (NumPy vetorizado) + clustering dinâmico
@@ -803,6 +774,11 @@ def bandit_update(
         BANDIT_REWARD.observe(float(r))
     except Exception:
         pass
+    
+    # --- HOOK PARA GET_SNAPSHOT (USADO PELO UQ/ROUTER_STRATEGY) ---
+    # O método sample_metrics_from_snapshot é chamado pelo router_strategy.
+    # Ele espera que o snapshot (stats) esteja disponível.
+    # O Redis já foi atualizado acima via _set_ctx_stats, então está ok.
 
 
 # ============================================================
@@ -877,3 +853,32 @@ def compute_reward(
     except Exception as e:
         logger.warning(f"[bandit] Falha em compute_reward: {e}")
         return 0.0
+
+# ============================================================
+# Helpers para UQ e Router Strategy (Compatibilidade)
+# ============================================================
+
+def get_snapshot() -> Dict[str, Any]:
+    """
+    Helper para router_strategy.py.
+    Recupera um snapshot de todos os modelos do Redis.
+    Para simplificar, podemos iterar sobre o contexto 'global' ou 'mod:*'.
+    """
+    # Como temos múltiplos contextos, o snapshot ideal seria o agregado.
+    # Para o UQ/Strategy, usamos o contexto global por padrão.
+    return _get_ctx_stats("global")
+
+def sample_metrics_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Helper para router_strategy.py.
+    Amostra qualidade (Thompson Sampling) do snapshot.
+    """
+    samples = {}
+    for model, stats in snapshot.items():
+        alpha = stats.get("alpha", 1.0)
+        beta = stats.get("beta", 1.0)
+        # Amostra da Beta distribution e projeta para escala 0-10 (como 'quality')
+        val = np.random.beta(alpha, beta)
+        samples[f"{model}::text"] = val * 10.0 # Assume text por padrão se chave simples
+        samples[model] = val * 10.0
+    return samples

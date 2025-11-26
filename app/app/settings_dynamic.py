@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-settings_dynamic.py (VERSÃO FINAL: Conteúdo Original + Correção do .set())
+settings_dynamic.py (VERSÃO FINAL CORRIGIDA: PubSub sem Timeout)
 --------------------------------------------------------------------------
 Carrega configurações com fallback em camadas:
 1) Redis (chave settings:<KEY>)
@@ -10,8 +10,8 @@ Carrega configurações com fallback em camadas:
 
 Recursos:
 - Cache LRU interno.
-- Hot-reload via Redis Pub/Sub.
-- Método .set() encapsulado na classe para evitar Erro 500 na API.
+- Hot-reload via Redis Pub/Sub (Com cliente dedicado sem timeout).
+- Método .set() encapsulado na classe.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import json
 import time
 import logging
 import threading
+import redis  # <--- Necessário para criar a conexão dedicada
 from collections import OrderedDict
 from typing import Any, Dict, Optional, List
 
@@ -131,8 +132,8 @@ def _get_from_redis(key: str) -> Optional[str]:
         v = rds.get(f"{REDIS_PREFIX}{key}")
         if v is not None:
             return v.decode() if isinstance(v, bytes) else str(v)
-    except Exception as e:
-        logger.debug(f"[settings_dynamic] Falha ao ler Redis para {key}: {e}")
+    except Exception:
+        pass
     return None
 
 
@@ -148,8 +149,8 @@ def _get_from_db(key: str) -> Optional[str]:
             ).fetchone()
         if r:
             return r[0]
-    except Exception as e:
-        logger.debug(f"[settings_dynamic] Falha ao ler DB para {key}: {e}")
+    except Exception:
+        pass
     return None
 
 
@@ -203,7 +204,7 @@ class DynamicSettings:
         "EMBED_MODEL": "nomic-embed-text",
         "EMBED_PROVIDER": "ollama",
         "EMBED_DEVICE": "cpu",
-        "EMBED_TEXT_MODEL": "all-minilm:latest", # Default seguro
+        "EMBED_TEXT_MODEL": "nomic-embed-text",
 
         # Embeddings multimodais e visão
         "TEXT_EMBEDDING_MODEL": "nomic-embed-text",
@@ -225,7 +226,7 @@ class DynamicSettings:
         "JUDGES_ENABLED": "1",
         "JUDGES_MODE": "hybrid",
         "JUDGES_LOCAL_MODEL": "ollama/phi4:latest",
-        "JUDGES_REMOTE_MODEL": "gpt-4o-mini",
+        "JUDGES_REMOTE_MODEL": "gpt-5-mini",
         "JUDGES_TIMEOUT_S": "15",
 
         # Ollama
@@ -251,6 +252,7 @@ class DynamicSettings:
         
         # Cache
         "CACHE_TTL_DAYS": "7",
+        "UNCERTAINTY_THRESHOLD": "0.45"
     }
 
     # -------------------------
@@ -280,10 +282,6 @@ class DynamicSettings:
         return v
 
     def set(self, key: str, value: str, actor: str = "system", source: str = "internal") -> None:
-        """
-        Grava a configuração no Banco e no Redis, e invalida cache.
-        (Substitui a antiga função global set_setting)
-        """
         try:
             with engine.begin() as conn:
                 conn.execute(
@@ -447,37 +445,44 @@ settings = DynamicSettings()
 
 
 # ============================================================
-# Hot-reload listener via Redis Pub/Sub
+# Hot-reload listener via Redis Pub/Sub (COM RECONEXÃO)
 # ============================================================
 
 def _start_reload_listener():
-    if not rds:
-        return
-
+    # Usamos uma conexão dedicada para o listener, sem timeout
     def _bg():
-        try:
-            pubsub = rds.pubsub()
-            pubsub.subscribe(REDIS_RELOAD_CHANNEL)
-            logger.info(
-                f"[settings_dynamic] Iniciando listener de hot-reload em '{REDIS_RELOAD_CHANNEL}'"
-            )
-            for msg in pubsub.listen():
-                if msg is None:
-                    continue
-                if msg.get("type") != "message":
-                    continue
-                key = msg.get("data")
-                if isinstance(key, bytes):
-                    key = key.decode()
-                logger.info(
-                    f"[settings_dynamic] Recebido sinal de reload para chave '{key}'. Limpando cache LRU..."
+        while True:
+            try:
+                # Conexão dedicada para o PubSub com timeout infinito
+                # Importa redis aqui para evitar dependência circular se fosse no topo
+                import redis
+                
+                listener = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    db=settings.REDIS_DB,
+                    password=settings.REDIS_PASSWORD or None,
+                    socket_timeout=None, # <--- O SEGREDO
+                    socket_keepalive=True
                 )
-                _invalidate_cache()
-        except Exception as e:
-            logger.warning(f"[settings_dynamic] Listener de hot-reload encerrado: {e}")
+                
+                pubsub = listener.pubsub()
+                pubsub.subscribe(REDIS_RELOAD_CHANNEL)
+                logger.info(f"[settings_dynamic] Listener hot-reload conectado: {REDIS_RELOAD_CHANNEL}")
+                
+                for msg in pubsub.listen():
+                    if msg and msg.get("type") == "message":
+                        key = msg.get("data")
+                        if isinstance(key, bytes):
+                            key = key.decode()
+                        logger.info(f"[settings_dynamic] Hot-reload: '{key}'.")
+                        _invalidate_cache()
+            
+            except Exception as e:
+                logger.error(f"[settings_dynamic] Erro no listener: {e}. Reconectando em 5s...")
+                time.sleep(5)
 
     t = threading.Thread(target=_bg, daemon=True)
     t.start()
-
 
 _start_reload_listener()

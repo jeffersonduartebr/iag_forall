@@ -1,22 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-db_manager.py (FULL SCHEMA + COLUMN VERIFICATION)
+db_manager.py (FULL SCHEMA + PRICING SEED)
 ------------------------------------------------------------------------------
 Gerenciador mestre do Banco de Dados.
 Responsável por:
-1. Criar todas as tabelas necessárias se não existirem.
-2. Verificar e criar colunas individuais se estiverem faltando (Schema Evolution).
-3. Garantir compatibilidade com MariaDB.
-
-Tabelas Gerenciadas:
-- semantic_cache, query_log
-- ema_history, ema_history_log
-- model_metrics
-- judge_logs, judge_performance_log
-- bandit_context_stats
-- nsga_weights, nsga_params, nsga_meta_results
-- settings_dynamic
-- model_registry
+1. Criar todas as tabelas necessárias.
+2. Verificar e criar colunas (Schema Evolution).
+3. Popular dados iniciais de precificação (Seed).
 """
 
 from __future__ import annotations
@@ -61,7 +51,6 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 # ---------------------------------------------------------------------
 # 2. Definição do Schema (Tabelas e suas Colunas Críticas)
 # ---------------------------------------------------------------------
-# Estrutura: 'nome_tabela': {'ddl_create': '...', 'columns': {'col_name': 'col_definition'}}
 
 SCHEMA_DEFINITIONS = {
     # ============================================================
@@ -312,7 +301,7 @@ SCHEMA_DEFINITIONS = {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """,
-        "columns": {} # Tabela simples chave-valor
+        "columns": {} 
     },
 
     "model_registry": {
@@ -331,7 +320,7 @@ SCHEMA_DEFINITIONS = {
         }
     },
     # ============================================================
-    # 9. TABELA DE PREÇOS DINÂMICA (NOVO)
+    # 9. TABELA DE PREÇOS DINÂMICA
     # ============================================================
     "model_pricing": {
         "ddl": """
@@ -352,22 +341,74 @@ SCHEMA_DEFINITIONS = {
 
 
 # ---------------------------------------------------------------------
-# 3. Funções de Inicialização e Migração
+# 3. Seed de Preços (Novos Modelos 2025)
+# ---------------------------------------------------------------------
+def seed_pricing_data(conn):
+    """
+    Popula a tabela model_pricing com valores de mercado atualizados.
+    Converte preços de 1M tokens para 1k tokens.
+    """
+    # (Nome Modelo, Input $/1k, Output $/1k)
+    PRICES = [
+        # --- OpenAI (Novos modelos GPT-5 e GPT-4 atualizados) ---
+        ("gpt-5.1", 0.00125, 0.0100),
+        ("gpt-5", 0.00125, 0.0100),
+        ("gpt-5-mini", 0.00025, 0.0020),
+        ("gpt-5-nano", 0.00005, 0.0004),
+        ("gpt-4.1", 0.00200, 0.0080),
+        ("gpt-4.1-mini", 0.00040, 0.0016),
+        ("gpt-4o", 0.00250, 0.0100),
+        ("gpt-4o-mini", 0.00015, 0.0006),
+        
+        # --- Google Gemini (Novos modelos 2.5) ---
+        ("gemini-2.5-pro", 0.00125, 0.0100), 
+        ("gemini-2.5-flash", 0.00030, 0.0025),
+        
+        # --- Anthropic Claude (Novos modelos 4.5) ---
+        ("claude-opus-4.5", 0.00500, 0.0250), 
+        ("claude-sonnet-4.5", 0.00300, 0.0150),
+        ("claude-haiku-4.5", 0.00100, 0.0050),
+        
+        # --- Local (Custo Elétrico Estimado - Baixo) ---
+        ("phi4", 0.0000001, 0.0000001),
+        ("mistral", 0.0000001, 0.0000001),
+        ("gemma3", 0.0000001, 0.0000001),
+        ("llama3.2-vision", 0.0000002, 0.0000002),
+        ("llava", 0.0000002, 0.0000002),
+        ("moondream", 0.0000001, 0.0000001),
+    ]
+    
+    logger.info("💰 Atualizando tabela de preços (model_pricing)...")
+    for model, inp, out in PRICES:
+        # Adiciona variações de namespace para garantir match
+        variations = [model, f"openai/{model}", f"google/{model}", f"anthropic/{model}", f"ollama/{model}"]
+        for v in variations:
+            try:
+                conn.execute(
+                    text("""
+                        INSERT INTO model_pricing (model, cost_input_1k, cost_output_1k)
+                        VALUES (:m, :ci, :co)
+                        ON DUPLICATE KEY UPDATE cost_input_1k = :ci, cost_output_1k = :co
+                    """),
+                    {"m": v, "ci": inp, "co": out}
+                )
+            except SQLAlchemyError:
+                pass
+
+
+# ---------------------------------------------------------------------
+# 4. Funções de Inicialização e Migração
 # ---------------------------------------------------------------------
 
 def ensure_table(table_name: str, ddl: str, conn):
     """Cria a tabela se não existir."""
     try:
         conn.execute(text(ddl))
-        # logger.info(f"✅ Tabela '{table_name}' verificada.")
     except SQLAlchemyError as e:
         logger.error(f"❌ Erro ao criar tabela '{table_name}': {e}")
 
 def ensure_columns(table_name: str, columns: Dict[str, str], conn):
-    """
-    Verifica se as colunas existem. Se não, executa ALTER TABLE ADD COLUMN IF NOT EXISTS.
-    Funciona como uma migração leve e idempotente.
-    """
+    """Verifica se as colunas existem. Se não, cria."""
     if not columns:
         return
 
@@ -377,8 +418,6 @@ def ensure_columns(table_name: str, columns: Dict[str, str], conn):
             alter_sql = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_def};"
             conn.execute(text(alter_sql))
         except SQLAlchemyError as e:
-            # Fallback ou log de erro (ex: se a versão do MariaDB for muito antiga)
-            # Mas como estamos usando MariaDB:11 no compose, isso funcionará.
             logger.warning(f"⚠️ Erro ao verificar coluna '{col_name}' em '{table_name}': {e}")
 
 
@@ -394,8 +433,11 @@ def initialize_system() -> None:
                 
                 # 2. Garantir todas as colunas (migração)
                 ensure_columns(table_name, schema.get("columns", {}), conn)
-                
-        logger.info("✅ Schema do banco de dados atualizado com sucesso!")
+            
+            # 3. Popular Preços
+            seed_pricing_data(conn)
+
+        logger.info("✅ Schema do banco de dados e preços atualizados com sucesso!")
         
     except SQLAlchemyError as e:
         logger.critical(f"🔥 Erro crítico no setup do banco: {e}")

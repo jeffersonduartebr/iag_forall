@@ -1,7 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-router_core.py — Multimodal + UM-RAG + Meta-bandit + Background Tasks (BLINDADO)
---------------------------------------------------------------------
+router_core.py — Multimodal + UM-RAG + Meta-bandit + UQ + Background Tasks
+--------------------------------------------------------------------------
+O Core do sistema de roteamento.
+
+Fluxo de Execução:
+1. Fast Path (Síncrono/Await):
+   - Verifica Cache Semântico.
+   - Calcula Incerteza (UQ) da query.
+   - Seleciona Candidatos (Strategy + Bandit).
+   - Executa RAG (Retrieval).
+   - Chama Provider (Inferência).
+   - Calcula Custos e Retorna ao usuário.
+
+2. Slow Path (Background):
+   - Avalia resposta (Juízes).
+   - Calcula Recompensa (Reward).
+   - Atualiza Bandit (e memória de UQ).
+   - Atualiza EMA e Cache (se qualidade alta).
+   - Persiste Log completo no Banco.
 """
 
 from __future__ import annotations
@@ -10,6 +27,7 @@ import logging
 import time
 import asyncio
 import threading
+import uuid
 from typing import Dict, Tuple, Any, Optional
 
 import numpy as np
@@ -28,8 +46,9 @@ from .rag_local import build_augmented_prompt
 from .embeddings import embed_text
 from .query_service import insert_query_log, ensure_query_log
 
-# --- Novos Módulos de Precisão ---
+# --- Novos Módulos de Inteligência e Precisão ---
 from .utils.pricing import get_model_cost
+from .utils.uncertainty import get_uncertainty_score
 
 from .observability import (
     ROUTER_MODEL_COST,
@@ -48,7 +67,7 @@ if not logger.handlers:
     )
 
 # ============================================================
-# DB / Engine
+# DB / Engine & Estado Global
 # ============================================================
 
 DB_URL = (
@@ -67,6 +86,7 @@ LOG_RETENTION_DAYS = int(settings.get("QUERY_LOG_RETENTION_DAYS", 7))
 # ============================================================
 
 def _load_ema_from_db() -> None:
+    """Carrega histórico EMA do banco para memória."""
     global EMA_HISTORY
     try:
         with engine.connect() as conn:
@@ -86,9 +106,10 @@ def _load_ema_from_db() -> None:
             }
         logger.info(f"[EMA] Carregado: {len(EMA_HISTORY)} modelos.")
     except Exception:
-        logger.warning("[EMA] Banco vazio ou erro ao carregar histórico.")
+        logger.warning("[EMA] Banco vazio ou erro ao carregar histórico (primeira execução?).")
 
 def _persist_ema(modality: str, model: str, record: Dict[str, Any]) -> None:
+    """Persiste a atualização do EMA no banco."""
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -105,10 +126,24 @@ def _persist_ema(modality: str, model: str, record: Dict[str, Any]) -> None:
                     "c": record["ema_cost"], "align": record.get("ema_alignment", 1.0)
                 }
             )
-    except Exception as e:
+            # Log histórico detalhado
+            conn.execute(
+                text("""
+                    INSERT INTO ema_history_log (modality, model, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
+                    VALUES (:mod, :m, :lat, :c, :q, :align, :u)
+                """),
+                {
+                    "mod": modality, "m": model,
+                    "lat": record["ema_latency"], "c": record["ema_cost"],
+                    "q": record["ema_quality"], "align": record.get("ema_alignment", 1.0),
+                    "u": record.get("updates", 1)
+                }
+            )
+    except SQLAlchemyError as e:
         logger.warning(f"[EMA] Erro de persistência: {e}")
 
 def _cleanup_old_query_logs() -> None:
+    """Limpeza periódica de logs antigos."""
     while True:
         try:
             ensure_query_log()
@@ -119,8 +154,9 @@ def _cleanup_old_query_logs() -> None:
                 )
         except Exception:
             pass
-        time.sleep(86400)
+        time.sleep(86400) # Roda uma vez por dia
 
+# Inicialização
 _load_ema_from_db()
 threading.Thread(target=_cleanup_old_query_logs, daemon=True).start()
 
@@ -140,37 +176,62 @@ async def route_and_answer(
     rag_modality: str = "text",
     use_cache: bool = True,
 ) -> Dict[str, Any]:
-    
+    """
+    Executa o fluxo crítico de resposta.
+    """
     start_time = time.time()
     modality = modality or "text"
     
+    # 1. Heurística de imagem
     if bool(image_b64) and modality == "text":
         modality = "vision"
 
+    # Defaults
     max_tokens = max_tokens or settings.MAX_TOKENS_DEFAULT
     temperature = temperature or settings.TEMPERATURE_DEFAULT
 
-    # 2. Cache Lookup
+    # ============================================================
+    # 2. Cache Lookup (Leitura Rápida)
+    # ============================================================
     if use_cache:
+        cached = None
         try:
             cached = await check_cache(query, modality=modality, image_b64=image_b64)
-            if cached:
-                logger.info(f"[router] Cache HIT ({cached.get('similarity', 0):.2f})")
-                return {
-                    "model": "semantic_cache",
-                    "modality": modality,
-                    "answer": cached.get("text", ""),
-                    "image_output_b64": cached.get("image_output_b64"),
-                    "latency_s": round(time.time() - start_time, 3),
-                    "cost_per_1k": 0.0,
-                    "metadata": {"cached": True},
-                    "route": {"chosen_model": "semantic_cache", "objectives": {}, "pareto_front": [], "explanation": "Cache"},
-                    "candidates": []
-                }
-        except Exception as e: 
-            logger.warning(f"[router] Cache error: {e}")
+        except Exception: 
+            pass # Falha no cache não deve parar o fluxo
 
-    # 3. Seleção
+        if cached:
+            logger.info(f"[router] Cache HIT ({cached.get('similarity', 0):.2f})")
+            return {
+                "model": "semantic_cache",
+                "modality": modality,
+                "answer": cached.get("text", ""),
+                "image_output_b64": cached.get("image_output_b64"),
+                "latency_s": round(time.time() - start_time, 3),
+                "cost_per_1k": 0.0,
+                "metadata": {"cached": True},
+                "route": {
+                    "chosen_model": "semantic_cache", 
+                    "objectives": {"latency": 0, "cost": 0, "uncertainty": 0}, 
+                    "pareto_front": [], 
+                    "explanation": "Cache"
+                },
+                "candidates": []
+            }
+
+    # ============================================================
+    # 3. Análise de Incerteza (UQ) - NOVO
+    # ============================================================
+    uncertainty_score = 0.5 # Valor neutro padrão
+    try:
+        # Calcula quão "nova" é a query em relação ao conhecimento do bandit
+        uncertainty_score = await asyncio.to_thread(get_uncertainty_score, query, modality)
+    except Exception as e:
+        logger.warning(f"[router] UQ fail: {e}")
+
+    # ============================================================
+    # 4. Seleção de Candidatos e Estratégia
+    # ============================================================
     all_candidates = (
         settings.CANDIDATE_MODELS_LIST +
         settings.CANDIDATE_VISION_MODELS_LIST +
@@ -182,17 +243,28 @@ async def route_and_answer(
     ]))
 
     if not valid_models:
-        valid_models = ["ollama/phi4:latest"]
+        valid_models = ["ollama/phi4:latest"] # Fallback final
 
-    top2 = choose_top2_models(valid_models, 0.0, query, modality)
+    # Estratégia + Bandit (Considerando Incerteza)
+    top2 = choose_top2_models(
+        candidates=valid_models, 
+        min_quality=0.0, 
+        query_text=query, 
+        modality=modality,
+        uncertainty_score=uncertainty_score # <-- Passando UQ
+    )
+    
     chosen = select_model(top2, query, modality)
     
-    logger.info(f"[router] Model: {chosen} | Modality: {modality}")
+    logger.info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f}")
 
+    # Background Ollama Ensure (Fire and forget para modelos locais)
     if chosen.startswith("ollama/"):
         asyncio.create_task(asyncio.to_thread(_ensure_ollama_model, chosen.replace("ollama/", "")))
 
-    # 6. RAG
+    # ============================================================
+    # 5. RAG Multimodal
+    # ============================================================
     final_prompt = query
     if use_rag:
         try:
@@ -202,7 +274,9 @@ async def route_and_answer(
         except Exception as e:
             logger.warning(f"[router] RAG fail: {e}")
 
-    # 7. Inferência (BLINDADA)
+    # ============================================================
+    # 6. Inferência (Provider Call)
+    # ============================================================
     try:
         out, meta = await call_model(
             model=chosen,
@@ -219,7 +293,9 @@ async def route_and_answer(
 
     latency_s = round(time.time() - start_time, 3)
     
-    # 8. Cálculo de Custo (BLINDADO)
+    # ============================================================
+    # 7. Cálculo Preciso de Custo
+    # ============================================================
     p_tok = 0
     c_tok = 0
     total_cost = 0.0
@@ -232,7 +308,7 @@ async def route_and_answer(
             if meta.get("cost_per_1k") is not None and float(meta.get("cost_per_1k", 0)) > 0:
                 total_cost = float(meta["cost_per_1k"])
             else:
-                # Tenta calcular via tabela de preços, se falhar usa 0.0
+                # Tenta calcular via tabela de preços dinâmica
                 try:
                     total_cost = get_model_cost(chosen, p_tok, c_tok)
                 except Exception as pe:
@@ -244,6 +320,7 @@ async def route_and_answer(
     # Defesas contra metadados corrompidos
     meta_safe = meta if isinstance(meta, dict) else {}
     
+    # Monta retorno para o usuário
     return {
         "answer": out if isinstance(out, str) else str(out),
         "model": chosen,
@@ -260,11 +337,15 @@ async def route_and_answer(
             "chosen_model": chosen,
             "modality_selected": modality,
             "is_multimodal_route": bool(image_b64),
-            "objectives": {"latency": latency_s, "cost": total_cost},
+            "objectives": {
+                "latency": latency_s, 
+                "cost": total_cost,
+                "uncertainty": uncertainty_score # Logamos o UQ para análise
+            },
             "pareto_front": [],
-            "explanation": f"Selected {chosen}"
+            "explanation": f"Selected {chosen} (UQ={uncertainty_score:.2f})"
         },
-        "candidates": []
+        "candidates": [] # Simplificado para performance
     }
 
 
@@ -284,6 +365,10 @@ async def process_background_feedback(
     prompt_tokens: int = 0,
     completion_tokens: int = 0
 ):
+    """
+    Executado após a resposta ser enviada ao usuário.
+    Responsável por: Juízes, Reward, Bandit Update (com UQ learning), Cache Store, Logging.
+    """
     try:
         # 1. Avaliação
         if len(answer) < 5 or "Erro" in answer:
@@ -297,13 +382,14 @@ async def process_background_feedback(
             except Exception:
                 final_quality = 5.0
 
-        # 2. Reward
+        # 2. Reward (NSGA-II weights)
         try:
             reward = compute_reward(chosen_model, final_quality, latency_s, cost_val)
         except Exception:
             reward = 0.0
 
-        # 3. Bandit Update
+        # 3. Bandit Update (AQUI O UQ APRENDE!)
+        # O bandit_update chama _update_centroids se o reward for alto
         try:
             bandit_update(model=chosen_model, query=query, reward=reward, modality=modality)
         except Exception as e:
@@ -330,12 +416,11 @@ async def process_background_feedback(
                     "updates": prev.get("updates", 0) + 1
                 }
             
-            # Async DB write
             asyncio.create_task(asyncio.to_thread(_persist_ema, modality, chosen_model, EMA_HISTORY[key]))
         except Exception:
             pass
 
-        # 5. Cache
+        # 5. Cache (Apenas se for bom)
         if final_quality >= 7.0:
             try:
                 await store_cache(

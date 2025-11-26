@@ -1,141 +1,81 @@
 # -*- coding: utf-8 -*-
 """
-router_strategy.py (multimodal-aware)
-----------------------------------------------------
-Estratégias de seleção de modelos para o Router Multimodal:
-- Seleção por modalidade (text/vision/multimodal)
-- Snapshot multimodal-aware: chave (modelo, modalidade)
-- Rankeamento híbrido: qualidade ajustada × latência × custo
+router_strategy.py (Com Lógica de Incerteza UQ)
+-----------------------------------------------
+Estratégia de seleção sensível ao risco.
 """
 
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Any
 
-from .settings_dynamic import settings
-from .metrics_collector import get_snapshot, update_model_metrics
-from .observability import ROUTER_CHOSEN
+# Importa helpers do novo bandits.py
+from app.bandits import get_snapshot, sample_metrics_from_snapshot
+from app.settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
 
+SOTA_MARKERS = ["gpt-4", "opus", "sonnet", "gemini-1.5-pro"]
 
-# ============================================================
-# 🔥 Utilitários
-# ============================================================
+def _is_sota(model_name: str) -> bool:
+    return any(m in model_name.lower() for m in SOTA_MARKERS)
 
-def _get_candidate_sets() -> Dict[str, List[str]]:
-    """Retorna listas de modelos por modalidade."""
-    return {
-        "text": getattr(settings, "CANDIDATE_MODELS_LIST", []),
-        "vision": getattr(settings, "CANDIDATE_VISION_MODELS_LIST", []),
-        "multimodal": getattr(settings, "CANDIDATE_MULTIMODAL_MODELS_LIST", []),
-    }
-
-
-def _pick_models_by_modality(request_modality: str) -> List[str]:
-    """
-    Seleciona subconjuntos coerentes com a modalidade.
-    """
-    msets = _get_candidate_sets()
-
-    if request_modality == "vision":
-        return msets["vision"] or msets["multimodal"] or msets["text"]
-
-    if request_modality == "multimodal":
-        return msets["multimodal"] + msets["vision"] + msets["text"]
-
-    # texto
-    return msets["text"] or msets["multimodal"] or msets["vision"]
-
-
-# ============================================================
-# 🎯 Escolha inteligente top-2 (multimodal-aware)
-# ============================================================
+def _is_local(model_name: str) -> bool:
+    return "ollama" in model_name.lower()
 
 def choose_top2_models(
     candidates: List[str],
-    min_quality: float,
+    min_quality: float, # Mantido para compatibilidade, não usado diretamente
     query_text: str,
     modality: str = "text",
+    uncertainty_score: float = 0.0, # <-- Input do UQ
 ) -> List[str]:
-    """
-    Seleciona os 2 melhores modelos com base em métricas dinâmicas
-    e compatibilidade multimodal.
-    """
-    snapshot = get_snapshot() or {}
+    
+    snapshot = get_snapshot()
+    # Amostra qualidade probabilística (Thompson Sampling)
+    # Isso já dá variedade à escolha (Exploration)
+    sampled_qs = sample_metrics_from_snapshot(snapshot)
 
-    # subconjunto coerente com modalidade
-    modal_candidates = _pick_models_by_modality(modality)
-    filtered = [c for c in candidates if c in modal_candidates]
+    # Limiar dinâmico definido pelo NSGA-II
+    uq_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
+    
+    is_high_uncertainty = uncertainty_score > uq_threshold
+    # Hard Filter: Se a modalidade é texto, expulsa modelos com 'vision', 'vl', 'llava' no nome
+    if modality == "text":
+        candidates = [
+            m for m in candidates 
+            if not any(tag in m.lower() for tag in ["vision", "vl", "llava", "moondream"])
+        ]
+    scores = []
+    for model in candidates:
+        # Base quality (0-10)
+        q_val = sampled_qs.get(model, 5.0) # 5.0 = prior neutro
 
-    if not filtered:
-        logger.warning("[router_strategy] Nenhum modelo multimodal compatível — fallback para lista original.")
-        filtered = candidates
+        # --- LÓGICA UQ (Safety Mode) ---
+        risk_factor = 1.0
+        
+        if is_high_uncertainty:
+            # Em terreno desconhecido:
+            if _is_sota(model):
+                risk_factor = 1.3 # Confia nos modelos fortes
+            elif _is_local(model):
+                risk_factor = 0.6 # Desconfia dos locais
+        else:
+            # Em terreno conhecido:
+            if _is_local(model):
+                risk_factor = 1.1 # Bônus de eficiência para locais
 
-    results = []
+        # Penalidade de Custo (Hardcoded simples ou vindo de pesos globais)
+        # Em tese real, esses pesos viriam do NSGA também
+        cost_penalty = 0.1 if _is_local(model) else 0.8
 
-    for model in filtered:
-        # chave multimodal
-        key = (model, modality)
+        final_score = (q_val * risk_factor) - cost_penalty
+        scores.append((model, final_score))
 
-        # snapshot multimodal-aware
-        m = snapshot.get(key)
+    # Ordena e pega top 2
+    scores.sort(key=lambda x: x[1], reverse=True)
+    top2 = [s[0] for s in scores[:2]]
 
-        if not m:
-            # fallback para quando modelo ainda não tem histórico nesta modalidade
-            m = {"quality": 5.0, "latency": 1.8, "cost": 0.25}
-
-        # Peso de ajuste dependente do tipo do modelo
-        lower = model.lower()
-        if modality == "vision":
-            modality_weight = 1.4 if ("vision" in lower or "vl" in lower) else 0.6
-        elif modality == "multimodal":
-            # vlms tendem a performar melhor aqui
-            modality_weight = 1.25 if ("vision" in lower or "vl" in lower) else 1.0
-        else:  # text
-            modality_weight = 1.15 if ("text" in lower or "llama" in lower or "phi" in lower) else 0.75
-
-        adj_quality = m["quality"] * modality_weight
-
-        results.append((model, adj_quality, m["latency"], m["cost"]))
-
-    # Ordenação: maior qualidade ajustada, menor latência, menor custo
-    ranked = sorted(results, key=lambda r: (-r[1], r[2], r[3]))
-
-    top = [r[0] for r in ranked[:2]]
-
-    logger.info(
-        f"[router_strategy] top2={top} (modality={modality}, query='{query_text[:40]}...')"
-    )
-
-    return top
-
-
-# ============================================================
-# 📈 Atualização de métricas por modalidade
-# ============================================================
-
-def update_metrics(
-    model_name: str,
-    cost: float,
-    latency: float,
-    quality: float,
-    modality: str = "text",
-    **kwargs
-):
-    """
-    Atualiza métricas multimodais no collector.
-    kwargs pode incluir:
-        - cost_per_1k
-        - tokens_in
-        - tokens_out
-        - embedding_dim
-        - vision_usage
-    """
-    update_model_metrics(
-        model_name=model_name,
-        latency=latency,
-        quality=quality,
-        cost=cost,
-        modality=modality,
-        **kwargs
-    )
+    if is_high_uncertainty:
+        logger.info(f"[Strategy] ⚠️ Alta Incerteza ({uncertainty_score:.2f}). Modo Segurança. Top2: {top2}")
+    
+    return top2

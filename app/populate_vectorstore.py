@@ -1,246 +1,288 @@
 # -*- coding: utf-8 -*-
 """
-vectorstore.py — RAG Multimodal (Texto / Visão / Multimodal)
-----------------------------------------------------------------------
-Gerencia a persistência de embeddings no ChromaDB.
+populate_vectorstore.py (Versão Corrigida: Imports Absolutos)
+-------------------------------------------------------
+Popula a base vetorial (ChromaDB) com textos, PDFs e
+Markdowns para uso em RAG.
 
-Funções exportadas:
-    - init_vectorstore()
-    - get_or_create_collection_async()  <-- ADICIONADO
-    - add_document()
-    - query_embedding()
-    - reset_collections()
-    - health_async()
+Funcionalidades:
+✅ Detecção automática de PDF digital vs escaneado
+✅ OCR (Tesseract) se necessário
+✅ Geração de resumo e título via LLM (Async)
+✅ Inserção assíncrona no ChromaDB
 """
 
-from __future__ import annotations
-
 import os
+import re
+import uuid
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional, Union
+from pathlib import Path
+from typing import List, Tuple
 
-import chromadb
-import numpy as np
+# Bibliotecas de PDF
+import fitz  # PyMuPDF
 
-from .embeddings import embed_text, embed_image, embed_multimodal
-from .settings_dynamic import settings
+# Bibliotecas de OCR (Opcionais - requer instalação no SO)
+try:
+    import pytesseract
+    from pdf2image import convert_from_path
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
+# ============================================================
+# 🛠️ CORREÇÃO: USAR IMPORTS ABSOLUTOS (app.xyz)
+# ============================================================
+# O erro ocorria aqui ao usar 'from .vectorstore'
+from app.vectorstore import add_document, get_or_create_collection_async
+from app.embeddings import embed_text
+from app.providers_async import call_model
+from app.settings_dynamic import settings
+
+# ============================================================
+# ⚙️ CONFIGURAÇÃO
+# ============================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] populate: %(message)s",
+)
+logger = logging.getLogger("populate_vectorstore")
+
+COLLECTION_NAME = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
+# Fallback para data/rag_docs se não definido
+DATA_DIR = settings.get("RAG_DATA_DIR", "/app/data/rag_docs")
+SUMMARY_MODEL = settings.get("SUMMARY_MODEL", "ollama/phi4:latest")
+
+CHUNK_SIZE = 1000
+OVERLAP = 150
 
 
 # ============================================================
-# Logging
+# ✂️ UTILITÁRIOS DE TEXTO
 # ============================================================
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] [%(levelname)s] vectorstore: %(message)s"
-    )
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP) -> List[str]:
+    """Divide texto longo em fragmentos com sobreposição."""
+    text = re.sub(r"\s+", " ", text.strip())
+    if len(text) <= chunk_size:
+        return [text]
 
-
-# ============================================================
-# Configurações
-# ============================================================
-CHROMA_PATH = settings.get("CHROMA_PATH", "/data/chroma")
-
-TEXT_COLLECTION = "text_embeddings"
-IMAGE_COLLECTION = "image_embeddings"
-MULTIMODAL_COLLECTION = "multimodal_embeddings"
-
-VALID_MODALITIES = {"text", "vision", "multimodal", "image"}
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
 
 
 # ============================================================
-# Conexão com ChromaDB
+# 👁️ LÓGICA DE OCR (PDF ESCANEADO)
 # ============================================================
-def _connect_local():
-    """Inicializa cliente persistente do ChromaDB."""
+def _perform_ocr(path: Path) -> str:
+    """Converte páginas do PDF em imagens e roda Tesseract."""
+    logger.info(f"[OCR] Iniciando reconhecimento ótico em: {path.name}...")
+    text_accum = []
     try:
-        os.makedirs(CHROMA_PATH, exist_ok=True)
-        logger.info(f"[vectorstore] Inicializando ChromaDB em {CHROMA_PATH}")
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
-        logger.info("[vectorstore] Chroma PersistentClient inicializado.")
-        return client
+        # Converte PDF para lista de imagens (uma por página)
+        # thread_count=4 acelera o processo
+        images = convert_from_path(str(path), thread_count=4)
+        
+        for i, image in enumerate(images):
+            # Extrai texto da imagem (lang='por+eng' para suportar PT e EN)
+            page_text = pytesseract.image_to_string(image, lang='por+eng')
+            text_accum.append(page_text)
+            if (i + 1) % 5 == 0:
+                logger.info(f"[OCR] Processadas {i + 1} páginas...")
+            
+        full_text = " ".join(text_accum)
+        logger.info(f"[OCR] Concluído. Extraídos {len(full_text)} caracteres.")
+        return full_text
     except Exception as e:
-        logger.error(f"[vectorstore] Falha ao iniciar ChromaDB: {e}")
-        raise
-
-
-chroma_client = _connect_local()
+        logger.error(f"[OCR] Erro crítico ao processar {path.name}: {e}")
+        return ""
 
 
 # ============================================================
-# Helpers
+# 📄 CARREGADORES DE ARQUIVOS
 # ============================================================
-def _ensure_list_of_floats(vec):
-    """Converte embedding para list[float]."""
-    if isinstance(vec, np.ndarray):
-        return vec.astype(float).ravel().tolist()
-    if isinstance(vec, (list, tuple)):
-        return [float(x) for x in np.array(vec, dtype=float).ravel()]
-    return [0.0]
-
-
-def _safe_metadata(meta):
-    return meta if isinstance(meta, dict) else {"source": "router"}
-
-
-def _normalize_modality(modality: Optional[str]) -> str:
-    if not modality:
-        return "text"
-    m = modality.lower().strip()
-    if m == "image":
-        return "vision"
-    return m if m in VALID_MODALITIES else "text"
-
-
-def _collection_for_modality(modality: str) -> str:
-    m = _normalize_modality(modality)
-    if m == "text":
-        return TEXT_COLLECTION
-    if m == "vision":
-        return IMAGE_COLLECTION
-    return MULTIMODAL_COLLECTION
-
-
-# ============================================================
-# Gerenciamento de Coleções (Async Wrapper)
-# ============================================================
-
-def _get_or_create_sync(name: str, metadata: Optional[Dict] = None):
-    """Wrapper síncrono para o client do Chroma."""
-    return chroma_client.get_or_create_collection(name=name, metadata=metadata)
-
-async def get_or_create_collection_async(name: str, metadata: Optional[Dict] = None):
-    """
-    Cria ou recupera uma coleção de forma assíncrona (threadpool).
-    Usado pelo populate_vectorstore.py.
-    """
-    return await asyncio.to_thread(_get_or_create_sync, name, metadata)
-
-
-# ============================================================
-# Inicialização Padrão
-# ============================================================
-def init_vectorstore():
-    """Cria coleções básicas se não existirem (Síncrono, usado no boot)."""
+def load_text_file(path: Path) -> List[str]:
     try:
-        for name in (TEXT_COLLECTION, IMAGE_COLLECTION, MULTIMODAL_COLLECTION):
-            chroma_client.get_or_create_collection(
-                name=name,
-                metadata={"modality": name},
-            )
-        logger.info("[vectorstore] Coleções base verificadas.")
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        return chunk_text(text)
     except Exception as e:
-        logger.error(f"[vectorstore] Falha ao inicializar coleções: {e}")
-        raise
+        logger.error(f"Falha ao ler texto {path.name}: {e}")
+        return []
 
 
-# ============================================================
-# Inserção
-# ============================================================
-def _insert_embedding_sync(
-    collection_name: str,
-    doc_id: str,
-    text: Optional[str],
-    embedding: List[float],
-    metadata: Optional[Dict[str, Any]],
-):
-    col = chroma_client.get_or_create_collection(
-        name=collection_name,
-        metadata=_safe_metadata(metadata),
-    )
-
-    col.add(
-        ids=[str(doc_id)],
-        documents=[text or ""],
-        embeddings=[_ensure_list_of_floats(embedding)],
-        metadatas=[_safe_metadata(metadata)],
-    )
-
-
-async def add_document(
-    modality: str,
-    doc_id: str,
-    text: Optional[str] = None,
-    image_b64: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-):
-    """Insere documento multimodal completo."""
-    modality = _normalize_modality(modality)
-
-    # --- gerar embedding ---
-    if modality == "text":
-        embedding = await asyncio.to_thread(embed_text, text or "")
-    elif modality == "vision":
-        embedding = await asyncio.to_thread(embed_image, image_b64 or "")
-    else:  # multimodal
-        emb = await asyncio.to_thread(embed_multimodal, text or "", image_b64)
-        embedding = emb.get("multimodal")
-
-    collection_name = _collection_for_modality(modality)
-
-    # --- inserir ---
-    await asyncio.to_thread(
-        _insert_embedding_sync,
-        collection_name,
-        doc_id,
-        text,
-        embedding,
-        metadata,
-    )
-
-    logger.info(f"[vectorstore] Inserido doc_id={doc_id} modality={modality}")
-    return True
-
-
-# ============================================================
-# Consulta
-# ============================================================
-def _query_embedding_sync(collection_name: str, embedding, n_results: int):
+def load_pdf_file(path: Path) -> List[str]:
+    """
+    Lê PDF. Tenta extração direta (rápida). 
+    Se falhar (PDF escaneado/imagem), usa OCR (lento).
+    """
+    full_text = ""
+    
     try:
-        col = chroma_client.get_or_create_collection(name=collection_name)
-        return col.query(
-            query_embeddings=[_ensure_list_of_floats(embedding)],
-            n_results=n_results,
-            include=["documents", "metadatas", "distances"],
+        # 1. Tentativa Rápida (Texto digital)
+        doc = fitz.open(path)
+        full_text = " ".join(page.get_text("text") for page in doc)
+        doc.close()
+        
+        # Heurística: Se tiver menos de 100 caracteres no total, provavelmente é escaneado
+        if len(full_text.strip()) < 100:
+            if OCR_AVAILABLE:
+                logger.warning(f"Texto insuficiente ({len(full_text)} chars) em {path.name}. Tentando OCR...")
+                ocr_text = _perform_ocr(path)
+                # Só substitui se o OCR achou mais coisa que o método digital
+                if len(ocr_text) > len(full_text):
+                    full_text = ocr_text
+            else:
+                logger.warning(f"PDF escaneado detectado em {path.name}, mas OCR não está instalado.")
+
+        return chunk_text(full_text)
+
+    except Exception as e:
+        logger.error(f"Falha ao processar PDF {path.name}: {e}")
+        return []
+
+
+def gather_documents(folder: str) -> dict[str, List[str]]:
+    """Retorna {nome_arquivo: [fragmentos]}."""
+    docs = {}
+    path_obj = Path(folder)
+    
+    if not path_obj.exists():
+        logger.warning(f"Pasta {folder} não encontrada — criando...")
+        path_obj.mkdir(parents=True, exist_ok=True)
+        return docs
+
+    for file_path in path_obj.glob("*.*"):
+        if not file_path.is_file():
+            continue
+
+        ext = file_path.suffix.lower()
+        fragments = []
+
+        if ext in [".txt", ".md"]:
+            fragments = load_text_file(file_path)
+        elif ext == ".pdf":
+            fragments = load_pdf_file(file_path)
+        else:
+            continue
+
+        if fragments:
+            docs[file_path.name] = fragments
+            logger.info(f"Carregado: {file_path.name} ({len(fragments)} chunks)")
+    
+    return docs
+
+
+# ============================================================
+# 🧠 RESUMO AUTOMÁTICO (LLM Async)
+# ============================================================
+async def summarize_text_async(text: str, model: str = SUMMARY_MODEL) -> Tuple[str, str]:
+    """
+    Gera título e resumo usando o LLM via providers_async.
+    """
+    try:
+        prompt = f"""
+Você é um assistente de arquivologia.
+Analise o fragmento de texto abaixo e gere:
+1. Um TÍTULO curto e descritivo (máx 10 palavras).
+2. Um RESUMO conciso do conteúdo (máx 3 frases).
+
+Texto:
+{text[:2000]}
+
+Responda estritamente no formato:
+TÍTULO: ...
+RESUMO: ...
+"""
+        # Chama o provider (agora async)
+        response, _ = await call_model(
+            model=model,
+            prompt=prompt,
+            max_tokens=256,
+            temperature=0.3
         )
+
+        # Extração via Regex
+        title_match = re.search(r"(?i)t[ií]tulo[:：]\s*(.+)", response)
+        summary_match = re.search(r"(?i)resumo[:：]\s*(.+)", response)
+        
+        title = title_match.group(1).strip() if title_match else "Documento sem título"
+        summary = summary_match.group(1).strip() if summary_match else "Resumo não disponível"
+        
+        return title, summary
+
     except Exception as e:
-        logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
-        return {}
-
-
-async def query_embedding(modality: str, embedding, n_results: int = 3):
-    """Consulta embeddings no Chroma."""
-    # Se a modalidade for o nome direto da coleção (ex: knowledge_base), usa direto
-    if modality not in VALID_MODALITIES:
-        collection_name = modality
-    else:
-        collection_name = _collection_for_modality(modality)
-
-    return await asyncio.to_thread(
-        _query_embedding_sync,
-        collection_name,
-        embedding,
-        n_results,
-    )
+        logger.warning(f"Falha ao resumir texto: {e}")
+        return "Documento Genérico", "Sem resumo"
 
 
 # ============================================================
-# Health / Reset
+# 🚀 FLUXO PRINCIPAL
 # ============================================================
-async def reset_collections():
-    """Apaga todas as coleções."""
+async def populate_vectorstore():
+    logger.info(f"🚀 Iniciando população da coleção '{COLLECTION_NAME}'...")
+    
+    # 1. Ler arquivos do disco
+    all_docs = gather_documents(DATA_DIR)
+    if not all_docs:
+        logger.warning("⚠️ Nenhum documento encontrado em /data/rag_docs.")
+        return
+
+    # 2. Garantir que a coleção existe
+    await get_or_create_collection_async(COLLECTION_NAME)
+
+    total_inserted = 0
+    
+    for fname, fragments in all_docs.items():
+        logger.info(f"Processando '{fname}'...")
+        
+        # Gera resumo com base nos primeiros 3 chunks (contexto inicial)
+        context_preview = " ".join(fragments[:3])
+        title, summary = await summarize_text_async(context_preview)
+        
+        logger.info(f"   📘 Título: {title}")
+        logger.info(f"   📝 Resumo: {summary[:100]}...")
+
+        # Insere cada fragmento
+        for idx, frag in enumerate(fragments):
+            try:
+                doc_id = str(uuid.uuid4())
+                meta = {
+                    "source": fname,
+                    "chunk_index": idx,
+                    "total_chunks": len(fragments),
+                    "title": title,
+                    "summary_snippet": summary[:200] # guarda parte do resumo no metadado
+                }
+                
+                # add_document já calcula o embedding internamente via threadpool
+                success = await add_document(
+                    modality="text",
+                    doc_id=doc_id,
+                    text=frag,
+                    metadata=meta
+                )
+                
+                if success:
+                    total_inserted += 1
+                    
+            except Exception as e:
+                logger.error(f"Erro ao inserir chunk {idx} de {fname}: {e}")
+
+    logger.info("-" * 40)
+    logger.info(f"✅ Concluído! {len(all_docs)} arquivos processados.")
+    logger.info(f"📚 Total de fragmentos inseridos: {total_inserted}")
+
+
+if __name__ == "__main__":
     try:
-        await asyncio.to_thread(chroma_client.reset)
-        logger.warning("[vectorstore] Todas coleções resetadas.")
+        asyncio.run(populate_vectorstore())
+    except KeyboardInterrupt:
+        logger.info("Interrompido pelo usuário.")
     except Exception as e:
-        logger.error(f"[vectorstore] Erro ao resetar: {e}")
-
-
-async def health_async() -> bool:
-    try:
-        await asyncio.to_thread(chroma_client.heartbeat)
-        return True
-    except Exception:
-        return False
+        logger.exception(f"Erro fatal: {e}")

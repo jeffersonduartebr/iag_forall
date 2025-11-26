@@ -32,6 +32,9 @@ anthropic
 google-generativeai
 pytesseract
 pdf2image
+python-multipart
+# Nova dependência para o modelo de Re-Ranking (Cross-Encoder)
+sentence-transformers>=2.2.2
 # ==========================================
 # 💾 Banco de dados e cache
 # ==========================================

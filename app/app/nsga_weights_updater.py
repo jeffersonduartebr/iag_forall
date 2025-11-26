@@ -1,15 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-nsga_weights_updater.py — MULTIMODAL (CORRIGIDO)
-------------------------------------------------------------
-Extensão multimodal do NSGA-II para calcular pesos ótimos.
+nsga_weights_updater.py — Otimizador Multimodal (NSGA-II + UQ Tuning)
+---------------------------------------------------------------------
+Serviço de Otimização Contínua.
 
-Correção:
-- Mapeamento correto das variáveis de ambiente para cada modalidade.
-- Fallback de segurança para evitar RuntimeError se a lista estiver vazia.
+Responsabilidades:
+1. Coletar métricas históricas (EMA) do Banco de Dados.
+2. Rodar Algoritmo Genético (NSGA-II) para encontrar pesos ótimos (w1, w2, w3) para cada modelo.
+3. Ajustar dinamicamente o Limiar de Incerteza (UNCERTAINTY_THRESHOLD) baseado na estabilidade do sistema.
+4. Persistir configurações ótimas no Redis/DB para o Router usar.
+
+Correções:
+- Mapeamento correto de modelos por modalidade (Text/Vision/Multimodal).
+- Fallback de segurança para Cold Start.
 """
 
 from __future__ import annotations
+
 import json
 import logging
 import os
@@ -17,8 +24,9 @@ import random
 import threading
 import time
 import socket
+import math
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import pymysql
 import redis
@@ -27,157 +35,87 @@ from deap import algorithms, base, creator, tools
 from fastapi import FastAPI, Body, Path
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import create_engine, text
-from prometheus_client import (
-    Counter, Gauge, REGISTRY, generate_latest
-)
+from prometheus_client import Counter, Gauge, REGISTRY, generate_latest
 
 from app.settings_dynamic import settings
 
 # ============================================================
-# Logging
+# Logging & Config
 # ============================================================
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
 )
-logger = logging.getLogger("nsga-updater-mm")
+logger = logging.getLogger("nsga-updater")
 
-# ============================================================
-# Wait for services
-# ============================================================
-def wait_for_service(host: str, port: int, name: str,
-                     timeout: int = 60, delay: int = 2) -> None:
-    start = time.time()
-    while True:
-        try:
-            with socket.create_connection((host, port), timeout=2):
-                logger.info(f"✅ {name} disponível em {host}:{port}")
-                return
-        except OSError:
-            elapsed = int(time.time() - start)
-            if elapsed > timeout:
-                logger.warning(f"⚠️ Timeout esperando {name}")
-                return
-            logger.info(f"⏳ Aguardando {name}... ({elapsed}s)")
-            time.sleep(delay)
-
-def wait_for_redis(host: str, port: int, password: str,
-                   retries: int = 20, delay: int = 3) -> None:
-    c = redis.Redis(host=host, port=port, password=password,
-                    socket_connect_timeout=2)
-    for i in range(1, retries + 1):
-        try:
-            if c.ping():
-                logger.info(f"✅ Redis disponível")
-                return
-        except redis.exceptions.ConnectionError:
-            logger.info(f"⏳ Tentativa {i}/{retries}: aguardando Redis...")
-        time.sleep(delay)
-    logger.warning("⚠️ Redis não respondeu após múltiplas tentativas.")
-
-def wait_for_mariadb(host: str, user: str, password: str,
-                     dbname: str, retries: int = 20, delay: int = 3) -> None:
-    for i in range(1, retries + 1):
-        try:
-            conn = pymysql.connect(host=host, user=user,
-                                   password=password, database=dbname,
-                                   connect_timeout=2)
-            conn.close()
-            logger.info(f"✅ MariaDB disponível ({host})")
-            return
-        except pymysql.err.OperationalError:
-            logger.info(f"⏳ Tentativa {i}/{retries}: aguardando MariaDB...")
-        time.sleep(delay)
-    logger.warning("⚠️ MariaDB não respondeu após múltiplas tentativas.")
-
-# Initial service waits
-db_host = os.getenv("DB_HOST", "mariadb")
-db_user = os.getenv("DB_USER", "router_user")
-db_pass = os.getenv("DB_PASS", "router_pass")
-db_name = os.getenv("DB_NAME", "routerdb")
-redis_host = os.getenv("REDIS_HOST", "redis")
-redis_port = int(os.getenv("REDIS_PORT", "6379"))
-redis_pass = os.getenv("REDIS_PASSWORD", "")
-
-wait_for_service(db_host, 3306, "MariaDB TCP")
-wait_for_service(redis_host, redis_port, "Redis TCP")
-wait_for_redis(redis_host, redis_port, redis_pass or "")
-wait_for_mariadb(db_host, db_user, db_pass, db_name)
-
-logger.info("✅ Dependências estão OK — iniciando NSGA multimodal.")
-
-# ============================================================
-# Setup Banco + Redis
-# ============================================================
-DB_URL = f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:3306/{settings.DB_NAME}"
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
-
-def get_redis():
-    try:
-        r = redis.Redis(
-            host=redis_host,
-            port=redis_port,
-            password=redis_pass or None,
-            db=int(os.getenv("REDIS_DB", "0"))
-        )
-        r.ping()
-        return r
-    except Exception as exc:
-        logger.warning("[nsga-mm] Falha Redis: %s", exc)
-        return None
-
-redis_client = get_redis()
-
-# ============================================================
-# CONSTANTES MULTIMODAIS
-# ============================================================
-
+# Configurações de Ambiente
+UPDATE_INTERVAL_S = int(settings.get("NSGA_UPDATE_INTERVAL_S", "300"))
 MODALITIES = ["text", "vision", "multimodal"]
 
-REDIS_KEY_WEIGHTS = {
-    m: f"nsga:weights:{m}" for m in MODALITIES
-}
-
+# Chaves Redis
+REDIS_KEY_WEIGHTS = {m: f"nsga:weights:{m}" for m in MODALITIES}
 REDIS_KEY_CANDIDATES = {
     "text": "nsga:candidate_models:text",
     "vision": "nsga:candidate_models:vision",
     "multimodal": "nsga:candidate_models:multimodal",
 }
 
-UPDATE_INTERVAL_S = int(settings.get("NSGA_UPDATE_INTERVAL_S", "300"))
-QUERY_LOG_LOOKBACK_MINUTES = int(settings.get("NSGA_LOOKBACK_MINUTES", "180"))
-QUERY_LOG_MAX_ROWS = int(settings.get("NSGA_LOOKBACK_MAXROWS", "2000"))
-
 # ============================================================
-# Tabela multimodal nsga_weights
-# ============================================================
-DDL_WEIGHTS_MM = """
-CREATE TABLE IF NOT EXISTS nsga_weights (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    modality VARCHAR(32) NOT NULL,
-    model VARCHAR(255) NOT NULL,
-    weight FLOAT NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uniq_mod_model (modality, model)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-"""
-
-with engine.begin() as conn:
-    conn.execute(text(DDL_WEIGHTS_MM))
-
-logger.info("Tabela nsga_weights multimodal OK.")
-
-# ============================================================
-# 🔍 Carregar modelos candidatos por modalidade (CORRIGIDO)
+# Conexões (DB & Redis)
 # ============================================================
 
+DB_URL = f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+
+def get_redis_client():
+    try:
+        r = redis.Redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            password=settings.REDIS_PASSWORD or None,
+            db=settings.REDIS_DB,
+            socket_timeout=2
+        )
+        if r.ping(): return r
+    except Exception as e:
+        logger.warning(f"[NSGA] Redis indisponível: {e}")
+    return None
+
+redis_client = get_redis_client()
+
+# ============================================================
+# Inicialização de Tabelas
+# ============================================================
+def init_db_tables():
+    DDL = """
+    CREATE TABLE IF NOT EXISTS nsga_weights (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        modality VARCHAR(32) NOT NULL,
+        model VARCHAR(255) NOT NULL,
+        weight FLOAT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_mod_model (modality, model)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(DDL))
+        logger.info("[NSGA] Tabela 'nsga_weights' verificada.")
+    except Exception as e:
+        logger.error(f"[NSGA] Erro ao criar tabelas: {e}")
+
+init_db_tables()
+
+
+# ============================================================
+# 1. Carregamento de Modelos (CORRIGIDO)
+# ============================================================
 def load_candidate_models(modality: str) -> List[str]:
     """
-    Retorna a lista de modelos da modalidade.
-    Origem: Redis -> Settings -> Fallback.
+    Carrega a lista de modelos candidatos para a modalidade específica.
+    Ordem: Redis -> Settings -> Fallback Hardcoded.
     """
-    # 1️⃣ Tentar Redis
+    # 1. Redis
     try:
         if redis_client:
             raw = redis_client.get(REDIS_KEY_CANDIDATES.get(modality, ""))
@@ -185,37 +123,41 @@ def load_candidate_models(modality: str) -> List[str]:
                 data = json.loads(raw)
                 if isinstance(data, list) and data:
                     return [str(x) for x in data]
-    except Exception:
-        pass
+    except Exception: pass
 
-    # 2️⃣ Settings (Mapeamento Correto)
-    data = []
+    # 2. Settings (CORREÇÃO: Mapeamento Explícito)
     if modality == "text":
-        data = settings.CANDIDATE_MODELS_LIST
+        candidates = settings.CANDIDATE_MODELS_LIST
     elif modality == "vision":
-        data = settings.CANDIDATE_VISION_MODELS_LIST
+        candidates = settings.CANDIDATE_VISION_MODELS_LIST
     elif modality == "multimodal":
-        data = settings.CANDIDATE_MULTIMODAL_MODELS_LIST
+        candidates = settings.CANDIDATE_MULTIMODAL_MODELS_LIST
+    else:
+        candidates = []
 
-    if data:
-        return data
+    if candidates:
+        # Filtra duplicatas e vazios
+        return list(set([c for c in candidates if c]))
 
-    # 3️⃣ Fallback de Segurança (Evita Crash)
-    logger.warning(f"[nsga-mm] ⚠️ Nenhum modelo encontrado para '{modality}'. Usando fallback.")
+    # 3. Fallback de Segurança (Evita erro 500)
+    logger.warning(f"[NSGA] ⚠️ Nenhum modelo encontrado para '{modality}'. Usando fallback de emergência.")
     
     if modality == "text":
         return ["ollama/phi4:latest", "ollama/mistral:7b"]
     elif modality in ("vision", "multimodal"):
-        return ["ollama/llava:7b"]
+        return ["ollama/llava:7b", "ollama/moondream:latest"]
     
     return []
 
 
 # ============================================================
-# 📚 Leitura do histórico EMA por modalidade
+# 2. Coleta de Dados Históricos (EMA)
 # ============================================================
-
-def load_recent_ema(modality: str, limit: int = 5000) -> List[Dict[str, Any]]:
+def aggregate_ema_by_model(modality: str, models: List[str]) -> Dict[str, Dict[str, float]]:
+    """
+    Lê o histórico de performance (EMA) do banco.
+    Retorna dicionário: {model: {latency, cost, quality, alignment}}
+    """
     try:
         with engine.connect() as conn:
             rows = conn.execute(
@@ -223,285 +165,216 @@ def load_recent_ema(modality: str, limit: int = 5000) -> List[Dict[str, Any]]:
                     SELECT model, ema_latency, ema_cost, ema_quality, ema_alignment
                     FROM ema_history
                     WHERE modality = :m
-                    ORDER BY updated_at DESC
-                    LIMIT :lim
                 """),
-                {"m": modality, "lim": limit},
+                {"m": modality}
             ).mappings().all()
+        
+        db_data = {r["model"]: dict(r) for r in rows}
 
-        return [
-            {
-                "model": r["model"],
-                "latency": float(r["ema_latency"]),
-                "cost": float(r["ema_cost"]),
-                "quality": float(r["ema_quality"]),
-                "alignment": float(r["ema_alignment"]),
-            }
-            for r in rows
-        ]
     except Exception as e:
-        logger.warning(f"[nsga-mm] Falha ao ler ema_history modality={modality}: {e}")
-        return []
+        logger.warning(f"[NSGA] Erro ao ler EMA: {e}")
+        db_data = {}
 
-
-# ============================================================
-# 📊 Agregar EMA em uma única média por modelo
-# ============================================================
-
-def aggregate_ema_by_model(modality: str, models: List[str]) -> Dict[str, Dict[str, float]]:
-    rows = load_recent_ema(modality)
+    final_data = {}
     
-    # Se não houver histórico, gera dados sintéticos para cold-start
-    # Isso permite que o NSGA rode mesmo sem dados reais
-    if not rows:
-        logger.info(f"[nsga-mm] Cold-start para {modality}. Gerando dados iniciais.")
-        return {
-            m: {
-                "latency": random.uniform(0.5, 2.0),
-                "cost": random.uniform(0.001, 0.01),
-                "quality": random.uniform(5.0, 8.0),
-                "alignment": 1.0,
-            }
-            for m in models
-        }
-
-    grouped = {}
-    for r in rows:
-        m = r["model"]
-        if m not in models: continue
-        grouped.setdefault(m, {"lat": [], "cost": [], "qual": [], "aln": []})
-        grouped[m]["lat"].append(r["latency"])
-        grouped[m]["cost"].append(r["cost"])
-        grouped[m]["qual"].append(r["quality"])
-        grouped[m]["aln"].append(r["alignment"])
-
-    out = {}
+    # Garante que todos os modelos candidatos tenham dados (Synthetic Cold Start)
     for m in models:
-        g = grouped.get(m)
-        if g:
-            out[m] = {
-                "latency": sum(g["lat"]) / len(g["lat"]),
-                "cost": sum(g["cost"]) / len(g["cost"]),
-                "quality": sum(g["qual"]) / len(g["qual"]),
-                "alignment": sum(g["aln"]) / len(g["aln"]),
+        if m in db_data:
+            d = db_data[m]
+            final_data[m] = {
+                "latency": float(d["ema_latency"]),
+                "cost": float(d["ema_cost"]),
+                "quality": float(d["ema_quality"]),
+                "alignment": float(d["ema_alignment"]),
             }
         else:
-            # Modelo na lista mas sem histórico ainda
-            out[m] = {
-                "latency": 2.0, "cost": 0.01, "quality": 5.0, "alignment": 1.0
+            # Dados sintéticos conservadores para modelos novos
+            final_data[m] = {
+                "latency": 2.0,  # Latência média/alta
+                "cost": 0.001,   # Custo baixo
+                "quality": 5.0,  # Qualidade neutra
+                "alignment": 1.0 # Alinhamento máximo
             }
-
-    return out
-
-
-# ============================================================
-# 📈 Métricas Prometheus
-# ============================================================
-
-WEIGHT_BY_MODEL_MM = Gauge("nsga_model_weight_mm", "Peso NSGA-II multimodal", ["modality", "model"])
-OBS_LATENCY_MM = Gauge("nsga_obs_latency_mm", "EMA latência", ["modality", "model"])
-OBS_COST_MM = Gauge("nsga_obs_cost_mm", "EMA custo", ["modality", "model"])
-OBS_QUALITY_MM = Gauge("nsga_obs_quality_mm", "EMA qualidade", ["modality", "model"])
-OBS_ALIGNMENT_MM = Gauge("nsga_obs_alignment_mm", "EMA alinhamento", ["modality", "model"])
-
-NSGA_RUNS_MM = Counter("nsga_runs_total_mm", "Execuções NSGA-II", ["modality"])
-NSGA_LAST_RUN_TS_MM = Gauge("nsga_last_run_timestamp_mm", "Timestamp última execução", ["modality"])
-NSGA_BEST_LAT_MM = Gauge("nsga_best_latency_seconds_mm", "Melhor Latência", ["modality"])
-NSGA_BEST_COST_MM = Gauge("nsga_best_cost_per_1k_mm", "Melhor Custo", ["modality"])
-NSGA_BEST_QUAL_MM = Gauge("nsga_best_quality_mm", "Melhor Qualidade", ["modality"])
-NSGA_BEST_ALIGN_MM = Gauge("nsga_best_alignment_mm", "Melhor Alinhamento", ["modality"])
-
-def export_obs_to_prometheus(modality: str, metrics: Dict[str, Dict[str, float]]) -> None:
-    for model, obs in metrics.items():
-        OBS_LATENCY_MM.labels(modality=modality, model=model).set(obs["latency"])
-        OBS_COST_MM.labels(modality=modality, model=model).set(obs["cost"])
-        OBS_QUALITY_MM.labels(modality=modality, model=model).set(obs["quality"])
-        OBS_ALIGNMENT_MM.labels(modality=modality, model=model).set(obs["alignment"])
+            
+    return final_data
 
 
 # ============================================================
-# 🧮 Núcleo NSGA-II (multimodal)
+# 3. Métricas Prometheus
 # ============================================================
+NSGA_RUNS = Counter("nsga_runs_total", "Execuções do NSGA-II", ["modality"])
+NSGA_LAST_TS = Gauge("nsga_last_run_ts", "Timestamp da última execução", ["modality"])
+NSGA_UQ_THRESH = Gauge("nsga_uq_threshold", "Limiar de Incerteza otimizado", [])
 
-def run_nsga_for_modality(
+# ============================================================
+# 4. Núcleo NSGA-II (Algoritmo Genético)
+# ============================================================
+def run_nsga_optimization(
     modality: str,
     models: List[str],
-    obs_metrics: Dict[str, Dict[str, float]],
-    *,
-    N_pop: int,
-    N_gen: int,
-    cxpb: float,
-    mutpb: float,
-    eta_c: float,
-    eta_m: float,
-) -> Tuple[Dict[str, float], Dict[str, float]]:
-    
+    metrics: Dict[str, Dict[str, float]],
+    n_pop=40, n_gen=20
+) -> Tuple[Dict[str, float], float]:
+    """
+    Roda o NSGA-II para encontrar os pesos ideais para cada modelo.
+    Retorna: (pesos_finais, pontuação_eficiência)
+    """
     n = len(models)
-    # Se só tiver 1 modelo, peso é 100%
-    if n <= 1:
-        m = models[0] if models else "default"
-        s = obs_metrics.get(m, {"latency": 0, "cost": 0, "quality": 0, "alignment": 0})
-        return {m: 1.0}, s
+    if n == 0: return {}, 0.0
+    if n == 1: return {models[0]: 1.0}, 1.0
 
-    # Criadores DEAP (Idempotente)
-    if not hasattr(creator, "FitnessMultiMM"):
-        creator.create("FitnessMultiMM", base.Fitness, weights=(-1.0, -1.0, +1.0, +1.0))
-    if not hasattr(creator, "IndividualMM"):
-        creator.create("IndividualMM", list, fitness=creator.FitnessMultiMM)
+    # Setup DEAP
+    if not hasattr(creator, "FitnessMulti"):
+        # Objetivos: Min Latency, Min Cost, Max Quality, Max Alignment
+        creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -50.0, 2.0, 1.0))
+    if not hasattr(creator, "Individual"):
+        creator.create("Individual", list, fitness=creator.FitnessMulti)
 
     toolbox = base.Toolbox()
-    toolbox.register("attr_w", lambda: random.random())
-    toolbox.register("individual", tools.initRepeat, creator.IndividualMM, toolbox.attr_w, n=n)
+    toolbox.register("attr_float", random.random)
+    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=n)
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
-    def evaluate(ind):
-        w_raw = [max(0.0, min(1.0, x)) for x in ind]
-        s = sum(w_raw) or 1.0
-        w_norm = [x / s for x in w_raw]
-
-        lat = sum(w_norm[i] * obs_metrics[models[i]]["latency"] for i in range(n))
-        cst = sum(w_norm[i] * obs_metrics[models[i]]["cost"] for i in range(n))
-        qlt = sum(w_norm[i] * obs_metrics[models[i]]["quality"] for i in range(n))
-        aln = sum(w_norm[i] * obs_metrics[models[i]]["alignment"] for i in range(n))
+    def evaluate(individual):
+        # Normaliza pesos do indivíduo (soma = 1)
+        s = sum(individual) or 1.0
+        w = [x/s for x in individual]
+        
+        lat = sum(w[i] * metrics[models[i]]["latency"] for i in range(n))
+        cst = sum(w[i] * metrics[models[i]]["cost"] for i in range(n))
+        qlt = sum(w[i] * metrics[models[i]]["quality"] for i in range(n))
+        aln = sum(w[i] * metrics[models[i]]["alignment"] for i in range(n))
+        
         return lat, cst, qlt, aln
 
     toolbox.register("evaluate", evaluate)
-    toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=0.0, up=1.0, eta=eta_c)
-    toolbox.register("mutate", tools.mutPolynomialBounded, low=0.0, up=1.0, eta=eta_m, indpb=1.0/n)
+    toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=0.0, up=1.0, eta=20.0)
+    toolbox.register("mutate", tools.mutPolynomialBounded, low=0.0, up=1.0, eta=20.0, indpb=1.0/n)
     toolbox.register("select", tools.selNSGA2)
 
-    pop = toolbox.population(n=N_pop)
-    hof = tools.ParetoFront()
-    algorithms.eaMuPlusLambda(pop, toolbox, mu=N_pop, lambda_=N_pop, cxpb=cxpb, mutpb=mutpb, ngen=N_gen, halloffame=hof, verbose=False)
+    # Execução
+    pop = toolbox.population(n=n_pop)
+    algorithms.eaMuPlusLambda(pop, toolbox, mu=n_pop, lambda_=n_pop, 
+                              cxpb=0.9, mutpb=0.1, ngen=n_gen, verbose=False)
 
-    # Escolha do melhor indivíduo (Scalarização simples para produção)
-    best_weights = None
-    best_score = float("-inf")
-    best_tuple = (0,0,0,0)
-
-    for ind in hof:
-        w_raw = [max(0.0, min(1.0, x)) for x in ind]
-        s = sum(w_raw) or 1.0
-        w_norm = [x / s for x in w_raw]
-        
-        vals = evaluate(ind)
-        # Score: +Qualidade -Custo -Latência
-        score = (vals[2] * 2.0) + (vals[3] * 1.0) - (vals[0] * 0.5) - (vals[1] * 50.0)
-        
-        if score > best_score:
-            best_score = score
-            best_weights = w_norm
-            best_tuple = vals
-
-    final_weights = {models[i]: best_weights[i] for i in range(n)}
-    summary = {
-        "latency": best_tuple[0], "cost": best_tuple[1], 
-        "quality": best_tuple[2], "alignment": best_tuple[3]
-    }
+    # Seleção do melhor compromisso (Scalarização)
+    best_ind = tools.selBest(pop, 1)[0]
+    s = sum(best_ind) or 1.0
+    norm_weights = [x/s for x in best_ind]
     
-    # Métricas ótimas
-    NSGA_BEST_LAT_MM.labels(modality=modality).set(best_tuple[0])
-    NSGA_BEST_COST_MM.labels(modality=modality).set(best_tuple[1])
-    NSGA_BEST_QUAL_MM.labels(modality=modality).set(best_tuple[2])
+    weights_map = {models[i]: norm_weights[i] for i in range(n)}
     
-    return final_weights, summary
-
-
-def compute_efficiency(summary: Dict[str, float]) -> float:
-    lat = max(1e-6, float(summary.get("latency", 0.0)))
-    cst = max(1e-9, float(summary.get("cost", 0.0)))
-    qlt = max(0.0, float(summary.get("quality", 0.0)))
-    return float(qlt / (lat * cst))
+    # Calcula eficiência sistêmica estimada
+    eval_metrics = evaluate(best_ind)
+    efficiency_score = (eval_metrics[2] / max(0.01, eval_metrics[0])) # Qualidade / Latência
+    
+    return weights_map, efficiency_score
 
 
 # ============================================================
-# 💾 Persistência
+# 5. Ajuste Dinâmico de Incerteza (UQ Tuning)
 # ============================================================
+def tune_uncertainty_threshold(current_efficiency: float) -> float:
+    """
+    Ajusta o limiar de incerteza (safety mode) baseado na eficiência do sistema.
+    - Baixa eficiência -> Sistema instável -> Reduz limiar (Mais seguro/caro).
+    - Alta eficiência -> Sistema estável -> Aumenta limiar (Mais econômico/local).
+    """
+    current_thresh = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
+    
+    # Heurística Simples de Controle
+    if current_efficiency < 2.0:
+        # Qualidade baixa para a latência paga: Apertar segurança
+        new_thresh = max(0.20, current_thresh - 0.05)
+        action = "TIGHTEN"
+    elif current_efficiency > 4.0:
+        # Sistema voando: Relaxar para economizar
+        new_thresh = min(0.80, current_thresh + 0.05)
+        action = "RELAX"
+    else:
+        new_thresh = current_thresh
+        action = "KEEP"
+        
+    if action != "KEEP":
+        logger.info(f"[UQ-Tuning] Eficiência={current_efficiency:.2f}. {action} Threshold: {current_thresh:.2f} -> {new_thresh:.2f}")
+        settings.set("UNCERTAINTY_THRESHOLD", str(new_thresh), actor="nsga-updater")
+        NSGA_UQ_THRESH.set(new_thresh)
+        
+    return new_thresh
 
-def persist_weights(modality: str, weights: Dict[str, float]) -> None:
-    if not weights: return
+
+# ============================================================
+# 6. Persistência
+# ============================================================
+def persist_results(modality: str, weights: Dict[str, float]):
+    # DB
     try:
         with engine.begin() as conn:
-            for model, weight in weights.items():
+            for m, w in weights.items():
                 conn.execute(
                     text("""
                         INSERT INTO nsga_weights (modality, model, weight) VALUES (:mod, :m, :w)
-                        ON DUPLICATE KEY UPDATE weight = :w, updated_at = CURRENT_TIMESTAMP
+                        ON DUPLICATE KEY UPDATE weight = :w
                     """),
-                    {"mod": modality, "m": model, "w": float(weight)},
+                    {"mod": modality, "m": m, "w": w}
                 )
     except Exception as e:
-        logger.warning(f"[nsga-mm] Erro DB: {e}")
+        logger.warning(f"[NSGA] Falha DB: {e}")
 
+    # Redis
     try:
         if redis_client:
-            key = REDIS_KEY_WEIGHTS[modality]
-            redis_client.set(key, json.dumps(weights))
+            redis_client.set(REDIS_KEY_WEIGHTS[modality], json.dumps(weights))
     except Exception as e:
-        logger.warning(f"[nsga-mm] Erro Redis: {e}")
-
-    for model, weight in weights.items():
-        WEIGHT_BY_MODEL_MM.labels(modality=modality, model=model).set(weight)
+        logger.warning(f"[NSGA] Falha Redis: {e}")
 
 
 # ============================================================
-# 🎛 Execução
+# 7. Execução (Uma Iteração)
 # ============================================================
-
-def one_iteration_with_params(modality: str, N_pop: int, N_gen: int, cxpb: float, mutpb: float, eta_c: float, eta_m: float) -> Dict[str, Any]:
+def run_optimization_cycle(modality: str):
+    # 1. Carrega Modelos
     models = load_candidate_models(modality)
     if not models:
-        logger.error(f"Sem modelos para {modality}, abortando iteração.")
-        return {"status": "skipped", "reason": "no_models"}
+        logger.warning(f"[NSGA] Pulo: Sem modelos para {modality}")
+        return
 
-    obs = aggregate_ema_by_model(modality, models)
-    export_obs_to_prometheus(modality, obs)
+    # 2. Carrega Métricas
+    metrics = aggregate_ema_by_model(modality, models)
 
-    weights, summary = run_nsga_for_modality(
-        modality, models, obs,
-        N_pop=N_pop, N_gen=N_gen, cxpb=cxpb, mutpb=mutpb, eta_c=eta_c, eta_m=eta_m,
-    )
+    # 3. Roda NSGA-II
+    weights, efficiency = run_nsga_optimization(modality, models, metrics)
+    
+    # 4. Persiste Pesos
+    persist_results(modality, weights)
+    
+    # 5. Ajusta Incerteza (Apenas na rodada de texto, para evitar conflito)
+    if modality == "text":
+        tune_uncertainty_threshold(efficiency)
 
-    persist_weights(modality, weights)
-    NSGA_RUNS_MM.labels(modality=modality).inc()
-    NSGA_LAST_RUN_TS_MM.labels(modality=modality).set(time.time())
+    # 6. Métricas Ops
+    NSGA_RUNS.labels(modality=modality).inc()
+    NSGA_LAST_TS.labels(modality=modality).set(time.time())
+    
+    logger.info(f"[NSGA] Ciclo {modality} OK. Eficiência: {efficiency:.2f}")
+    return weights
 
-    return {
-        "modality": modality, "weights": weights, "summary": summary,
-        "efficiency": compute_efficiency(summary)
-    }
-
-def _get_env(key, default, cast=str):
-    try: return cast(os.getenv(key, default))
-    except: return default
-
-def one_iteration_defaults(modality: str) -> Dict[str, Any]:
-    return one_iteration_with_params(
-        modality,
-        _get_env("NSGA_POP", 40, int), _get_env("NSGA_GEN", 30, int),
-        _get_env("NSGA_CXPB", 0.9, float), _get_env("NSGA_MUTPB", 0.1, float),
-        _get_env("NSGA_ETA_C", 20.0, float), _get_env("NSGA_ETA_M", 20.0, float)
-    )
 
 # ============================================================
-# 🔁 Loop automático
+# API & Loop
 # ============================================================
+app = FastAPI(title="NSGA-II Worker")
 
-def nsga_loop_multimodal():
-    time.sleep(10) # Aguarda sistemas subirem
-    while True:
-        for mod in MODALITIES:
-            try:
-                one_iteration_defaults(mod)
-                logger.info(f"[nsga-mm] Iteração OK: {mod}")
-            except Exception as e:
-                logger.error(f"[nsga-mm] Erro loop {mod}: {e}")
-        time.sleep(UPDATE_INTERVAL_S)
-
-# ============================================================
-# 🌐 API FastAPI
-# ============================================================
-app = FastAPI(title="NSGA Weights Updater (Multimodal)")
+@app.post("/run/{modality}")
+def trigger_run(modality: str = Path(...)):
+    if modality not in MODALITIES:
+        return JSONResponse({"error": "Invalid modality"}, status_code=400)
+    try:
+        weights = run_optimization_cycle(modality)
+        return {"status": "ok", "weights": weights}
+    except Exception as e:
+        logger.exception("Erro no endpoint")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/metrics")
 def metrics():
@@ -509,30 +382,19 @@ def metrics():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "redis": bool(redis_client)}
+    return {"status": "ok"}
 
-@app.post("/run/{modality}")
-def run_once(modality: str = Path(...), payload: Dict[str, Any] = Body(default={})):
-    if modality not in MODALITIES:
-        return JSONResponse({"error": "Invalid modality"}, status_code=400)
-    
-    try:
-        # Merge defaults with payload
-        params = {
-            "N_pop": int(payload.get("N_pop", _get_env("NSGA_POP", 40, int))),
-            "N_gen": int(payload.get("N_gen", _get_env("NSGA_GEN", 30, int))),
-            "cxpb": float(payload.get("cxpb", _get_env("NSGA_CXPB", 0.9, float))),
-            "mutpb": float(payload.get("mutpb", _get_env("NSGA_MUTPB", 0.1, float))),
-            "eta_c": float(payload.get("eta_c", _get_env("NSGA_ETA_C", 20.0, float))),
-            "eta_m": float(payload.get("eta_m", _get_env("NSGA_ETA_M", 20.0, float))),
-        }
-        result = one_iteration_with_params(modality, **params)
-        return JSONResponse(result)
-    except Exception as e:
-        logger.exception(f"Erro em /run/{modality}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+def background_loop():
+    time.sleep(15) # Warmup wait
+    while True:
+        for m in MODALITIES:
+            try:
+                run_optimization_cycle(m)
+            except Exception as e:
+                logger.error(f"[Loop] Erro em {m}: {e}")
+        time.sleep(UPDATE_INTERVAL_S)
 
 if __name__ == "__main__":
-    t = threading.Thread(target=nsga_loop_multimodal, daemon=True)
+    t = threading.Thread(target=background_loop, daemon=True)
     t.start()
-    uvicorn.run(app, host="0.0.0.0", port=9999, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=9999)
