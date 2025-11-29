@@ -1,17 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-settings_dynamic.py (VERSÃO FINAL CORRIGIDA: PubSub sem Timeout + NSGA Weights)
+settings_dynamic.py (VERSÃO FINAL CORRIGIDA: PubSub sem Timeout + NSGA Weights + RAG Configs)
 --------------------------------------------------------------------------
-Carrega configurações com fallback em camadas:
-1) Redis (chave settings:<KEY>)
-2) Banco (tabela settings_dynamic)
-3) Variáveis de ambiente (.env já carregado pelo processo)
-4) Defaults internos
-
-Recursos:
-- Cache LRU interno.
-- Hot-reload via Redis Pub/Sub (Com cliente dedicado sem timeout).
-- Método .set() encapsulado na classe.
+Carrega configurações com fallback em camadas.
 """
 
 from __future__ import annotations
@@ -21,7 +12,7 @@ import json
 import time
 import logging
 import threading
-import redis  # <--- Necessário para criar a conexão dedicada
+import redis
 from collections import OrderedDict
 from typing import Any, Dict, Optional, List
 
@@ -39,7 +30,6 @@ REDIS_RELOAD_CHANNEL = "settings:reload"
 
 rds = get_redis()
 
-# Banco inicial (usado para tabela settings_dynamic)
 DB_HOST_ENV = os.getenv("DB_HOST", "mariadb")
 DB_USER_ENV = os.getenv("DB_USER", "router_user")
 DB_PASS_ENV = os.getenv("DB_PASS", "router_pass")
@@ -85,14 +75,12 @@ class LRUCache:
             if key not in self._data:
                 return None
             value, ts = self._data[key]
-            # TTL vencido?
             if self.ttl_s > 0 and (now - ts) > self.ttl_s:
                 try:
                     del self._data[key]
                 except KeyError:
                     pass
                 return None
-            # renova LRU
             self._data.move_to_end(key)
             return value
 
@@ -162,10 +150,6 @@ def _set_to_redis(key: str, val: str):
     except Exception as e:
         logger.debug(f"[settings_dynamic] Falha ao gravar Redis para {key}: {e}")
 
-
-# ============================================================
-# Helpers para listas JSON/dinâmicas
-# ============================================================
 
 def _load_json_list(raw: Optional[str]) -> List[str]:
     if raw is None:
@@ -249,41 +233,34 @@ class DynamicSettings:
             "granite3.2-vision:2b",
         ]),
         
-        # Cache
+        # Cache & RAG
         "CACHE_TTL_DAYS": "7",
+        "CACHE_THRESHOLD": "0.92",
         "UNCERTAINTY_THRESHOLD": "0.45",
+        "RERANK_MODEL": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "RERANK_ENABLED": "1",
+        "RAG_DATA_DIR": "/app/data",
 
-        # --- NOVOS: Pesos NSGA-II Dinâmicos ---
+        # Pesos NSGA-II Dinâmicos
         "NSGA_W_QUALITY": "1.0",
         "NSGA_W_LATENCY": "0.5",
         "NSGA_W_COST": "50.0",
         "NSGA_W_ALIGNMENT": "1.0",
     }
 
-    # -------------------------
-    # Loader base com cache LRU
-    # -------------------------
     def get(self, key: str, fallback: Any = None) -> Any:
-        # 1) Tenta cache LRU
         cached = _lru.get(key)
         if cached is not None:
             return cached
-
-        # 2) Redis
         v = _get_from_redis(key)
         if v is None:
-            # 3) DB
             v = _get_from_db(key)
         if v is None:
-            # 4) ENV
             v = os.getenv(key)
         if v is None:
-            # 5) Defaults
             v = self.DEFAULTS.get(key, fallback)
-
         if v is not None:
             _lru.set(key, v)
-
         return v
 
     def set(self, key: str, value: str, actor: str = "system", source: str = "internal") -> None:
@@ -299,16 +276,13 @@ class DynamicSettings:
                 )
         except Exception as e:
             logger.warning(f"Falha ao gravar DB ({key}): {e}")
-
         _set_to_redis(key, value)
         _invalidate_cache()
-
         if rds:
             try:
                 rds.publish(REDIS_RELOAD_CHANNEL, key)
             except Exception:
                 pass
-        
         logger.info(f"[settings] '{key}' atualizado por {actor} via {source}.")
 
     def snapshot(self, only_known: bool = False) -> Dict[str, Any]:
@@ -449,7 +423,7 @@ class DynamicSettings:
     @property
     def METAOPT_TRIALS(self) -> int: return int(self.get("METAOPT_TRIALS", "100"))
 
-    # --- NOVOS: Propriedades de Pesos NSGA-II ---
+    # Propriedades de Pesos NSGA-II
     @property
     def NSGA_W_QUALITY(self) -> float: return float(self.get("NSGA_W_QUALITY", 1.0))
     @property

@@ -4,12 +4,6 @@ rag_local.py — RAG Multimodal Unificado (Com suporte Imagem -> Texto)
 ---------------------------------------------------------------------
 Implementa a lógica de recuperação de contexto, incluindo a estratégia
 de "Visual Query Generation" para RAG baseado em imagem.
-
-Funcionalidades:
-    ✔ Detecção automática de modalidade
-    ✔ RAG Texto -> Texto
-    ✔ RAG Imagem -> Texto (Gera descrição da imagem para buscar documentos)
-    ✔ Prompt Augmentation
 """
 
 from __future__ import annotations
@@ -33,6 +27,8 @@ from .vectorstore import (
 # Importamos o call_model para gerar a descrição da imagem (Ponte Visual)
 from .providers_async import call_model
 from .settings_dynamic import settings
+from .reranker import rerank_documents # <--- Importar o novo módulo
+from .sparse_index import sparse_index # <--- Importar BM25
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -108,10 +104,6 @@ async def _generate_visual_search_query(image_b64: str) -> str:
 async def _compute_embedding(query: str, modality: str, image_b64: Optional[str]):
     """
     Gera o embedding adequado.
-    
-    Se for RAG 'vision' (Imagem -> Texto), nós NÃO geramos embedding da imagem direta
-    (a menos que tenhamos um índice CLIP). Em vez disso, geramos a query visual (texto)
-    e embedamos o texto.
     """
     try:
         # RAG Clássico (Texto -> Texto)
@@ -145,6 +137,35 @@ async def _compute_embedding(query: str, modality: str, image_b64: Optional[str]
         logger.warning(f"[rag_local] Falha ao gerar embedding ({modality}): {e}")
         return None
 
+# ================================================================
+# 🔄 RECIPROCAL RANK FUSION (RRF)
+# ================================================================
+
+def reciprocal_rank_fusion(
+    vector_results: List[str], # Lista de Doc IDs
+    bm25_results: List[str],   # Lista de Doc IDs
+    k: int = 60
+) -> List[str]:
+    """
+    Combina duas listas de resultados usando RRF.
+    Score = 1 / (k + rank).
+    """
+    scores: Dict[str, float] = {}
+
+    # Processa Vetorial
+    for rank, doc_id in enumerate(vector_results):
+        if doc_id not in scores: scores[doc_id] = 0.0
+        scores[doc_id] += 1 / (k + rank + 1)
+
+    # Processa BM25
+    for rank, doc_id in enumerate(bm25_results):
+        if doc_id not in scores: scores[doc_id] = 0.0
+        scores[doc_id] += 1 / (k + rank + 1)
+
+    # Ordena pelo score final
+    sorted_docs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [doc_id for doc_id, score in sorted_docs]
+
 
 # ================================================================
 # 📚 RAG PRINCIPAL – Construção do Prompt Aumentado
@@ -157,49 +178,81 @@ async def build_augmented_prompt(
     k: int = 3,
 ) -> str:
     query = (query or "").strip()
-    
-    # Se não tem nada, retorna vazio
     if not query and not image_b64:
         return ""
 
     rag_mode = _auto_modality(modality, image_b64)
-    
-    # Define em qual coleção buscar.
-    # Estratégia: Para Image->Text, buscamos na coleção de TEXTO (onde estão os manuais)
     target_collection_modality = "text" if rag_mode == "vision" else rag_mode
 
-    # Gera o embedding (se for visão, gera descrição -> embedding de texto)
+    # --- 1. Busca Vetorial (Dense Retrieval) ---
     emb = await _compute_embedding(query, rag_mode, image_b64)
+    vector_doc_ids = []
+    vector_docs_map = {} # ID -> Texto
+
+    if emb is not None:
+        try:
+            # Busca mais candidatos (Top-20) para fusão
+            res = await query_embedding(
+                modality=target_collection_modality,
+                embedding=emb,
+                n_results=20 
+            )
+            if res and res.get("ids"):
+                ids = res["ids"][0]
+                docs = res["documents"][0]
+                vector_doc_ids = ids
+                for i, doc_id in enumerate(ids):
+                    vector_docs_map[doc_id] = docs[i]
+        except Exception as e:
+            logger.warning(f"[rag_local] Erro Vector Search: {e}")
+
+    # --- 2. Busca por Palavras-Chave (Sparse Retrieval - BM25) ---
+    bm25_doc_ids = []
+    bm25_docs_map = {}
     
-    if emb is None:
+    # Só faz sentido BM25 se houver query textual
+    if query:
+        try:
+            # Busca Top-20 no BM25
+            bm25_res = await asyncio.to_thread(sparse_index.search, query, top_k=20)
+            bm25_doc_ids = [item[0] for item in bm25_res]
+            for doc_id, _ in bm25_res:
+                # Recupera o texto do índice esparso
+                text = sparse_index.get_text(doc_id)
+                if text: bm25_docs_map[doc_id] = text
+        except Exception as e:
+            logger.warning(f"[rag_local] Erro BM25 Search: {e}")
+
+    # --- 3. Fusão Híbrida (RRF) ---
+    merged_ids = reciprocal_rank_fusion(vector_doc_ids, bm25_doc_ids)
+    
+    # Recupera os textos dos IDs vencedores
+    candidate_texts = []
+    for doc_id in merged_ids:
+        # Tenta pegar do mapa vetorial ou do mapa BM25
+        txt = vector_docs_map.get(doc_id) or bm25_docs_map.get(doc_id)
+        if txt:
+            candidate_texts.append(txt)
+    
+    # Se não achou nada, retorna query original
+    if not candidate_texts:
         return query
 
-    try:
-        res = await query_embedding(
-            modality=target_collection_modality, # Busca na coleção de texto
-            embedding=emb,
-            n_results=k
-        )
-    except Exception as e:
-        logger.warning(f"[rag_local] Erro na consulta RAG ({rag_mode}): {e}")
-        return query
+    # --- 4. Re-Ranking (Cross-Encoder) ---
+    # Pega os Top-N da fusão e reordena com precisão máxima
+    if str(settings.get("RERANK_ENABLED", "1")) == "1":
+        # Re-rankeia os top 10 candidatos da fusão
+        final_docs = await asyncio.to_thread(rerank_documents, query, candidate_texts[:10], k)
+    else:
+        final_docs = candidate_texts[:k]
 
-    docs = res.get("documents", [[]])
-    top_docs: List[str] = docs[0] if docs and isinstance(docs[0], list) else []
+    context = "\n\n".join(final_docs)
+    logger.info(f"[rag_local] Hybrid RAG: {len(final_docs)} docs finais (Vector={len(vector_doc_ids)}, BM25={len(bm25_doc_ids)}).")
 
-    if not top_docs:
-        logger.info("[rag_local] Nenhum documento relevante encontrado.")
-        return query
-
-    context = "\n\n".join(top_docs)
-    logger.info(f"[rag_local] Recuperados {len(top_docs)} documentos para enriquecer o prompt.")
-
-    # Prompt Engenharia para instruir o modelo a usar o contexto
     return (
         "INSTRUÇÃO DE CONTEXTO (RAG):\n"
         "Use as informações técnicas abaixo recuperadas do banco de dados para auxiliar na sua resposta.\n"
-        "Se a imagem fornecida contradizer o texto, dê prioridade ao que você vê na imagem.\n"
-        "------ CONTEXTO RECUPERADO ------\n"
+        "------ CONTEXTO RECUPERADO (Híbrido + Re-rank) ------\n"
         f"{context}\n"
         "---------------------------------\n"
         f"PERGUNTA DO USUÁRIO: {query}"

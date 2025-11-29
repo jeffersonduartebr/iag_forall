@@ -1,40 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-semantic_cache.py — Cache Multimodal com TTL e Async Embeddings
----------------------------------------------------------------
+semantic_cache.py — Cache Semântico via ChromaDB (Rápido)
+---------------------------------------------------------
+Substitui a busca linear no MariaDB por busca ANN no ChromaDB.
 """
 
 from __future__ import annotations
-import base64
 import hashlib
 import logging
 import asyncio
-import numpy as np
+import time
 from typing import Optional, Dict, Any
 from functools import lru_cache
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
-
 from .settings_dynamic import settings
 from .embeddings import embed_text, embed_image, embed_multimodal
+from .vectorstore import query_embedding, add_document
 
 logger = logging.getLogger(__name__)
-if not logger.handlers: logging.basicConfig(level=logging.INFO)
 
-DB_URL = f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:3306/{settings.DB_NAME}"
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
-
-CACHE_TTL_DAYS = int(settings.get("CACHE_TTL_DAYS", 7))
+# Limiar de similaridade para cache hit (0.0 a 1.0)
+# No Chroma (Cosine Distance), distance < (1 - threshold)
+CACHE_THRESHOLD = float(settings.get("CACHE_THRESHOLD", 0.92))
 
 def _compute_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-def _image_hash(b64: Optional[str]) -> str:
-    if not b64: return ""
-    try:
-        return hashlib.sha256(base64.b64decode(b64)).hexdigest()
-    except: return ""
 
 def _normalize_modality(mod: str) -> str:
     mod = mod.lower().strip()
@@ -42,19 +32,15 @@ def _normalize_modality(mod: str) -> str:
     if mod == "multimodal": return "multimodal"
     return "text"
 
-def _cosine(a, b) -> float:
-    if a is None or b is None: return 0.0
-    na = np.linalg.norm(a); nb = np.linalg.norm(b)
-    return float(np.dot(a, b) / (na * nb)) if na and nb else 0.0
-
-@lru_cache(maxsize=512)
+# Cache em memória RAM (L1) para evitar hit no Chroma (L2) para queries idênticas
+@lru_cache(maxsize=1024)
 def _lru_get(key: str): return None
 def _lru_store(key: str, val: Any): 
-    try: _lru_get.cache_clear()
+    try: _lru_get.cache_clear() # Limpeza simples se encher
     except: pass
 
 async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
-    modality = _normalize_modality(modality)
+    # Reutiliza lógica de embeddings
     try:
         if modality == "text":
             return await asyncio.to_thread(embed_text, query)
@@ -67,64 +53,98 @@ async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
         logger.warning(f"[semantic_cache] Embed fail: {e}")
         return None
 
-async def check_cache(query: str, modality: str="text", image_b64: str=None, threshold: float=0.90) -> Optional[Dict]:
+async def check_cache(query: str, modality: str="text", image_b64: str=None) -> Optional[Dict]:
+    """
+    Verifica se existe uma resposta similar no ChromaDB.
+    """
     modality = _normalize_modality(modality)
-    full_hash = f"{modality}:{_compute_sha256(query)}:{_image_hash(image_b64)}"
+    
+    # 1. L1 Cache (Exact Match em RAM)
+    # Hash da query + imagem para chave rápida
+    img_hash = hashlib.sha256(image_b64.encode()).hexdigest() if image_b64 else "no_img"
+    full_hash = f"{modality}:{_compute_sha256(query)}:{img_hash}"
 
     if cached := _lru_get(full_hash):
+        logger.info("[semantic_cache] L1 RAM Hit")
         return cached
 
+    # 2. Gera Embedding
     q_emb = await _make_embedding(query, modality, image_b64)
     if q_emb is None: return None
-    q_vec = np.array(q_emb, dtype=float)
 
+    # 3. L2 Cache (Semantic Search no Chroma)
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text("""
-                    SELECT id, query_text, answer, model_used, modality, embedding, image_output_b64
-                    FROM semantic_cache
-                    WHERE modality = :m AND created_at > NOW() - INTERVAL :ttl DAY
-                    ORDER BY created_at DESC LIMIT 25
-                """),
-                {"m": modality, "ttl": CACHE_TTL_DAYS}
-            ).mappings().all()
-    except SQLAlchemyError:
+        # Busca na coleção de cache ("cache" é mapeado para semantic_cache_v2 no vectorstore.py)
+        results = await query_embedding(
+            modality="cache", 
+            embedding=q_emb, 
+            n_results=1
+        )
+        
+        if not results or not results.get("documents"):
+            return None
+
+        # Chroma retorna 'distances' (Cosine Distance). 
+        # Similarity = 1 - Distance.
+        distance = results["distances"][0][0]
+        similarity = 1.0 - distance
+        
+        if similarity >= CACHE_THRESHOLD:
+            # O texto do documento é a Query original
+            # A resposta está no metadata
+            meta = results["metadatas"][0][0]
+            answer_text = meta.get("answer_payload", "")
+            
+            if not answer_text:
+                return None
+
+            # Reconstrói objeto de resposta
+            res = {
+                "text": answer_text, 
+                "similarity": float(similarity),
+                "model_used": meta.get("model_used", "unknown"),
+                "image_output_b64": meta.get("image_output_b64", None) # Se houver
+            }
+            
+            # Atualiza L1
+            _lru_store(full_hash, res)
+            return res
+            
+    except Exception as e:
+        logger.warning(f"[semantic_cache] Chroma lookup fail: {e}")
         return None
 
-    best, best_sim = None, 0.0
-    for row in rows:
-        try:
-            sim = _cosine(q_vec, np.frombuffer(row["embedding"], dtype=float))
-            if sim > best_sim: best, best_sim = row, sim
-        except: continue
-
-    if best and best_sim >= threshold:
-        res = {
-            "text": best["answer"], "similarity": float(best_sim),
-            "model_used": best["model_used"], "image_output_b64": best["image_output_b64"]
-        }
-        _lru_store(full_hash, res)
-        return res
     return None
 
 async def store_cache(query: str, answer: str, modality: str="text", image_b64: str=None, model_used: str=None):
+    """
+    Armazena uma resposta de alta qualidade no ChromaDB.
+    """
     modality = _normalize_modality(modality)
-    full_hash = f"{modality}:{_compute_sha256(query)}:{_image_hash(image_b64)}"
     
-    emb = await _make_embedding(query, modality, image_b64)
-    if emb is None: return
-
+    # ID único para o documento de cache
+    doc_id = f"cache_{_compute_sha256(query)}_{int(time.time())}"
+    
+    # Metadados para recuperação
+    meta = {
+        "model_used": model_used or "unknown",
+        "original_query": query[:100], # Snippet para debug
+        "timestamp": int(time.time()),
+        "modality": modality,
+        "answer_payload": answer # Armazena a resposta no metadata
+    }
+    
     try:
-        with engine.begin() as conn:
-            conn.execute(
-                text("""
-                    INSERT INTO semantic_cache (query_hash, modality, query_text, answer, model_used, embedding, image_output_b64)
-                    VALUES (:qh, :m, :qt, :ans, :mod, :emb, :img)
-                    ON DUPLICATE KEY UPDATE answer=VALUES(answer), created_at=CURRENT_TIMESTAMP
-                """),
-                {"qh": full_hash, "m": modality, "qt": query, "ans": answer, 
-                 "mod": model_used or "unknown", "emb": np.array(emb, dtype=float).tobytes(), "img": image_b64}
-            )
-    except SQLAlchemyError as e:
+        # Estratégia:
+        # Documento (Text) = PERGUNTA (para match semântico com a nova pergunta)
+        # Metadata = RESPOSTA (o que queremos devolver)
+        
+        await add_document(
+            modality="cache", # Vai para semantic_cache_v2
+            doc_id=doc_id,
+            text=query, # O texto indexado é a pergunta
+            metadata=meta
+        )
+        
+    except Exception as e:
         logger.warning(f"[semantic_cache] Store fail: {e}")

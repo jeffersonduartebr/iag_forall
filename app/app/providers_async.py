@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-providers_async.py (CORREÇÃO: Suporte a GPT-5/o1 parameter naming)
+providers_async.py (ATUALIZADO: Exponential Backoff + Jitter para Rate Limits)
 ------------------------------------------------------------------
 Implementação Robusta, Assíncrona e Resiliente de TODOS os provedores.
 
-Correções nesta versão:
-- Fix: OpenAI gpt-5 e o1 usam 'max_completion_tokens' em vez de 'max_tokens'.
-- Resiliência: Circuit Breaker + Tenacity Retry
-- Async: HTTPX para Ollama, Threads para Gemini
+Melhorias de Resiliência:
+- Exponential Backoff with Jitter: Evita colisão em retentativas.
+- Tratamento específico de HTTP 429 (Too Many Requests).
+- Circuit Breaker para falhas catastróficas.
 """
 
 from __future__ import annotations
@@ -19,33 +19,34 @@ import asyncio
 import base64
 import json
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple
 
 # Bibliotecas de Resiliência e HTTP Async
 import httpx
 import pybreaker
-import requests # Usado apenas para operações síncronas de setup (ensure model)
+import requests 
 from tenacity import (
     retry,
     stop_after_attempt,
-    wait_exponential,
+    wait_random_exponential, # <--- O segredo para Rate Limits eficientes
     retry_if_exception_type,
     before_sleep_log
 )
 
 # SDKs Defensivos
 try:
-    from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError
+    from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError as OpenAIRateLimitError
 except ImportError:
     AsyncOpenAI = None
 
 try:
-    from anthropic import AsyncAnthropic
+    from anthropic import AsyncAnthropic, RateLimitError as AnthropicRateLimitError, APIStatusError
 except ImportError:
     AsyncAnthropic = None
 
 try:
     import google.generativeai as genai
+    from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 except ImportError:
     genai = None
 
@@ -67,7 +68,39 @@ from prometheus_client import generate_latest
 logger = logging.getLogger("providers_async")
 
 # ==============================================================================
-# 1. CIRCUIT BREAKERS GLOBAIS
+# 1. ESTRATÉGIA DE RETRY (RATE LIMITS)
+# ==============================================================================
+
+# Lista de exceções que indicam sobrecarga ou rate limit
+RETRYABLE_ERRORS = (
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.HTTPStatusError, # Cobre 429 e 5xx do Ollama/HTTP
+)
+
+if AsyncOpenAI:
+    RETRYABLE_ERRORS += (APITimeoutError, APIConnectionError, OpenAIRateLimitError)
+
+if AsyncAnthropic:
+    RETRYABLE_ERRORS += (AnthropicRateLimitError, APIStatusError)
+
+if genai:
+    RETRYABLE_ERRORS += (ResourceExhausted, ServiceUnavailable)
+
+# Decorator reutilizável para todos os providers
+# - Multiplier=1: Espera 1s, 2s, 4s, 8s...
+# - Max=60: Nunca espera mais que 60s entre tentativas
+# - Stop=5: Desiste após 5 tentativas (falha definitiva)
+COMMON_RETRY_STRATEGY = retry(
+    reraise=True,
+    stop=stop_after_attempt(5), 
+    wait=wait_random_exponential(multiplier=1, max=60),
+    retry=retry_if_exception_type(RETRYABLE_ERRORS),
+    before_sleep=before_sleep_log(logger, logging.WARNING)
+)
+
+# ==============================================================================
+# 2. CIRCUIT BREAKERS GLOBAIS
 # ==============================================================================
 
 cloud_breaker = pybreaker.CircuitBreaker(
@@ -83,7 +116,7 @@ local_breaker = pybreaker.CircuitBreaker(
 )
 
 # ==============================================================================
-# 2. HELPERS E CONSTANTES
+# 3. HELPERS E CONSTANTES
 # ==============================================================================
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -111,7 +144,7 @@ def render_metrics_response():
     return generate_latest(registry), CONTENT_TYPE_LATEST
 
 # ==============================================================================
-# 3. MODELOS DE DADOS
+# 4. MODELOS DE DADOS
 # ==============================================================================
 
 class LLMResponse(BaseModel):
@@ -124,7 +157,7 @@ class LLMResponse(BaseModel):
     raw_payload: Optional[str] = None 
 
 # ==============================================================================
-# 4. ARQUITETURA BASE
+# 5. ARQUITETURA BASE
 # ==============================================================================
 
 class BaseProvider(ABC):
@@ -146,7 +179,7 @@ class BaseProvider(ABC):
             PROV_ERR.labels(model=model).inc()
 
 # ==============================================================================
-# 5. PROVEDOR: OPENAI
+# 6. PROVEDOR: OPENAI
 # ==============================================================================
 
 class OpenAIProvider(BaseProvider):
@@ -155,13 +188,7 @@ class OpenAIProvider(BaseProvider):
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         super().__init__("openai", concurrency_limit=100)
 
-    @retry(
-        reraise=True, 
-        stop=stop_after_attempt(3), 
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((APITimeoutError, APIConnectionError, RateLimitError)),
-        before_sleep=before_sleep_log(logger, logging.WARNING)
-    )
+    @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         model = kwargs.get("model", "gpt-4o")
@@ -183,16 +210,9 @@ class OpenAIProvider(BaseProvider):
                     "messages": [{"role": "user", "content": content}],
                 }
 
-                # --- CORREÇÃO PARA GPT-5 E O1 ---
-                # Esses modelos exigem 'max_completion_tokens' e rejeitam 'max_tokens'.
-                # Geralmente também não aceitam 'temperature' (ou deve ser fixa).
                 if model.startswith("o1-") or "gpt-5" in model:
                     api_args["max_completion_tokens"] = max_tokens
-                    # Reasoning models muitas vezes não suportam temperature customizada
-                    # Se o gpt-5 suportar, pode descomentar abaixo, mas o default é seguro
-                    # api_args["temperature"] = 1.0 
                 else:
-                    # Modelos legacy (gpt-4, gpt-3.5)
                     api_args["max_tokens"] = max_tokens
                     api_args["temperature"] = temperature
 
@@ -203,9 +223,7 @@ class OpenAIProvider(BaseProvider):
                 p_tok = usage.prompt_tokens if usage else 0
                 c_tok = usage.completion_tokens if usage else 0
                 
-                # Custo via tabela dinâmica
                 cost = get_model_cost(model, p_tok, c_tok)
-                
                 latency = time.time() - start
                 self._record_metrics(model, latency, cost, True)
                 
@@ -225,7 +243,7 @@ class OpenAIProvider(BaseProvider):
                 raise
 
 # ==============================================================================
-# 6. PROVEDOR: ANTHROPIC
+# 7. PROVEDOR: ANTHROPIC
 # ==============================================================================
 
 class AnthropicProvider(BaseProvider):
@@ -234,7 +252,7 @@ class AnthropicProvider(BaseProvider):
         self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
         super().__init__("anthropic", concurrency_limit=50)
 
-    @retry(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         model = kwargs.get("model", "claude-3-5-sonnet-latest")
@@ -262,7 +280,6 @@ class AnthropicProvider(BaseProvider):
                 c_tok = usage.output_tokens
                 
                 cost = get_model_cost(model, p_tok, c_tok)
-                
                 latency = time.time() - start
                 self._record_metrics(model, latency, cost, True)
 
@@ -276,7 +293,7 @@ class AnthropicProvider(BaseProvider):
                 raise
 
 # ==============================================================================
-# 7. PROVEDOR: GEMINI (GOOGLE)
+# 8. PROVEDOR: GEMINI (GOOGLE)
 # ==============================================================================
 
 class GeminiProvider(BaseProvider):
@@ -284,7 +301,7 @@ class GeminiProvider(BaseProvider):
         if not genai: raise ImportError("Google GenAI SDK not installed")
         super().__init__("gemini", concurrency_limit=60)
 
-    @retry(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         model_name = kwargs.get("model", "gemini-1.5-flash")
@@ -292,7 +309,6 @@ class GeminiProvider(BaseProvider):
 
         async with self.semaphore:
             try:
-                # Executa chamada síncrona do SDK em thread separada
                 def _call():
                     gmodel = genai.GenerativeModel(model_name)
                     parts = [prompt]
@@ -326,7 +342,7 @@ class GeminiProvider(BaseProvider):
                 raise
 
 # ==============================================================================
-# 8. PROVEDOR: OLLAMA (LOCAL & HTTPX ASYNC)
+# 9. PROVEDOR: OLLAMA (LOCAL & HTTPX ASYNC)
 # ==============================================================================
 
 class OllamaProvider(BaseProvider):
@@ -334,7 +350,7 @@ class OllamaProvider(BaseProvider):
         self.host = OLLAMA_HOST
         super().__init__("ollama", concurrency_limit=10) 
 
-    @retry(reraise=True, stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=5))
+    @COMMON_RETRY_STRATEGY
     @local_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         model = kwargs.get("model", "phi4:latest")
@@ -357,16 +373,15 @@ class OllamaProvider(BaseProvider):
 
                 async with httpx.AsyncClient(timeout=240.0) as client:
                     resp = await client.post(f"{self.host}/api/generate", json=payload)
-                    resp.raise_for_status()
+                    # Levanta HTTPStatusError para 4xx/5xx, acionando o retry
+                    resp.raise_for_status() 
                     data = resp.json()
 
                 text_out = data.get("response", "").strip()
                 p_tok = data.get("prompt_eval_count", 0)
                 c_tok = data.get("eval_count", 0)
                 
-                # Custo geralmente zero, mas passa pela tabela para consistência
                 cost = get_model_cost(model, p_tok, c_tok)
-
                 latency = time.time() - start
                 self._record_metrics(model, latency, cost, True)
 
@@ -380,7 +395,7 @@ class OllamaProvider(BaseProvider):
                 raise
 
 # ==============================================================================
-# 9. FACTORY
+# 10. FACTORY
 # ==============================================================================
 
 class ProviderFactory:
@@ -400,7 +415,7 @@ class ProviderFactory:
         return cls._instances[prefix]
 
 # ==============================================================================
-# 10. FUNÇÃO WRAPPER (DROP-IN REPLACEMENT)
+# 11. FUNÇÃO WRAPPER (DROP-IN REPLACEMENT)
 # ==============================================================================
 
 async def call_model(
@@ -447,13 +462,10 @@ async def call_model(
 
 
 # ==============================================================================
-# 11. FUNÇÃO LEGACY
+# 12. FUNÇÃO LEGACY
 # ==============================================================================
 
 def _ensure_ollama_model(model_name: str) -> bool:
-    """
-    Verifica se o modelo existe no Ollama local; se não, baixa.
-    """
     try:
         resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
         if resp.status_code == 200:
