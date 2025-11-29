@@ -1,16 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-vectorstore.py — RAG Multimodal (Texto / Visão / Multimodal)
+vectorstore.py — RAG Multimodal com Versionamento de Coleção
 ----------------------------------------------------------------------
 Gerencia a persistência de embeddings no ChromaDB.
-
-Funções exportadas:
-    - init_vectorstore()
-    - get_or_create_collection_async()  <-- ADICIONADO
-    - add_document()
-    - query_embedding()
-    - reset_collections()
-    - health_async()
+Atualizado para incluir o nome do modelo de embedding no nome da coleção.
+Isso evita conflitos de espaço vetorial ao trocar de modelo.
 """
 
 from __future__ import annotations
@@ -18,7 +12,8 @@ from __future__ import annotations
 import os
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional, Union
+import re
+from typing import List, Dict, Any, Optional
 
 import chromadb
 import numpy as np
@@ -39,15 +34,45 @@ if not logger.handlers:
 
 
 # ============================================================
-# Configurações
+# Configurações & Versionamento
 # ============================================================
 CHROMA_PATH = settings.get("CHROMA_PATH", "/data/chroma")
 
-TEXT_COLLECTION = "text_embeddings"
-IMAGE_COLLECTION = "image_embeddings"
-MULTIMODAL_COLLECTION = "multimodal_embeddings"
+# Nomes base das coleções
+BASE_TEXT_COLLECTION = "text_embeddings"
+BASE_IMAGE_COLLECTION = "image_embeddings"
+BASE_MULTIMODAL_COLLECTION = "multimodal_embeddings"
 
 VALID_MODALITIES = {"text", "vision", "multimodal", "image"}
+
+
+def _sanitize_model_name(model_name: str) -> str:
+    """
+    Transforma 'nomic-ai/nomic-embed-text-v1.5' em 'nomic_ai_nomic_embed_text_v1_5'.
+    Usado para sufixar a coleção.
+    """
+    if not model_name:
+        return "default"
+    # Remove caracteres especiais e substitui por underscore
+    clean = re.sub(r"[^a-zA-Z0-9]", "_", model_name)
+    # Remove underscores duplicados e underscores nas pontas
+    return re.sub(r"_+", "_", clean).strip("_")
+
+
+def _get_versioned_collection_name(base_name: str, modality: str) -> str:
+    """
+    Gera o nome da coleção atrelado ao modelo configurado no settings.
+    Ex: text_embeddings_nomic_embed_text_v1_5
+    """
+    if modality == "text":
+        model = settings.EMBED_TEXT_MODEL or "default_text"
+    elif modality == "vision":
+        model = settings.IMAGE_EMBEDDING_MODEL or "clip"
+    else:
+        model = settings.MULTIMODAL_EMBEDDING_MODEL or "default_mm"
+    
+    version_suffix = _sanitize_model_name(model)
+    return f"{base_name}_{version_suffix}"
 
 
 # ============================================================
@@ -70,7 +95,7 @@ chroma_client = _connect_local()
 
 
 # ============================================================
-# Helpers
+# Helpers Internos
 # ============================================================
 def _ensure_list_of_floats(vec):
     """Converte embedding para list[float]."""
@@ -95,44 +120,61 @@ def _normalize_modality(modality: Optional[str]) -> str:
 
 
 def _collection_for_modality(modality: str) -> str:
+    """Retorna o nome versionado da coleção baseado na modalidade."""
     m = _normalize_modality(modality)
     if m == "text":
-        return TEXT_COLLECTION
+        return _get_versioned_collection_name(BASE_TEXT_COLLECTION, "text")
     if m == "vision":
-        return IMAGE_COLLECTION
-    return MULTIMODAL_COLLECTION
+        return _get_versioned_collection_name(BASE_IMAGE_COLLECTION, "vision")
+    return _get_versioned_collection_name(BASE_MULTIMODAL_COLLECTION, "multimodal")
 
 
 # ============================================================
-# Gerenciamento de Coleções (Async Wrapper) - ADICIONADO
+# Gerenciamento de Coleções (Async Wrapper)
 # ============================================================
 
 def _get_or_create_sync(name: str, metadata: Optional[Dict] = None):
     """Wrapper síncrono para o client do Chroma."""
-    # Garante que o client está conectado
     return chroma_client.get_or_create_collection(name=name, metadata=metadata)
+
 
 async def get_or_create_collection_async(name: str, metadata: Optional[Dict] = None):
     """
     Cria ou recupera uma coleção de forma assíncrona (threadpool).
-    Usado pelo populate_vectorstore.py para garantir que a coleção existe.
+    Aplica lógica de versionamento se o nome for um dos padrões base.
     """
-    # 
-    return await asyncio.to_thread(_get_or_create_sync, name, metadata)
+    final_name = name
+    
+    # Se o nome solicitado for um dos bases, aplicamos o versionamento automático
+    if name in [BASE_TEXT_COLLECTION, BASE_IMAGE_COLLECTION, BASE_MULTIMODAL_COLLECTION]:
+        mod = "text"
+        if "image" in name: mod = "vision"
+        elif "multimodal" in name: mod = "multimodal"
+        
+        final_name = _get_versioned_collection_name(name, mod)
+        if final_name != name:
+            logger.info(f"[vectorstore] Redirecionando '{name}' -> '{final_name}' (Versionamento)")
+
+    return await asyncio.to_thread(_get_or_create_sync, final_name, metadata)
 
 
 # ============================================================
 # Inicialização Padrão
 # ============================================================
 def init_vectorstore():
-    """Cria coleções básicas se não existirem (Síncrono, usado no boot)."""
+    """Cria coleções versionadas no boot."""
     try:
-        for name in (TEXT_COLLECTION, IMAGE_COLLECTION, MULTIMODAL_COLLECTION):
+        # Gera nomes dinâmicos baseados no .env atual
+        txt_col = _get_versioned_collection_name(BASE_TEXT_COLLECTION, "text")
+        img_col = _get_versioned_collection_name(BASE_IMAGE_COLLECTION, "vision")
+        mm_col = _get_versioned_collection_name(BASE_MULTIMODAL_COLLECTION, "multimodal")
+
+        for name in (txt_col, img_col, mm_col):
             chroma_client.get_or_create_collection(
                 name=name,
-                metadata={"modality": name},
+                metadata={"modality": "auto-versioned", "model_context": name},
             )
-        logger.info("[vectorstore] Coleções base verificadas.")
+        logger.info(f"[vectorstore] Coleções ativas e versionadas: {txt_col}, {img_col}, {mm_col}")
     except Exception as e:
         logger.error(f"[vectorstore] Falha ao inicializar coleções: {e}")
         raise
@@ -168,7 +210,7 @@ async def add_document(
     image_b64: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ):
-    """Insere documento multimodal completo."""
+    """Insere documento multimodal completo na coleção versionada correta."""
     modality = _normalize_modality(modality)
 
     # --- gerar embedding ---
@@ -192,7 +234,7 @@ async def add_document(
         metadata,
     )
 
-    logger.info(f"[vectorstore] Inserido doc_id={doc_id} modality={modality}")
+    logger.info(f"[vectorstore] Inserido doc_id={doc_id} em {collection_name}")
     return True
 
 
@@ -215,6 +257,7 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int):
 async def query_embedding(modality: str, embedding, n_results: int = 3):
     """Consulta embeddings no Chroma."""
     # Se a modalidade for o nome direto da coleção (ex: knowledge_base), usa direto
+    # Caso contrário, resolve o nome versionado
     if modality not in VALID_MODALITIES:
         collection_name = modality
     else:

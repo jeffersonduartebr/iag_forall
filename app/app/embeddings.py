@@ -1,33 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-embeddings.py — versão MULTIMODAL e Inteligente
-------------------------------------------------------------
-Oferece:
-- Embeddings de texto (Ollama ou OpenAI)
-- Embeddings de visão (Ollama)
-- Cache em Redis
-- Roteamento inteligente baseado no nome do modelo
+embeddings.py — Híbrido Otimizado (CPU Local + Cloud Fallback)
+--------------------------------------------------------------
+OTIMIZAÇÃO DE PERFORMANCE:
+Para evitar que o Ollama fique trocando modelos na GPU (Model Thrashing),
+rodamos o modelo de embedding (que é leve) localmente na CPU do container
+usando 'sentence-transformers'.
 
-Correção 404: Evita enviar modelos locais (ex: all-minilm) para a API da OpenAI.
+Isso deixa a GPU livre para o LLM/VLM pesado.
 """
 
 from __future__ import annotations
 
 import os
 import json
-import time
 import hashlib
 import logging
+import numpy as np
 from typing import List, Dict, Optional, Any
 
-import numpy as np
-import requests
-import httpx 
+# Importação Condicional para não quebrar se a lib faltar
+try:
+    from sentence_transformers import SentenceTransformer
+    ST_AVAILABLE = True
+except ImportError:
+    ST_AVAILABLE = False
 
-# OpenAI SDK opcional
+# OpenAI SDK
 try:
     from openai import OpenAI as OpenAIClient
-except Exception:
+except ImportError:
     OpenAIClient = None
 
 from app.settings_dynamic import settings
@@ -35,226 +37,124 @@ from app.utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] [%(levelname)s] embeddings: %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO)
 
-
-# ============================================================
 # Configs
-# ============================================================
+EMBED_MODEL_TEXT = settings.get("EMBED_TEXT_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+# Fallback para HuggingFace ID se for nome do Ollama
+if "nomic" in EMBED_MODEL_TEXT and "/" not in EMBED_MODEL_TEXT:
+    EMBED_MODEL_TEXT = "nomic-ai/nomic-embed-text-v1.5"
+if "minilm" in EMBED_MODEL_TEXT:
+    EMBED_MODEL_TEXT = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Lê configurações dinâmicas
-EMBED_PROVIDER = settings.get("EMBED_PROVIDER", "ollama").lower()
-EMBED_MODEL_TEXT = settings.get("EMBED_TEXT_MODEL", "all-minilm:latest")
-EMBED_MODEL_VISION = settings.get("EMBED_VISION_MODEL", "llava:7b")
+EMBED_CACHE_TTL_S = 86400 * 7
+REDIS_KEY_PREFIX = "emb:v4"
+_rds = get_redis()
 
-OLLAMA_HOST = settings.get("OLLAMA_HOST", os.getenv("OLLAMA_HOST", "http://ollama:11434"))
-OPENAI_API_KEY = settings.get("OPENAI_API_KEY", "")
+# --- SINGLETON DO MODELO LOCAL ---
+# Carrega o modelo na memória na primeira chamada e mantém lá.
+_LOCAL_MODEL_INSTANCE = None
 
-EMBED_CACHE_ENABLED = str(settings.get("EMBED_CACHE_ENABLED", "true")).lower() in ("1", "true", "yes")
-EMBED_CACHE_TTL_S = int(settings.get("EMBED_CACHE_TTL_S", 86400 * 7)) # 7 dias
-
-_rds = get_redis() if EMBED_CACHE_ENABLED else None
-REDIS_KEY_PREFIX = "emb:v3"
-
+def get_local_model():
+    global _LOCAL_MODEL_INSTANCE
+    if _LOCAL_MODEL_INSTANCE is None and ST_AVAILABLE:
+        logger.info(f"[Embeddings] Carregando modelo local CPU: {EMBED_MODEL_TEXT}...")
+        # trust_remote_code=True é necessário para Nomic
+        _LOCAL_MODEL_INSTANCE = SentenceTransformer(EMBED_MODEL_TEXT, trust_remote_code=True)
+        # Otimização para CPU
+        _LOCAL_MODEL_INSTANCE.eval() 
+    return _LOCAL_MODEL_INSTANCE
 
 # ============================================================
 # Utils
 # ============================================================
 
-def _hash_text(text: str, model: str, modality: str) -> str:
-    payload = f"{model}|{modality}|{text}".encode("utf-8", errors="ignore")
+def _hash_text(text: str, model: str) -> str:
+    payload = f"{model}|{text}".encode("utf-8", errors="ignore")
     return hashlib.sha256(payload).hexdigest()
-
 
 def _norm(vec: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(vec)
     return vec if n == 0 else vec / n
 
+def _save_cache(key: str, vec: List[float]):
+    if _rds:
+        try: _rds.setex(key, EMBED_CACHE_TTL_S, json.dumps({"v": vec}))
+        except: pass
 
-def _save_cache(key: str, payload: Dict[str, Any]):
-    if not _rds: return
-    try:
-        _rds.setex(key, EMBED_CACHE_TTL_S, json.dumps(payload))
-    except Exception: pass
-
-
-def _load_cache(key: str) -> Optional[Dict[str, Any]]:
-    if not _rds: return None
-    try:
-        raw = _rds.get(key)
-        return json.loads(raw) if raw else None
-    except Exception: return None
-
-
-# ============================================================
-# OLLAMA
-# ============================================================
-
-def _ollama_embed_text(text: str, model: str) -> List[float]:
-    """Gera embedding via Ollama API."""
-    url = f"{OLLAMA_HOST.rstrip('/')}/api/embeddings"
-    
-    # Remove prefixo se existir (ex: ollama/all-minilm -> all-minilm)
-    real_model = model.split("/", 1)[1] if "/" in model else model
-
-    payload = {"model": real_model, "prompt": text}
-    
-    # Tenta até 3 vezes (útil se o Ollama estiver carregando o modelo)
-    for attempt in range(3):
+def _load_cache(key: str) -> Optional[List[float]]:
+    if _rds:
         try:
-            r = requests.post(url, json=payload, timeout=60)
-            if r.status_code == 404:
-                # Modelo não encontrado no Ollama? Tenta baixar ou lançar erro específico
-                raise ValueError(f"Modelo '{real_model}' não encontrado no Ollama (404).")
-            
-            r.raise_for_status()
-            data = r.json() or {}
-            vec = data.get("embedding")
-            
-            if not vec:
-                raise RuntimeError("Resposta vazia do Ollama.")
-            return [float(x) for x in vec]
-            
-        except ValueError as e:
-            # Erro fatal (modelo não existe), não adianta tentar de novo
-            raise e
-        except Exception as e:
-            if attempt == 2: raise
-            time.sleep(1)
-    
-    return []
-
-
-def _ollama_embed_image(image_b64: str, prompt: str = "") -> List[float]:
-    """
-    Usa endpoint de generate do Ollama para extrair features visuais (hacky),
-    ou endpoint de embeddings se o modelo suportar (ex: nomic-embed-vision).
-    Por enquanto, focamos no endpoint embeddings padrão.
-    """
-    url = f"{OLLAMA_HOST.rstrip('/')}/api/embeddings"
-    # Nota: Nem todos os modelos Ollama suportam imagem no endpoint embeddings.
-    # Modelos multimodais como llava geralmente suportam.
-    payload = {
-        "model": EMBED_MODEL_VISION,
-        "prompt": prompt or "Describe image",
-        "images": [image_b64],
-    }
-    r = requests.post(url, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("embedding", [])
-
+            raw = _rds.get(key)
+            if raw: return json.loads(raw).get("v")
+        except: pass
+    return None
 
 # ============================================================
-# OPENAI
+# GERAÇÃO (LOCAL CPU)
 # ============================================================
 
-def _openai_embed_text(text: str, model: str) -> List[float]:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY ausente.")
+def _local_cpu_embed(text: str) -> List[float]:
+    """Gera embedding localmente na CPU, sem chamar Ollama."""
+    model = get_local_model()
+    if not model:
+        raise RuntimeError("SentenceTransformers não instalado ou falha ao carregar.")
     
-    client = OpenAIClient(api_key=OPENAI_API_KEY)
-    # Normaliza nome do modelo
-    real_model = model.split("/", 1)[1] if "/" in model else model
-    
-    # Fallback se o nome for inválido para OpenAI
-    if "minilm" in real_model or "llama" in real_model:
-        real_model = "text-embedding-3-small"
-
-    resp = client.embeddings.create(model=real_model, input=text)
-    return resp.data[0].embedding
-
+    # Prefixo específico para Nomic v1.5 (Melhora qualidade)
+    if "nomic" in EMBED_MODEL_TEXT and not text.startswith("search_"):
+        text = f"search_query: {text}"
+        
+    # Gera vetor
+    vec = model.encode(text, convert_to_numpy=True)
+    return vec.tolist()
 
 # ============================================================
 # API PÚBLICA
 # ============================================================
 
 def embed_text(text: str) -> List[float]:
-    """
-    Gera embedding de texto.
-    Decide automaticamente entre Ollama e OpenAI baseado no nome do modelo.
-    """
     text = (text or "").strip()
     if not text: return [0.0]
 
-    # Determina qual modelo usar
-    model_name = EMBED_MODEL_TEXT
-    
-    # Verifica Cache
-    key = f"{REDIS_KEY_PREFIX}:text:{model_name}:{_hash_text(text, model_name, 'text')}"
+    # 1. Cache Redis
+    key = f"{REDIS_KEY_PREFIX}:{EMBED_MODEL_TEXT}:{_hash_text(text, EMBED_MODEL_TEXT)}"
     if cached := _load_cache(key):
-        return cached.get("v", [0.0])
+        return cached
 
     vec = []
     
-    # --- ROTEAMENTO DE EMBEDDING ---
-    # Se o nome do modelo sugere OpenAI
-    if model_name.startswith("text-embedding") or "openai" in model_name or model_name.startswith("gpt-"):
-        try:
-            vec = _openai_embed_text(text, model_name)
-        except Exception as e:
-            logger.error(f"Falha OpenAI embedding: {e}")
-            # Não faz fallback para Ollama para evitar misturar espaços vetoriais
-            return [0.0]
-    
-    # Caso contrário, assume Ollama (padrão para all-minilm, nomic, etc)
-    else:
-        try:
-            vec = _ollama_embed_text(text, model_name)
-        except Exception as e:
-            logger.error(f"Falha Ollama embedding ({model_name}): {e}")
-            # Se falhar o local, aqui sim poderíamos tentar um fallback Cloud se configurado,
-            # mas misturar vetores quebra o RAG. Melhor retornar erro/zero.
-            return [0.0]
+    # 2. Tenta Local CPU (Prioridade Máxima para Performance)
+    try:
+        vec = _local_cpu_embed(text)
+    except Exception as e:
+        logger.warning(f"[Embeddings] Falha local CPU: {e}. Tentando OpenAI...")
+        
+        # 3. Fallback OpenAI (se configurado)
+        if settings.get("OPENAI_API_KEY"):
+            try:
+                from openai import OpenAI
+                client = OpenAI(api_key=settings.get("OPENAI_API_KEY"))
+                resp = client.embeddings.create(model="text-embedding-3-small", input=text)
+                vec = resp.data[0].embedding
+            except Exception as ex:
+                logger.error(f"[Embeddings] Falha OpenAI: {ex}")
 
     if vec:
-        _save_cache(key, {"v": vec})
-    
-    return vec
-
-
-def embed_image(image_b64: str, prompt: str = "") -> List[float]:
-    image_b64 = (image_b64 or "").strip()
-    if not image_b64: return [0.0]
-
-    key = f"{REDIS_KEY_PREFIX}:vision:{EMBED_MODEL_VISION}:{_hash_text(image_b64, EMBED_MODEL_VISION, 'vision')}"
-    if cached := _load_cache(key):
-        return cached.get("v", [0.0])
-
-    try:
-        vec = _ollama_embed_image(image_b64, prompt)
-        if vec:
-            _save_cache(key, {"v": vec})
+        _save_cache(key, vec)
         return vec
-    except Exception as e:
-        logger.error(f"Falha Vision embedding: {e}")
-        return [0.0]
+    
+    return [0.0] * 768 # Retorna vetor zerado em caso de falha total
 
+# Vision embedding removido/simplificado pois o RAG agora usa "Ponte Descritiva"
+# (VLM gera texto -> Texto vira embedding)
+def embed_image(image_b64: str) -> List[float]:
+    return [0.0] 
 
 def embed_multimodal(text: str, image_b64: Optional[str]) -> Dict[str, List[float]]:
-    """
-    Retorna { "text": [...], "vision": [...], "multimodal": [...] }
-    Combina vetores normalizados.
-    """
-    text_vec = np.array(embed_text(text))
-    
-    if not image_b64:
-        return {
-            "text": text_vec.tolist(),
-            "vision": None,
-            "multimodal": _norm(text_vec).tolist()
-        }
-
-    vis_vec = np.array(embed_image(image_b64))
-    
-    # Concatenação simples com normalização (late fusion)
-    combined = np.concatenate([_norm(text_vec), _norm(vis_vec)])
-    
+    text_vec = embed_text(text)
+    # Retorna apenas o texto, pois estamos usando a estratégia de descrição
     return {
-        "text": text_vec.tolist(),
-        "vision": vis_vec.tolist(),
-        "multimodal": _norm(combined).tolist()
+        "text": text_vec,
+        "vision": [],
+        "multimodal": text_vec
     }

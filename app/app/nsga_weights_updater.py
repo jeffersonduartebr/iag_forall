@@ -1,18 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-nsga_weights_updater.py — Otimizador Multimodal (NSGA-II + UQ Tuning)
+nsga_weights_updater.py — Otimizador Multimodal (NSGA-II + UQ Tuning + Strategy Tuning)
 ---------------------------------------------------------------------
 Serviço de Otimização Contínua.
-
-Responsabilidades:
-1. Coletar métricas históricas (EMA) do Banco de Dados.
-2. Rodar Algoritmo Genético (NSGA-II) para encontrar pesos ótimos (w1, w2, w3) para cada modelo.
-3. Ajustar dinamicamente o Limiar de Incerteza (UNCERTAINTY_THRESHOLD) baseado na estabilidade do sistema.
-4. Persistir configurações ótimas no Redis/DB para o Router usar.
-
-Correções:
-- Mapeamento correto de modelos por modalidade (Text/Vision/Multimodal).
-- Fallback de segurança para Cold Start.
+Agora ajusta também os pesos globais de decisão (Qualidade, Latência, Custo)
+baseado no desempenho sistêmico.
 """
 
 from __future__ import annotations
@@ -108,13 +100,9 @@ init_db_tables()
 
 
 # ============================================================
-# 1. Carregamento de Modelos (CORRIGIDO)
+# 1. Carregamento de Modelos
 # ============================================================
 def load_candidate_models(modality: str) -> List[str]:
-    """
-    Carrega a lista de modelos candidatos para a modalidade específica.
-    Ordem: Redis -> Settings -> Fallback Hardcoded.
-    """
     # 1. Redis
     try:
         if redis_client:
@@ -125,7 +113,7 @@ def load_candidate_models(modality: str) -> List[str]:
                     return [str(x) for x in data]
     except Exception: pass
 
-    # 2. Settings (CORREÇÃO: Mapeamento Explícito)
+    # 2. Settings
     if modality == "text":
         candidates = settings.CANDIDATE_MODELS_LIST
     elif modality == "vision":
@@ -136,17 +124,14 @@ def load_candidate_models(modality: str) -> List[str]:
         candidates = []
 
     if candidates:
-        # Filtra duplicatas e vazios
         return list(set([c for c in candidates if c]))
 
-    # 3. Fallback de Segurança (Evita erro 500)
-    logger.warning(f"[NSGA] ⚠️ Nenhum modelo encontrado para '{modality}'. Usando fallback de emergência.")
-    
+    # 3. Fallback de Segurança
+    logger.warning(f"[NSGA] ⚠️ Nenhum modelo encontrado para '{modality}'. Usando fallback.")
     if modality == "text":
         return ["ollama/phi4:latest", "ollama/mistral:7b"]
     elif modality in ("vision", "multimodal"):
         return ["ollama/llava:7b", "ollama/moondream:latest"]
-    
     return []
 
 
@@ -154,10 +139,6 @@ def load_candidate_models(modality: str) -> List[str]:
 # 2. Coleta de Dados Históricos (EMA)
 # ============================================================
 def aggregate_ema_by_model(modality: str, models: List[str]) -> Dict[str, Dict[str, float]]:
-    """
-    Lê o histórico de performance (EMA) do banco.
-    Retorna dicionário: {model: {latency, cost, quality, alignment}}
-    """
     try:
         with engine.connect() as conn:
             rows = conn.execute(
@@ -176,8 +157,6 @@ def aggregate_ema_by_model(modality: str, models: List[str]) -> Dict[str, Dict[s
         db_data = {}
 
     final_data = {}
-    
-    # Garante que todos os modelos candidatos tenham dados (Synthetic Cold Start)
     for m in models:
         if m in db_data:
             d = db_data[m]
@@ -188,12 +167,9 @@ def aggregate_ema_by_model(modality: str, models: List[str]) -> Dict[str, Dict[s
                 "alignment": float(d["ema_alignment"]),
             }
         else:
-            # Dados sintéticos conservadores para modelos novos
+            # Cold start sintético
             final_data[m] = {
-                "latency": 2.0,  # Latência média/alta
-                "cost": 0.001,   # Custo baixo
-                "quality": 5.0,  # Qualidade neutra
-                "alignment": 1.0 # Alinhamento máximo
+                "latency": 2.0, "cost": 0.001, "quality": 5.0, "alignment": 1.0
             }
             
     return final_data
@@ -214,21 +190,24 @@ def run_nsga_optimization(
     models: List[str],
     metrics: Dict[str, Dict[str, float]],
     n_pop=40, n_gen=20
-) -> Tuple[Dict[str, float], float]:
+) -> Tuple[Dict[str, float], float, Tuple[float, float, float]]:
     """
-    Roda o NSGA-II para encontrar os pesos ideais para cada modelo.
-    Retorna: (pesos_finais, pontuação_eficiência)
+    Roda o NSGA-II.
+    Retorna: (pesos_modelos, pontuação_eficiência, (lat_media, cost_medio, qual_media))
     """
     n = len(models)
-    if n == 0: return {}, 0.0
-    if n == 1: return {models[0]: 1.0}, 1.0
+    if n == 0: return {}, 0.0, (0,0,0)
+    if n == 1: return {models[0]: 1.0}, 1.0, (metrics[models[0]]["latency"], metrics[models[0]]["cost"], metrics[models[0]]["quality"])
 
-    # Setup DEAP
-    if not hasattr(creator, "FitnessMulti"):
-        # Objetivos: Min Latency, Min Cost, Max Quality, Max Alignment
-        creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -50.0, 2.0, 1.0))
-    if not hasattr(creator, "Individual"):
-        creator.create("Individual", list, fitness=creator.FitnessMulti)
+    # Limpa classes anteriores
+    if "FitnessMulti" in creator.__dict__: del creator.FitnessMulti
+    if "Individual" in creator.__dict__: del creator.Individual
+
+    # Objetivos fixos para o AG: Min Latency, Min Cost, Max Quality, Max Alignment
+    # Usamos pesos fixos AQUI para encontrar o Pareto Front ideal matemático.
+    # O ajuste dinâmico será feito nos pesos do ROUTER, baseado no resultado daqui.
+    creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -50.0, 2.0, 1.0))
+    creator.create("Individual", list, fitness=creator.FitnessMulti)
 
     toolbox = base.Toolbox()
     toolbox.register("attr_float", random.random)
@@ -236,7 +215,6 @@ def run_nsga_optimization(
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
     def evaluate(individual):
-        # Normaliza pesos do indivíduo (soma = 1)
         s = sum(individual) or 1.0
         w = [x/s for x in individual]
         
@@ -244,7 +222,6 @@ def run_nsga_optimization(
         cst = sum(w[i] * metrics[models[i]]["cost"] for i in range(n))
         qlt = sum(w[i] * metrics[models[i]]["quality"] for i in range(n))
         aln = sum(w[i] * metrics[models[i]]["alignment"] for i in range(n))
-        
         return lat, cst, qlt, aln
 
     toolbox.register("evaluate", evaluate)
@@ -252,43 +229,33 @@ def run_nsga_optimization(
     toolbox.register("mutate", tools.mutPolynomialBounded, low=0.0, up=1.0, eta=20.0, indpb=1.0/n)
     toolbox.register("select", tools.selNSGA2)
 
-    # Execução
     pop = toolbox.population(n=n_pop)
     algorithms.eaMuPlusLambda(pop, toolbox, mu=n_pop, lambda_=n_pop, 
                               cxpb=0.9, mutpb=0.1, ngen=n_gen, verbose=False)
 
-    # Seleção do melhor compromisso (Scalarização)
     best_ind = tools.selBest(pop, 1)[0]
     s = sum(best_ind) or 1.0
     norm_weights = [x/s for x in best_ind]
     
     weights_map = {models[i]: norm_weights[i] for i in range(n)}
     
-    # Calcula eficiência sistêmica estimada
-    eval_metrics = evaluate(best_ind)
-    efficiency_score = (eval_metrics[2] / max(0.01, eval_metrics[0])) # Qualidade / Latência
+    # Métricas do sistema ideal encontrado
+    sys_lat, sys_cst, sys_qlt, _ = evaluate(best_ind)
+    efficiency_score = (sys_qlt / max(0.01, sys_lat))
     
-    return weights_map, efficiency_score
+    return weights_map, efficiency_score, (sys_lat, sys_cst, sys_qlt)
 
 
 # ============================================================
 # 5. Ajuste Dinâmico de Incerteza (UQ Tuning)
 # ============================================================
 def tune_uncertainty_threshold(current_efficiency: float) -> float:
-    """
-    Ajusta o limiar de incerteza (safety mode) baseado na eficiência do sistema.
-    - Baixa eficiência -> Sistema instável -> Reduz limiar (Mais seguro/caro).
-    - Alta eficiência -> Sistema estável -> Aumenta limiar (Mais econômico/local).
-    """
     current_thresh = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
     
-    # Heurística Simples de Controle
     if current_efficiency < 2.0:
-        # Qualidade baixa para a latência paga: Apertar segurança
         new_thresh = max(0.20, current_thresh - 0.05)
         action = "TIGHTEN"
     elif current_efficiency > 4.0:
-        # Sistema voando: Relaxar para economizar
         new_thresh = min(0.80, current_thresh + 0.05)
         action = "RELAX"
     else:
@@ -304,10 +271,64 @@ def tune_uncertainty_threshold(current_efficiency: float) -> float:
 
 
 # ============================================================
-# 6. Persistência
+# 6. Ajuste Dinâmico de Pesos Globais (Strategy Tuning) - NOVO
+# ============================================================
+def tune_global_strategy_weights(sys_metrics: Tuple[float, float, float]):
+    """
+    Ajusta os pesos globais (NSGA_W_QUALITY, etc.) baseado no desempenho
+    do melhor indivíduo encontrado pelo AG.
+    
+    Se o sistema ideal encontrado ainda é lento, aumentamos a penalidade de latência.
+    Se a qualidade está baixa, aumentamos o peso da qualidade.
+    """
+    sys_lat, sys_cst, sys_qlt = sys_metrics
+    
+    # Lê valores atuais
+    w_qual = settings.NSGA_W_QUALITY
+    w_lat = settings.NSGA_W_LATENCY
+    w_cost = settings.NSGA_W_COST
+    
+    changes = []
+
+    # --- Lógica de Controle (P-Controller simples) ---
+    
+    # 1. Controle de Latência (Target: < 3.0s)
+    if sys_lat > 3.0:
+        # Sistema lento -> Aumenta importância da latência
+        new_w_lat = min(2.0, w_lat + 0.1)
+        if new_w_lat != w_lat:
+            settings.set("NSGA_W_LATENCY", str(round(new_w_lat, 2)), actor="nsga-updater")
+            changes.append(f"Lat {w_lat}->{new_w_lat:.2f}")
+    elif sys_lat < 1.0:
+        # Sistema muito rápido -> Relaxa latência para ganhar qualidade
+        new_w_lat = max(0.1, w_lat - 0.05)
+        if new_w_lat != w_lat:
+            settings.set("NSGA_W_LATENCY", str(round(new_w_lat, 2)), actor="nsga-updater")
+            changes.append(f"Lat {w_lat}->{new_w_lat:.2f}")
+
+    # 2. Controle de Qualidade (Target: > 7.0)
+    if sys_qlt < 7.0:
+        # Qualidade baixa -> Aumenta importância da qualidade
+        new_w_qual = min(5.0, w_qual + 0.2)
+        if new_w_qual != w_qual:
+            settings.set("NSGA_W_QUALITY", str(round(new_w_qual, 2)), actor="nsga-updater")
+            changes.append(f"Qual {w_qual}->{new_w_qual:.2f}")
+
+    # 3. Controle de Custo (Target: < $0.01/req)
+    if sys_cst > 0.01:
+        new_w_cost = min(100.0, w_cost + 5.0)
+        if new_w_cost != w_cost:
+            settings.set("NSGA_W_COST", str(round(new_w_cost, 2)), actor="nsga-updater")
+            changes.append(f"Cost {w_cost}->{new_w_cost:.2f}")
+
+    if changes:
+        logger.info(f"[Strategy-Tuning] Ajustes aplicados: {', '.join(changes)}")
+
+
+# ============================================================
+# 7. Persistência
 # ============================================================
 def persist_results(modality: str, weights: Dict[str, float]):
-    # DB
     try:
         with engine.begin() as conn:
             for m, w in weights.items():
@@ -321,7 +342,6 @@ def persist_results(modality: str, weights: Dict[str, float]):
     except Exception as e:
         logger.warning(f"[NSGA] Falha DB: {e}")
 
-    # Redis
     try:
         if redis_client:
             redis_client.set(REDIS_KEY_WEIGHTS[modality], json.dumps(weights))
@@ -330,33 +350,30 @@ def persist_results(modality: str, weights: Dict[str, float]):
 
 
 # ============================================================
-# 7. Execução (Uma Iteração)
+# 8. Execução (Uma Iteração)
 # ============================================================
 def run_optimization_cycle(modality: str):
-    # 1. Carrega Modelos
     models = load_candidate_models(modality)
     if not models:
         logger.warning(f"[NSGA] Pulo: Sem modelos para {modality}")
         return
 
-    # 2. Carrega Métricas
     metrics = aggregate_ema_by_model(modality, models)
 
-    # 3. Roda NSGA-II
-    weights, efficiency = run_nsga_optimization(modality, models, metrics)
+    # Roda NSGA-II
+    weights, efficiency, sys_metrics = run_nsga_optimization(modality, models, metrics)
     
-    # 4. Persiste Pesos
     persist_results(modality, weights)
     
-    # 5. Ajusta Incerteza (Apenas na rodada de texto, para evitar conflito)
+    # Ajustes Globais (Apenas na rodada de texto para evitar conflitos de escrita concorrente)
     if modality == "text":
         tune_uncertainty_threshold(efficiency)
+        tune_global_strategy_weights(sys_metrics) # <--- AQUI ESTÁ A CORREÇÃO
 
-    # 6. Métricas Ops
     NSGA_RUNS.labels(modality=modality).inc()
     NSGA_LAST_TS.labels(modality=modality).set(time.time())
     
-    logger.info(f"[NSGA] Ciclo {modality} OK. Eficiência: {efficiency:.2f}")
+    logger.info(f"[NSGA] Ciclo {modality} OK. Eff: {efficiency:.2f}. SysMetrics: {sys_metrics}")
     return weights
 
 
@@ -385,7 +402,7 @@ def health():
     return {"status": "ok"}
 
 def background_loop():
-    time.sleep(15) # Warmup wait
+    time.sleep(15) 
     while True:
         for m in MODALITIES:
             try:

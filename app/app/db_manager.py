@@ -60,7 +60,7 @@ SCHEMA_DEFINITIONS = {
         "ddl": """
             CREATE TABLE IF NOT EXISTS semantic_cache (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                query_hash VARCHAR(128) NOT NULL UNIQUE,
+                query_hash VARCHAR(255) NOT NULL UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """,

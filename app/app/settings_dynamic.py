@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-settings_dynamic.py (VERSÃO FINAL CORRIGIDA: PubSub sem Timeout)
+settings_dynamic.py (VERSÃO FINAL CORRIGIDA: PubSub sem Timeout + NSGA Weights)
 --------------------------------------------------------------------------
 Carrega configurações com fallback em camadas:
 1) Redis (chave settings:<KEY>)
@@ -245,14 +245,19 @@ class DynamicSettings:
             "llama3.2:3b",
             "llama3:8b",
             "llava:7b",
-            "llama3.2-vision:11b",
             "llava-llama3:8b",
             "granite3.2-vision:2b",
         ]),
         
         # Cache
         "CACHE_TTL_DAYS": "7",
-        "UNCERTAINTY_THRESHOLD": "0.45"
+        "UNCERTAINTY_THRESHOLD": "0.45",
+
+        # --- NOVOS: Pesos NSGA-II Dinâmicos ---
+        "NSGA_W_QUALITY": "1.0",
+        "NSGA_W_LATENCY": "0.5",
+        "NSGA_W_COST": "50.0",
+        "NSGA_W_ALIGNMENT": "1.0",
     }
 
     # -------------------------
@@ -343,6 +348,10 @@ class DynamicSettings:
         return _load_json_list(self.get("JUDGE_MODELS", "[]"))
 
     # Embeddings
+    @property
+    def EMBED_TEXT_MODEL(self) -> str:
+        return self.get("EMBED_TEXT_MODEL", "nomic-embed-text")
+
     @property
     def TEXT_EMBEDDING_MODEL(self) -> str: return self.get("TEXT_EMBEDDING_MODEL")
     @property
@@ -439,6 +448,16 @@ class DynamicSettings:
     def METAOPT_REPS(self) -> int: return int(self.get("METAOPT_REPS", "5"))
     @property
     def METAOPT_TRIALS(self) -> int: return int(self.get("METAOPT_TRIALS", "100"))
+
+    # --- NOVOS: Propriedades de Pesos NSGA-II ---
+    @property
+    def NSGA_W_QUALITY(self) -> float: return float(self.get("NSGA_W_QUALITY", 1.0))
+    @property
+    def NSGA_W_LATENCY(self) -> float: return float(self.get("NSGA_W_LATENCY", 0.5))
+    @property
+    def NSGA_W_COST(self) -> float: return float(self.get("NSGA_W_COST", 50.0))
+    @property
+    def NSGA_W_ALIGNMENT(self) -> float: return float(self.get("NSGA_W_ALIGNMENT", 1.0))
 
 
 settings = DynamicSettings()

@@ -1,29 +1,31 @@
 # -*- coding: utf-8 -*-
 """
-populate_vectorstore.py (Versão Corrigida: Imports Absolutos)
--------------------------------------------------------
-Popula a base vetorial (ChromaDB) com textos, PDFs e
-Markdowns para uso em RAG.
+populate_vectorstore.py (Versão Final: OCR + Deduplicação + Metadados)
+----------------------------------------------------------------------
+Script de ingestão de documentos para o RAG.
 
 Funcionalidades:
-✅ Detecção automática de PDF digital vs escaneado
-✅ OCR (Tesseract) se necessário
-✅ Geração de resumo e título via LLM (Async)
-✅ Inserção assíncrona no ChromaDB
+1. Lê arquivos de /app/data/rag_docs (.pdf, .txt, .md).
+2. Detecta PDF escaneado e aplica OCR (Tesseract) automaticamente.
+3. Divide texto em chunks.
+4. Gera ID Determinístico (Hash) para evitar duplicatas.
+5. Gera Título e Resumo via LLM.
+6. Insere no ChromaDB (Vectorstore).
 """
 
 import os
 import re
 import uuid
+import hashlib
 import logging
 import asyncio
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # Bibliotecas de PDF
 import fitz  # PyMuPDF
 
-# Bibliotecas de OCR (Opcionais - requer instalação no SO)
+# Bibliotecas de OCR (Tenta importar, se falhar, segue sem OCR)
 try:
     import pytesseract
     from pdf2image import convert_from_path
@@ -31,14 +33,12 @@ try:
 except ImportError:
     OCR_AVAILABLE = False
 
-# ============================================================
-# 🛠️ CORREÇÃO: USAR IMPORTS ABSOLUTOS (app.xyz)
-# ============================================================
-# O erro ocorria aqui ao usar 'from .vectorstore'
-from app.vectorstore import add_document, get_or_create_collection_async
-from app.embeddings import embed_text
-from app.providers_async import call_model
-from app.settings_dynamic import settings
+# --- IMPORTS DO PROJETO ---
+# Usamos imports absolutos (app.*) para funcionar dentro do container
+from app.app.vectorstore import add_document, get_or_create_collection_async
+from app.app.embeddings import embed_text
+from app.app.providers_async import call_model
+from app.app.settings_dynamic import settings
 
 # ============================================================
 # ⚙️ CONFIGURAÇÃO
@@ -50,12 +50,25 @@ logging.basicConfig(
 logger = logging.getLogger("populate_vectorstore")
 
 COLLECTION_NAME = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
-# Fallback para data/rag_docs se não definido
 DATA_DIR = settings.get("RAG_DATA_DIR", "/app/data/rag_docs")
 SUMMARY_MODEL = settings.get("SUMMARY_MODEL", "ollama/phi4:latest")
 
+# Configuração de Chunking (Fixo por enquanto, mais seguro e rápido)
 CHUNK_SIZE = 1000
 OVERLAP = 150
+
+
+# ============================================================
+# 🔑 GERAÇÃO DE ID (DEDUPLICAÇÃO)
+# ============================================================
+def generate_deterministic_id(filename: str, chunk_index: int, content: str) -> str:
+    """
+    Gera um Hash SHA-256 único para o fragmento.
+    Garante que o mesmo texto no mesmo arquivo gere sempre o mesmo ID.
+    Isso evita duplicatas no ChromaDB se o script rodar várias vezes.
+    """
+    raw_key = f"{filename}::{chunk_index}::{content}"
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
 # ============================================================
@@ -63,6 +76,7 @@ OVERLAP = 150
 # ============================================================
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP) -> List[str]:
     """Divide texto longo em fragmentos com sobreposição."""
+    # Normaliza espaços
     text = re.sub(r"\s+", " ", text.strip())
     if len(text) <= chunk_size:
         return [text]
@@ -71,7 +85,8 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP) 
     start = 0
     while start < len(text):
         end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
+        chunk = text[start:end]
+        chunks.append(chunk)
         start += chunk_size - overlap
     return chunks
 
@@ -84,12 +99,11 @@ def _perform_ocr(path: Path) -> str:
     logger.info(f"[OCR] Iniciando reconhecimento ótico em: {path.name}...")
     text_accum = []
     try:
-        # Converte PDF para lista de imagens (uma por página)
-        # thread_count=4 acelera o processo
+        # Converte PDF para lista de imagens (thread_count=4 para agilizar)
         images = convert_from_path(str(path), thread_count=4)
         
         for i, image in enumerate(images):
-            # Extrai texto da imagem (lang='por+eng' para suportar PT e EN)
+            # Extrai texto da imagem (PT + EN)
             page_text = pytesseract.image_to_string(image, lang='por+eng')
             text_accum.append(page_text)
             if (i + 1) % 5 == 0:
@@ -122,7 +136,6 @@ def load_pdf_file(path: Path) -> List[str]:
     Se falhar (PDF escaneado/imagem), usa OCR (lento).
     """
     full_text = ""
-    
     try:
         # 1. Tentativa Rápida (Texto digital)
         doc = fitz.open(path)
@@ -148,13 +161,15 @@ def load_pdf_file(path: Path) -> List[str]:
 
 
 def gather_documents(folder: str) -> dict[str, List[str]]:
-    """Retorna {nome_arquivo: [fragmentos]}."""
+    """Varre a pasta e retorna {nome_arquivo: [chunks]}."""
     docs = {}
     path_obj = Path(folder)
     
     if not path_obj.exists():
         logger.warning(f"Pasta {folder} não encontrada — criando...")
-        path_obj.mkdir(parents=True, exist_ok=True)
+        try:
+            path_obj.mkdir(parents=True, exist_ok=True)
+        except: pass
         return docs
 
     for file_path in path_obj.glob("*.*"):
@@ -246,21 +261,24 @@ async def populate_vectorstore():
         title, summary = await summarize_text_async(context_preview)
         
         logger.info(f"   📘 Título: {title}")
-        logger.info(f"   📝 Resumo: {summary[:100]}...")
 
         # Insere cada fragmento
         for idx, frag in enumerate(fragments):
             try:
-                doc_id = str(uuid.uuid4())
+                # GERA ID ÚNICO BASEADO NO CONTEÚDO
+                doc_id = generate_deterministic_id(fname, idx, frag)
+
                 meta = {
                     "source": fname,
                     "chunk_index": idx,
                     "total_chunks": len(fragments),
                     "title": title,
-                    "summary_snippet": summary[:200] # guarda parte do resumo no metadado
+                    "summary_snippet": summary[:200]
                 }
                 
                 # add_document já calcula o embedding internamente via threadpool
+                # Como o ID é determinístico, o ChromaDB automaticamente fará "upsert" (atualizar ou ignorar)
+                # evitando duplicatas reais no índice.
                 success = await add_document(
                     modality="text",
                     doc_id=doc_id,
@@ -276,7 +294,7 @@ async def populate_vectorstore():
 
     logger.info("-" * 40)
     logger.info(f"✅ Concluído! {len(all_docs)} arquivos processados.")
-    logger.info(f"📚 Total de fragmentos inseridos: {total_inserted}")
+    logger.info(f"📚 Total de fragmentos processados (Upsert): {total_inserted}")
 
 
 if __name__ == "__main__":

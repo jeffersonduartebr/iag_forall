@@ -348,7 +348,8 @@ class OllamaProvider(BaseProvider):
                     "stream": False,
                     "options": {
                         "temperature": kwargs.get("temperature", 0.5),
-                        "num_predict": kwargs.get("max_tokens", 512)
+                        "num_predict": kwargs.get("max_tokens", 512),
+                        "num_ctx": 4096
                     }
                 }
                 if image_b64:

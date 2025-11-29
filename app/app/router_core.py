@@ -3,28 +3,13 @@
 router_core.py — Multimodal + UM-RAG + Meta-bandit + UQ + Background Tasks
 --------------------------------------------------------------------------
 O Core do sistema de roteamento.
-
-Fluxo de Execução:
-1. Fast Path (Síncrono/Await):
-   - Verifica Cache Semântico.
-   - Calcula Incerteza (UQ) da query.
-   - Seleciona Candidatos (Strategy + Bandit).
-   - Executa RAG (Retrieval).
-   - Chama Provider (Inferência).
-   - Calcula Custos e Retorna ao usuário.
-
-2. Slow Path (Background):
-   - Avalia resposta (Juízes).
-   - Calcula Recompensa (Reward).
-   - Atualiza Bandit (e memória de UQ).
-   - Atualiza EMA e Cache (se qualidade alta).
-   - Persiste Log completo no Banco.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+import json
 import asyncio
 import threading
 import uuid
@@ -49,6 +34,7 @@ from .query_service import insert_query_log, ensure_query_log
 # --- Novos Módulos de Inteligência e Precisão ---
 from .utils.pricing import get_model_cost
 from .utils.uncertainty import get_uncertainty_score
+from .utils.redis_client import get_redis
 
 from .observability import (
     ROUTER_MODEL_COST,
@@ -79,6 +65,22 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 BLOCKED_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")
 EMA_HISTORY: Dict[Tuple[str, str], Dict[str, Any]] = {}
 LOG_RETENTION_DAYS = int(settings.get("QUERY_LOG_RETENTION_DAYS", 7))
+rds = get_redis()
+
+# ============================================================
+# 🧠 RECUPERAÇÃO DINÂMICA DE PESOS (NSGA-II) - CORRIGIDO
+# ============================================================
+
+def get_dynamic_strategy_weights(modality: str) -> Dict[str, float]:
+    """
+    Recupera os pesos da estratégia (Objetivos) diretamente do Settings Dinâmico.
+    Isso permite que o Dashboard ou o NSGA Updater ajustem o comportamento do Router em tempo real.
+    """
+    return {
+        "w_quality": settings.NSGA_W_QUALITY,
+        "w_latency": settings.NSGA_W_LATENCY,
+        "w_cost": settings.NSGA_W_COST
+    }
 
 
 # ============================================================
@@ -220,11 +222,12 @@ async def route_and_answer(
             }
 
     # ============================================================
-    # 3. Análise de Incerteza (UQ) - NOVO
+    # 3. Análise de Incerteza (UQ)
     # ============================================================
     uncertainty_score = 0.5 # Valor neutro padrão
     try:
         # Calcula quão "nova" é a query em relação ao conhecimento do bandit
+        # Executa em thread para não bloquear
         uncertainty_score = await asyncio.to_thread(get_uncertainty_score, query, modality)
     except Exception as e:
         logger.warning(f"[router] UQ fail: {e}")
@@ -245,18 +248,21 @@ async def route_and_answer(
     if not valid_models:
         valid_models = ["ollama/phi4:latest"] # Fallback final
 
-    # Estratégia + Bandit (Considerando Incerteza)
+    # Pesos da estratégia (Dinâmico via Redis/NSGA)
+    current_weights = get_dynamic_strategy_weights(modality)
+
+    # Estratégia + Bandit (Considerando Incerteza e Pesos)
     top2 = choose_top2_models(
-        candidates=valid_models, 
-        min_quality=0.0, 
+        candidates=valid_models,
+        weights=current_weights, # <--- CORRIGIDO: Passando os pesos
         query_text=query, 
         modality=modality,
-        uncertainty_score=uncertainty_score # <-- Passando UQ
+        uncertainty_score=uncertainty_score
     )
     
     chosen = select_model(top2, query, modality)
     
-    logger.info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f}")
+    logger.info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | W: {current_weights}")
 
     # Background Ollama Ensure (Fire and forget para modelos locais)
     if chosen.startswith("ollama/"):
@@ -340,7 +346,7 @@ async def route_and_answer(
             "objectives": {
                 "latency": latency_s, 
                 "cost": total_cost,
-                "uncertainty": uncertainty_score # Logamos o UQ para análise
+                "uncertainty": uncertainty_score
             },
             "pareto_front": [],
             "explanation": f"Selected {chosen} (UQ={uncertainty_score:.2f})"

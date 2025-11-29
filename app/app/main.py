@@ -1,19 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-main.py (CORRIGIDO: Parse de Payload JSON)
+main.py (CORRIGIDO: Telemetria Chroma Desativada)
 ------------------------------------------
-Corrige o erro 500 convertendo raw_payload (str) -> dict antes da resposta.
+API Principal.
 """
 
-import json
+# ==============================================================================
+# 🚨 FIX: Desativar Telemetria do ChromaDB ANTES de qualquer import
+# ==============================================================================
 import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
+os.environ["SCARF_NO_ANALYTICS"] = "true"
+
+import json
 import time
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException, Header, Body, Response, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, Body, Response
 from fastapi.responses import JSONResponse
 
 from .prometheus_setup import setup_prometheus
@@ -31,36 +38,34 @@ from .observability import (
     CANDIDATE_COST,
     CANDIDATE_LAT,
 )
-from .router_core import route_and_answer, process_background_feedback
+from .router_core import route_and_answer
 from .utils.redis_client import get_redis
 from .routers import rag_router
 from .vectorstore import init_vectorstore, add_document as vs_add_document
+from .tasks import task_process_feedback
 
-
-os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
+# Configuração de Logging
 setup_logging()
-logging.getLogger("chromadb.telemetry").setLevel(logging.ERROR)
+# Força silêncio no logger do Chroma
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+logging.getLogger("posthog").setLevel(logging.CRITICAL)
 
 setup_prometheus()
 
 app = FastAPI(
-    title="LLM/VLM Router (Hybrid Bandit + RAG + Background Judges)",
-    version="3.0.1",
-    description="API de Roteamento Inteligente Multimodal."
+    title="LLM/VLM Router (Hybrid Bandit + RAG + Celery Feedback)",
+    version="3.1.2",
+    description="API de Roteamento Inteligente Multimodal com Persistência Robusta."
 )
 
 # --- HELPER DE CONVERSÃO ---
 def safe_parse_json(payload: Any) -> Any:
-    """
-    Tenta converter string JSON para Dict/List.
-    Se falhar, retorna o original (ou string).
-    Isso evita que a API quebre se o provider retornar string.
-    """
     if isinstance(payload, str):
         try:
             return json.loads(payload)
         except Exception:
-            return payload # Retorna a string mesmo se não for JSON válido
+            return payload
     return payload
 
 
@@ -170,38 +175,40 @@ async def startup_event():
             try:
                 await vs_add_document(
                     modality="text", doc_id="intro",
-                    text="NSGA-II é um algoritmo de otimização multiobjetivo.",
+                    text="NSGA-II é um algoritmo de otimização multiobjetivo baseado em dominância de Pareto.",
                     metadata={"warmup": True},
                 )
             except Exception as e:
                 logger.warning(f"[warmup] Falha doc teste: {e}")
 
-            tests = ["O que é RAG?", 
-                     "Por que o céu é azul?",
-                    # --- Tradução & Nuance Cultural ---
-                    "Traduza a palavra 'Saudade' para o inglês explicando seu contexto cultural brasileiro.",
-                    "Como se diz 'break a leg' em português e qual o significado real?",
-                    
-                    # --- Inteligência Emocional & Soft Skills ---
-                    "Escreva uma mensagem de apoio para um amigo que acabou de perder o emprego.",
-                    "Como dar um feedback negativo para um colega de trabalho de forma construtiva?",
-                    
-                    # --- Planejamento & Utilidade ---
-                    "Crie um roteiro de viagem de 3 dias para Roma focado em gastronomia.",
-                    "Quais são os benefícios da meditação para a saúde mental?",
-                    
-                    # --- Análise Comparativa ---
-                    "Compare as vantagens do trabalho remoto versus trabalho presencial.",
-                    "Qual a diferença entre clima e tempo?",
-                     ]
-            logger.info("[warmup] Executando smoke tests...")
-            for t in tests:
-                try:
-                    await route_and_answer(query=t, modality="text")
-                    logger.info(f"[warmup] OK: '{t}'")
-                except Exception: pass
+            # =================================================================
+            # 🔥 SMOKE TESTS (10 Áreas do Conhecimento)
+            # =================================================================
+            tests = [
+                "Explique a diferença entre processamento síncrono e assíncrono em Python.",
+                "Quais foram as principais consequências geopolíticas da Queda do Muro de Berlim?",
+                "Como funciona o princípio da incerteza de Heisenberg em termos simples?",
+                "Escreva um breve poema no estilo barroco sobre a passagem do tempo.",
+                "Se um trem viaja a 120km/h, quanto tempo leva para percorrer 450km?",
+                "Descreva o processo de fotossíntese e sua importância para a vida na Terra.",
+                "Qual a relação entre taxa de juros e inflação em uma economia de mercado?",
+                "Resuma o conceito de 'Imperativo Categórico' de Immanuel Kant.",
+                "O que são direitos fundamentais segundo a Constituição Brasileira de 1988?",
+                "Quais são as principais características culturais e culinárias do Nordeste brasileiro?"
+            ]
 
-            logger.info("[warmup] Sistema pronto. ✅")
+            logger.info(f"[warmup] Executando {len(tests)} smoke tests diversificados...")
+            
+            for i, t in enumerate(tests, 1):
+                try:
+                    start_t = time.time()
+                    await route_and_answer(query=t, modality="text", use_cache=False)
+                    elapsed = time.time() - start_t
+                    logger.info(f"[warmup] Teste {i}/10 OK ({elapsed:.2f}s): '{t[:40]}...'")
+                except Exception as e:
+                    logger.warning(f"[warmup] Falha no teste {i} ('{t[:20]}...'): {e}")
+
+            logger.info("[warmup] Sistema pronto e aquecido. ✅")
         except Exception as e:
             logger.exception(f"[warmup] Erro crítico: {e}")
 
@@ -209,7 +216,7 @@ async def startup_event():
 
 
 @app.post("/query", response_model=QueryResponse)
-async def route_query(req: QueryRequest, background_tasks: BackgroundTasks):
+async def route_query(req: QueryRequest):
     start = time.time()
     API_REQUESTS.inc()
 
@@ -250,24 +257,25 @@ async def route_query(req: QueryRequest, background_tasks: BackgroundTasks):
     CANDIDATE_COST.observe(result["cost_per_1k"])
     CANDIDATE_LAT.observe(result["latency_s"])
 
-    # Extrai payload bruto
     raw_payload_str = result.get("metadata", {}).get("raw_payload")
     
-    background_tasks.add_task(
-        process_background_feedback,
-        query=req.query,
-        answer=result["answer"],
-        chosen_model=chosen_model,
-        modality=result["modality"],
-        latency_s=result["latency_s"],
-        cost_val=result["cost_per_1k"],
-        image_b64=image_input,
-        raw_payload=raw_payload_str # passa string para o banco
-    )
+    try:
+        task_process_feedback.delay(
+            query=req.query,
+            answer=result["answer"],
+            chosen_model=chosen_model,
+            modality=result["modality"],
+            latency_s=result["latency_s"],
+            cost_val=result["cost_per_1k"],
+            image_b64=image_input,
+            raw_payload=raw_payload_str,
+            prompt_tokens=result.get("metadata", {}).get("prompt_tokens", 0),
+            completion_tokens=result.get("metadata", {}).get("completion_tokens", 0)
+        )
+    except Exception as e:
+        logger.error(f"[main] Falha ao despachar tarefa Celery: {e}")
 
-    # Prepara resposta para o Pydantic (converte string JSON para dict se possível)
     parsed_payload = safe_parse_json(raw_payload_str)
-
     route_raw = result.get("route", {})
     candidates_raw = result.get("candidates", [])
 
@@ -278,7 +286,7 @@ async def route_query(req: QueryRequest, background_tasks: BackgroundTasks):
         image_output_b64=result.get("image_output_b64"),
         route=RouteDecision(**route_raw),
         candidates=[CandidateResult(**c) for c in candidates_raw],
-        payload=parsed_payload # Aqui vai o objeto parseado ou string segura
+        payload=parsed_payload
     )
 
 
