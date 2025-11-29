@@ -1,36 +1,29 @@
 import pytest
-from app import bandits
+from app.app.bandits import compute_reward, _dynamic_epsilon
 
+def test_compute_reward_logic():
+    """Testa se a função de recompensa respeita os limites [0, 1]."""
+    # Caso ideal: Qualidade 10, Latência 0, Custo 0
+    r_perfect = compute_reward("model", quality=10.0, latency_s=0.1, cost_per_1k=0.0)
+    assert r_perfect > 0.8
+    assert r_perfect <= 1.0
 
-def test_bandit_initial_selection():
-    """Verifica se o bandit consegue selecionar um modelo válido."""
-    candidates = ["phi4", "gemini-2.0-flash"]
-    chosen = bandits.select_model(candidates, query_text="Teste")
-    assert chosen in candidates
+    # Caso ruim: Qualidade 0, Latência alta
+    r_bad = compute_reward("model", quality=0.0, latency_s=50.0, cost_per_1k=1.0)
+    assert r_bad < 0.5
+    assert r_bad >= 0.0
 
-
-def test_bandit_update_and_retrieve_stats():
-    """Atualiza o modelo e verifica se as estatísticas foram salvas."""
-    bandits.reset_bandits()
-    bandits.update_model("phi4", "Pergunta X", reward=0.75)
-    stats = bandits.get_bandit_stats()
-    assert "phi4" in stats
-    assert stats["phi4"]["avg_reward"] >= 0.0
-
-
-def test_bandit_explore_exploit(monkeypatch):
-    """Força modo exploit (ε = 0) para testar comportamento determinístico."""
-    bandits.reset_bandits()
-    candidates = ["phi4", "gemini"]
-    monkeypatch.setattr(bandits, "EPSILON", 0.0)
-    chosen = bandits.select_model(candidates, "Pergunta Y")
-    assert chosen in candidates
-
-
-def test_bandit_reset_clears_stats():
-    """Verifica se o reset realmente limpa as estatísticas."""
-    bandits.reset_bandits()
-    bandits.update_model("phi4", "Pergunta", 0.5)
-    bandits.reset_bandits()
-    stats = bandits.get_bandit_stats()
-    assert stats == {}
+def test_dynamic_epsilon():
+    """Testa se a taxa de exploração aumenta quando há poucos dados."""
+    # Poucos dados -> Epsilon maior
+    stats_empty = {}
+    eps_high = _dynamic_epsilon(stats_empty)
+    
+    # Muitos dados -> Epsilon padrão (menor)
+    stats_full = {
+        "m1": {"count": 100, "var": 0.01},
+        "m2": {"count": 100, "var": 0.01}
+    }
+    eps_low = _dynamic_epsilon(stats_full)
+    
+    assert eps_high > eps_low
