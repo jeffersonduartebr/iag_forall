@@ -22,24 +22,25 @@ from datetime import datetime
 
 # --- System Imports ---
 try:
-    from app.app.providers_async import call_model
-    from app.app.router_core import route_and_answer
-    from app.app.judges import judge_answer
+    from app.providers_async import call_model
+    from app.router_core import route_and_answer
+    from app.judges import judge_answer
 except ImportError:
     import sys
     sys.path.append(".")
-    from app.app.providers_async import call_model
-    from app.app.router_core import route_and_answer
-    from app.app.judges import judge_answer
+    from app.providers_async import call_model
+    from app.router_core import route_and_answer
+    from app.judges import judge_answer
 
 # ==============================================================================
 # ⚙️ CONFIGURATION
 # ==============================================================================
-MODEL_LOCAL = "ollama/gemma3:4b"
+# Ajuste os nomes dos modelos conforme seu .env
+MODEL_LOCAL = "ollama/gemma3:4b" 
 MODEL_SOTA = "openai/gpt-5.1"
 
-# Aumente para 50+ na tese real para significância estatística
-SAMPLES_PER_DATASET = 10 
+# Configuração da Execução
+SAMPLES_PER_DATASET = 10  # Aumente para 30-50 na versão final
 NUM_RUNS = 3
 OUTPUT_DIR = "thesis_results"
 
@@ -70,7 +71,8 @@ def load_datasets():
     
     # 1. MMLU (Knowledge)
     try:
-        ds_mmlu = load_dataset("cais/mmlu", "global_facts", split="test", trust_remote_code=True)
+        # Removido trust_remote_code=True para evitar erro em versões novas
+        ds_mmlu = load_dataset("cais/mmlu", "global_facts", split="test")
         ds_mmlu = ds_mmlu.shuffle(seed=42).select(range(SAMPLES_PER_DATASET))
         for item in ds_mmlu:
             tasks.append({
@@ -98,7 +100,7 @@ def load_datasets():
 
     # 3. HellaSwag (Common Sense)
     try:
-        ds_hella = load_dataset("rowan/hellaswag", split="validation", trust_remote_code=True)
+        ds_hella = load_dataset("rowan/hellaswag", split="validation")
         ds_hella = ds_hella.shuffle(seed=42).select(range(SAMPLES_PER_DATASET))
         for item in ds_hella:
             tasks.append({
@@ -119,12 +121,19 @@ def load_datasets():
 
 async def evaluate_interaction(mode: str, query: str, run_id: int):
     start_t = time.time()
+    
+    # Inicializa variáveis para evitar UnboundLocalError
+    answer = ""
+    model = "unknown"
+    cost = 0.0
+    latency = 0.0
+    
     try:
         if mode == "Router (Hybrid)":
             res = await route_and_answer(query=query, use_cache=False)
-            answer = res["answer"]
-            model = res["model"]
-            cost = res["cost_per_1k"]
+            answer = res.get("answer", "")
+            model = res.get("model", "router_error")
+            cost = res.get("cost_per_1k", 0.0)
         
         elif mode == "Local (Gemma 3)":
             answer, meta = await call_model(MODEL_LOCAL, query, max_tokens=512, temperature=0.1)
@@ -135,13 +144,19 @@ async def evaluate_interaction(mode: str, query: str, run_id: int):
             answer, meta = await call_model(MODEL_SOTA, query, max_tokens=512, temperature=0.1)
             model = MODEL_SOTA
             cost = meta.get("cost_per_1k", 0.0)
+            
+        else:
+            raise ValueError(f"Modo desconhecido: {mode}")
         
         latency = time.time() - start_t
 
-        # Auto-Evaluation
-        judge_res = await judge_answer(query, answer)
-        scores = [r["score"] for r in judge_res if "score" in r]
-        quality = sum(scores)/len(scores) if scores else 0.0
+        # Auto-Evaluation (LLM-as-a-Judge)
+        if answer:
+            judge_res = await judge_answer(query, answer)
+            scores = [r["score"] for r in judge_res if "score" in r]
+            quality = sum(scores)/len(scores) if scores else 0.0
+        else:
+            quality = 0.0
 
         return {
             "run_id": run_id,
@@ -162,13 +177,19 @@ async def evaluate_interaction(mode: str, query: str, run_id: int):
             "latency": 0,
             "cost": 0,
             "quality": 0,
-            "success": False
+            "success": False,
+            "error_msg": str(e)
         }
 
 async def run_benchmark_suite():
     tasks_data = load_datasets()
+    if not tasks_data:
+        logger.error("No datasets loaded. Exiting.")
+        return pd.DataFrame()
+
     results = []
-    modes = ["Local (Gemma 3:4b)", "SOTA (GPT-5.1)", "Router (Hybrid)"]
+    # Estes nomes devem bater EXATAMENTE com os ifs em evaluate_interaction
+    modes = ["Local (Gemma 3)", "SOTA (GPT-5.1)", "Router (Hybrid)"]
     
     total_iterations = NUM_RUNS * len(tasks_data) * len(modes)
     pbar = tqdm(total=total_iterations, desc="Thesis Benchmark Progress")
@@ -183,7 +204,8 @@ async def run_benchmark_suite():
                 })
                 results.append(data)
                 pbar.update(1)
-                await asyncio.sleep(0.1) # Breve pausa para evitar rate limit agressivo
+                # Breve pausa para evitar rate limit agressivo
+                await asyncio.sleep(0.05) 
 
     pbar.close()
     
@@ -200,6 +222,10 @@ async def run_benchmark_suite():
 # ==============================================================================
 
 def generate_thesis_plots(df):
+    if df.empty:
+        logger.warning("DataFrame is empty. Skipping plots.")
+        return
+
     logger.info("📊 Generating plots with Standard Deviation...")
     
     # Configuração de Estilo
@@ -220,7 +246,7 @@ def generate_thesis_plots(df):
 
     # Plot manual com errorbar para ter controle total X e Y
     for i, row in df_global.iterrows():
-        color = palette[row['mode']]
+        color = palette.get(row['mode'], "gray")
         plt.errorbar(
             x=row['cost_mean'], 
             y=row['qual_mean'], 
@@ -274,7 +300,6 @@ def generate_thesis_plots(df):
     plt.close()
 
     # --- PLOT 3: Latency Comparison (Barplot with SD) ---
-    # Mudança de Boxplot para Barplot para mostrar explicitamente Média + Desvio
     plt.figure(figsize=(10, 6))
     sns.barplot(
         data=df, 
@@ -314,6 +339,8 @@ def generate_thesis_plots(df):
 # ==============================================================================
 
 def print_statistical_summary(df):
+    if df.empty: return
+
     print("\n" + "="*80)
     print("🏆 STATISTICAL SUMMARY (Mean ± Std Dev)")
     print("="*80)
@@ -335,11 +362,17 @@ def print_statistical_summary(df):
     print("-" * 80)
     
     # Cálculo de Economia (usando as médias)
-    mean_cost_sota = summary.loc["sota", ("cost", "mean")]
-    mean_cost_router = summary.loc["router", ("cost", "mean")]
-    savings = 100 * (1 - (mean_cost_router / mean_cost_sota))
-    
-    print(f"💰 Average Cost Savings (Router vs SOTA): {savings:.2f}%")
+    try:
+        mean_cost_sota = summary.loc["sota", ("cost", "mean")]
+        mean_cost_router = summary.loc["router", ("cost", "mean")]
+        if mean_cost_sota > 0:
+            savings = 100 * (1 - (mean_cost_router / mean_cost_sota))
+            print(f"💰 Average Cost Savings (Router vs SOTA): {savings:.2f}%")
+        else:
+            print("💰 Cost Savings: N/A (SOTA cost is 0)")
+    except KeyError:
+        print("⚠️ Could not calculate savings (missing data for sota or router)")
+        
     print("="*80)
 
 # ==============================================================================
@@ -354,17 +387,20 @@ if __name__ == "__main__":
     # 1. Run Benchmark
     df_results = asyncio.run(run_benchmark_suite())
     
-    # 2. Mapeia nomes internos para nomes de exibição
-    df_results["run_type"] = df_results["mode"].map({
-        "Local (Gemma 3)": "local",
-        "SOTA (GPT-5.1)": "sota",
-        "Router (Hybrid)": "router"
-    })
+    if not df_results.empty:
+        # 2. Mapeia nomes internos para nomes de exibição
+        df_results["run_type"] = df_results["mode"].map({
+            "Local (Gemma 3)": "local",
+            "SOTA (GPT-5.1)": "sota",
+            "Router (Hybrid)": "router"
+        })
 
-    # 3. Generate Plots
-    generate_thesis_plots(df_results)
-    
-    # 4. Print Summary
-    print_statistical_summary(df_results)
-    
-    print(f"\n🏆 Benchmark Complete. Check '{OUTPUT_DIR}' folder.")
+        # 3. Generate Plots
+        generate_thesis_plots(df_results)
+        
+        # 4. Print Summary
+        print_statistical_summary(df_results)
+        
+        print(f"\n🏆 Benchmark Complete. Check '{OUTPUT_DIR}' folder.")
+    else:
+        print("\n❌ Benchmark failed to produce results.")

@@ -3,8 +3,9 @@
 statistical_validation.py — Validação Estatística com Geração de Texto LaTeX
 ----------------------------------------------------------------------------
 1. Carrega os dados do benchmark.
-2. Executa testes (Shapiro-Wilk, Friedman, Wilcoxon).
-3. Gera tabelas e TEXTO DISCURSIVO em formato LaTeX pronto para a tese.
+2. Gera IDs sintéticos se necessário (Correção do KeyError).
+3. Executa testes (Shapiro-Wilk, Friedman, Wilcoxon).
+4. Gera tabelas e TEXTO DISCURSIVO em formato LaTeX pronto para a tese.
 """
 
 import pandas as pd
@@ -34,6 +35,20 @@ def load_latest_data():
     
     df = pd.read_csv(latest_file)
     
+    # --- CORREÇÃO: Geração de ID Sintético ---
+    if 'id' not in df.columns:
+        logger.info("⚠️ Coluna 'id' não encontrada. Gerando IDs sintéticos baseados na ordem sequencial...")
+        # Sabemos que existem 3 modos por pergunta (Local, SOTA, Router)
+        # O script roda: Run -> Task -> Mode
+        # Então a cada 3 linhas, mudamos de pergunta.
+        # O ID deve reiniciar ou ser consistente entre Runs para o agrupamento funcionar.
+        
+        # Agrupa por Run e atribui um ID sequencial para cada trio de linhas
+        # Ex: Linhas 0,1,2 (Pergunta A) -> ID 0
+        #     Linhas 3,4,5 (Pergunta B) -> ID 1
+        df['id'] = df.groupby('run_id').cumcount() // 3
+    # -----------------------------------------
+
     # Normaliza nomes
     df["mode"] = df["mode"].map({
         "Local (Gemma 3)": "Local",
@@ -68,6 +83,11 @@ def analyze_metric(df, metric_col, metric_name_pt):
     """
     pivot = df.pivot(index="id", columns="mode", values=metric_col).dropna()
     
+    # Garante que temos as colunas
+    if not all(col in pivot.columns for col in ["Local", "SOTA", "Router"]):
+        logger.error(f"❌ Dados incompletos para a métrica {metric_col}. Colunas encontradas: {pivot.columns}")
+        sys.exit(1)
+
     local = pivot["Local"]
     sota = pivot["SOTA"]
     router = pivot["Router"]

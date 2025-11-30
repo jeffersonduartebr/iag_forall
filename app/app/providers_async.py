@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-providers_async.py (ATUALIZADO: Exponential Backoff + Jitter para Rate Limits)
+providers_async.py (ATUALIZADO: Debugging Avançado + Resiliência)
 ------------------------------------------------------------------
 Implementação Robusta, Assíncrona e Resiliente de TODOS os provedores.
 
-Melhorias de Resiliência:
-- Exponential Backoff with Jitter: Evita colisão em retentativas.
-- Tratamento específico de HTTP 429 (Too Many Requests).
-- Circuit Breaker para falhas catastróficas.
+Melhorias:
+- Exponential Backoff with Jitter para Rate Limits.
+- Logging detalhado com Traceback para erros vazios.
+- Timeout estendido para Ollama (Cold Start).
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import logging
 import asyncio
 import base64
 import json
+import traceback  # <--- Adicionado para debug profundo
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
 
@@ -28,7 +29,7 @@ import requests
 from tenacity import (
     retry,
     stop_after_attempt,
-    wait_random_exponential, # <--- O segredo para Rate Limits eficientes
+    wait_random_exponential,
     retry_if_exception_type,
     before_sleep_log
 )
@@ -88,9 +89,6 @@ if genai:
     RETRYABLE_ERRORS += (ResourceExhausted, ServiceUnavailable)
 
 # Decorator reutilizável para todos os providers
-# - Multiplier=1: Espera 1s, 2s, 4s, 8s...
-# - Max=60: Nunca espera mais que 60s entre tentativas
-# - Stop=5: Desiste após 5 tentativas (falha definitiva)
 COMMON_RETRY_STRATEGY = retry(
     reraise=True,
     stop=stop_after_attempt(5), 
@@ -371,9 +369,9 @@ class OllamaProvider(BaseProvider):
                 if image_b64:
                     payload["images"] = [image_b64]
 
-                async with httpx.AsyncClient(timeout=240.0) as client:
+                # Timeout aumentado para 300s para lidar com Cold Start de modelos pesados
+                async with httpx.AsyncClient(timeout=300.0) as client:
                     resp = await client.post(f"{self.host}/api/generate", json=payload)
-                    # Levanta HTTPStatusError para 4xx/5xx, acionando o retry
                     resp.raise_for_status() 
                     data = resp.json()
 
@@ -392,6 +390,25 @@ class OllamaProvider(BaseProvider):
                 )
             except Exception as e:
                 self._record_metrics(model, time.time()-start, 0, False)
+                
+                # --- DEBUG AVANÇADO PARA OLLAMA ---
+                error_msg = str(e)
+                error_body = ""
+                
+                # Tenta extrair o corpo da resposta se for erro HTTP (ex: 404 Model Not Found)
+                if isinstance(e, httpx.HTTPStatusError):
+                    try:
+                        error_body = e.response.text
+                        error_msg += f" | Body: {error_body}"
+                    except: pass
+                
+                structlog_logger.error(
+                    "provider_call_failed", 
+                    model=model, 
+                    error=error_msg,
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc() # Stack trace completo
+                )
                 raise
 
 # ==============================================================================
@@ -457,7 +474,13 @@ async def call_model(
         return "[Erro: Circuito Aberto - Serviço Indisponível]", {"latency": 0.0, "cost_per_1k": 0.0, "quality": 0.0}
     
     except Exception as e:
-        structlog_logger.error("provider_call_failed", model=model, error=str(e))
+        # Log de último recurso se o provider não pegou
+        structlog_logger.error(
+            "call_model_wrapper_failed", 
+            model=model, 
+            error=str(e),
+            traceback=traceback.format_exc()
+        )
         return f"[Erro ao chamar {model}: {str(e)}]", {"latency": 0.0, "cost_per_1k": 0.0, "quality": 0.0}
 
 

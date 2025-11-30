@@ -231,7 +231,7 @@ services:
       - OLLAMA_FLASH_ATTENTION=1   # Aceleração massiva para placas RTX
       - OLLAMA_KV_CACHE_TYPE=q4_0  # Comprime o contexto (cache) para caber mais
       - OLLAMA_CONTEXT_LENGTH=2048
-      - OLLAMA_MAX_LOADED_MODELS=3
+      - OLLAMA_MAX_LOADED_MODELS=1
 
     ports:
       - "11434:11434"

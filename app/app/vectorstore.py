@@ -20,7 +20,7 @@ import numpy as np
 
 from .embeddings import embed_text, embed_image, embed_multimodal
 from .settings_dynamic import settings
-from .sparse_index import sparse_index # <--- Importar o novo módulo
+from .sparse_index import sparse_index # <--- Importar o módulo BM25
 
 # ============================================================
 # Logging
@@ -260,7 +260,8 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int):
         return col.query(
             query_embeddings=[_ensure_list_of_floats(embedding)],
             n_results=n_results,
-            include=["documents", "metadatas", "distances", "ids"], # IDs necessários para RRF
+            # CORRIGIDO: Removido "ids" da lista include. O Chroma retorna IDs por padrão.
+            include=["documents", "metadatas", "distances"], 
         )
     except Exception as e:
         logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
