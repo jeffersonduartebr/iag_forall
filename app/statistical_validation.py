@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-statistical_validation.py — Universal Statistical Validation (Thesis Edition)
------------------------------------------------------------------------------
-1. Loads benchmark data (supports multiple baselines including FrugalGPT).
-2. Generates synthetic IDs if necessary for paired testing.
-3. Executes Friedman (Global) and Wilcoxon (Post-hoc Router vs All) tests.
-4. Generates LaTeX text in formal American English.
+statistical_validation.py — Validação Estatística (Sincronizado com Benchmark Final)
+------------------------------------------------------------------------------------
+1. Carrega dados (suporta FrugalGPT e Ablações).
+2. Gera IDs sintéticos.
+3. Executa testes (Friedman/Wilcoxon).
+4. Gera LaTeX ordenado: Local -> Frugal -> SOTA -> Router -> Ablações.
 """
 
 import pandas as pd
@@ -16,71 +16,52 @@ import sys
 import os
 import glob
 
-# Configuration
+# Configuração
 INPUT_DIR = "thesis_results"
 ALPHA = 0.05
-TARGET_MODEL_KEY = "Router" # Keyword to identify the proposed solution
+# O nome do modelo principal no CSV gerado pelo benchmark é "Router (Hybrid)"
+TARGET_MODEL_CSV_NAME = "Router (Hybrid)" 
 
-# Mapping for clean LaTeX names
+# Mapeamento para nomes bonitos no LaTeX
 NAME_MAP = {
     "Local (Gemma 4B)": "Gemma-4B",
     "Local (Qwen 8B)": "Qwen-8B",
     "SOTA (GPT-5.1)": "GPT-5.1",
     "FrugalGPT (Cascade)": "FrugalGPT",
-    "Router (Hybrid)": "Router",
-    "Router (Full)": "Router",
-    "Router (No RAG)": "Router-NoRAG",
-    "Router (Random)": "Router-Random"
+    "Router (Hybrid)": "Router (Proposed)", # Nome de destaque na tese
+    "Router (No RAG)": "Ablation-NoRAG",
+    "Router (No Re-rank)": "Ablation-NoRerank",
+    "Router (Random)": "Ablation-Random"
 }
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("stats")
 
 def load_latest_data():
-    # Search in potential directories
-    search_dirs = [INPUT_DIR, "thesis_results_ablation"]
-    latest_file = None
-    
-    for d in search_dirs:
-        files = glob.glob(f"{d}/*data_*.csv")
-        if files:
-            current_latest = max(files, key=os.path.getctime)
-            if latest_file is None or os.path.getctime(current_latest) > os.path.getctime(latest_file):
-                latest_file = current_latest
-    
-    if not latest_file:
+    files = glob.glob(f"{INPUT_DIR}/*data_*.csv")
+    if not files:
         logger.error(f"❌ No CSV files found in {INPUT_DIR}/.")
         sys.exit(1)
     
+    latest_file = max(files, key=os.path.getctime)
     logger.info(f"📂 Loading data from: {latest_file}")
+    
     df = pd.read_csv(latest_file)
     
-    # Normalize columns
-    if "judge_score" in df.columns and "quality" not in df.columns:
-        df.rename(columns={"judge_score": "quality"}, inplace=True)
-    
-    # Apply Name Mapping
+    # Normaliza nomes
     df["mode_clean"] = df["mode"].apply(lambda x: NAME_MAP.get(x, x))
     
-    # Ensure ID exists for paired testing
+    # Garante ID
     if 'id' not in df.columns:
-        logger.warning("⚠️ Column 'id' missing. Generating sequential IDs based on run/mode structure...")
         num_modes = df['mode'].nunique()
-        # Assuming data is ordered by Run -> Task -> Mode
         df['id'] = df.groupby('run_id').cumcount() // num_modes
 
-    # Aggregation (Mean across Runs per Question)
-    # We average the results of the 5 runs for the same question ID
-    agg_dict = {
-        "quality": "mean",
-        "cost": "mean",
-        "latency": "mean"
-    }
+    # Agregação
+    agg_dict = {"quality": "mean", "cost": "mean", "latency": "mean"}
     if "is_correct" in df.columns:
-        agg_dict["is_correct"] = "mean" # Becomes accuracy/probability (0.0 to 1.0)
+        agg_dict["is_correct"] = "mean"
 
     df_grouped = df.groupby(["id", "mode_clean"]).agg(agg_dict).reset_index()
-    
     return df_grouped
 
 def calculate_cohens_d(x, y):
@@ -96,28 +77,26 @@ def format_p_value(p):
     return f"= {p:.4f}"
 
 def analyze_metric(df, metric_col, metric_name_en):
-    if metric_col not in df.columns:
-        return None
+    if metric_col not in df.columns: return None
 
-    # Pivot: Index=QuestionID, Columns=Models, Values=Metric
     pivot = df.pivot(index="id", columns="mode_clean", values=metric_col).dropna()
     
-    # Identify Target Column (Router)
-    router_col = next((c for c in pivot.columns if TARGET_MODEL_KEY in c and "No" not in c), None)
+    # Define o alvo (Router)
+    target = NAME_MAP.get(TARGET_MODEL_CSV_NAME, "Router")
     
-    if not router_col:
-        logger.error(f"❌ Target model containing '{TARGET_MODEL_KEY}' not found in pivot columns: {pivot.columns}")
+    if target not in pivot.columns:
+        logger.error(f"❌ Target '{target}' not found in columns: {pivot.columns}")
         return None
 
-    baselines = [c for c in pivot.columns if c != router_col]
+    baselines = [c for c in pivot.columns if c != target]
     
-    # 1. Normality Test (Shapiro-Wilk)
+    # 1. Normality
     try:
-        _, p_shapiro = stats.shapiro(pivot[router_col])
+        _, p_shapiro = stats.shapiro(pivot[target])
         is_normal = p_shapiro > ALPHA
     except: is_normal = False
 
-    # 2. Global Difference Test (Friedman)
+    # 2. Friedman
     try:
         all_groups = [pivot[c] for c in pivot.columns]
         stat_fried, p_fried = stats.friedmanchisquare(*all_groups)
@@ -125,17 +104,15 @@ def analyze_metric(df, metric_col, metric_name_en):
     except ValueError:
         p_fried, is_global_sig = 1.0, False
 
-    # 3. Post-hoc Tests (Wilcoxon Signed-Rank)
+    # 3. Post-hoc
     comparisons = {}
     for base in baselines:
         try:
-            # Paired test
-            stat_w, p_w = stats.wilcoxon(pivot[router_col], pivot[base])
-            d = calculate_cohens_d(pivot[router_col], pivot[base])
-            diff_mean = (pivot[router_col] - pivot[base]).mean()
+            stat_w, p_w = stats.wilcoxon(pivot[target], pivot[base])
+            d = calculate_cohens_d(pivot[target], pivot[base])
+            diff_mean = (pivot[target] - pivot[base]).mean()
             sig = p_w < ALPHA
         except ValueError:
-            # Handles identical data arrays
             p_w, d, diff_mean, sig = 1.0, 0.0, 0.0, False
         
         comparisons[base] = {
@@ -145,7 +122,7 @@ def analyze_metric(df, metric_col, metric_name_en):
 
     return {
         "metric_name": metric_name_en,
-        "target": router_col,
+        "target": target,
         "shapiro_p": p_shapiro if 'p_shapiro' in locals() else 0,
         "is_normal": is_normal,
         "friedman_stat": stat_fried if 'stat_fried' in locals() else 0,
@@ -156,34 +133,28 @@ def analyze_metric(df, metric_col, metric_name_en):
     }
 
 def generate_latex_text(results):
-    if not results: return "% Metric not found\n"
+    if not results: return ""
     
     m = results["metric_name"]
     target = results["target"]
     
-    # Introduction Paragraph
-    dist_text = "a normal distribution" if results["is_normal"] else "a non-normal distribution"
-    fried_res = "statistically significant differences" if results["is_global_sig"] else "no significant differences"
-    
     text = f"""
-% -------------------------------------------------------
-% Statistical Analysis: {m}
-% -------------------------------------------------------
-The analysis of \\textbf{{{m}}} compared the proposed \\textit{{{target}}} against multiple baselines. 
-The Shapiro-Wilk test indicated {dist_text} for the Router data ($p {format_p_value(results['shapiro_p'])}$).
-The Friedman test confirmed {fried_res} among the groups ($\chi^2 = {results['friedman_stat']:.2f}, p {format_p_value(results['friedman_p'])}$).
+% Analysis: {m}
+The analysis of \\textbf{{{m}}} compared \\textit{{{target}}} against baselines. 
+Friedman test: $\chi^2 = {results['friedman_stat']:.2f}, p {format_p_value(results['friedman_p'])}$.
 
-Post-hoc paired Wilcoxon signed-rank tests revealed:
+Post-hoc Wilcoxon results:
 \\begin{{itemize}}
 """
     
     table_rows = []
-    # Sort order: Local -> Frugal -> SOTA -> Ablations
+    
+    # Ordenação Lógica para Tabela: Local -> Frugal -> SOTA -> Ablações
     def sort_key(name):
         if "Gemma" in name or "Qwen" in name: return 0
         if "Frugal" in name: return 1
         if "GPT" in name or "SOTA" in name: return 2
-        return 3
+        return 3 # Ablações
         
     sorted_baselines = sorted(results["baselines"], key=sort_key)
 
@@ -191,19 +162,15 @@ Post-hoc paired Wilcoxon signed-rank tests revealed:
         comp = results["comparisons"][base]
         
         if not comp["significant"]:
-            interp = "statistically equivalent"
+            interp = "equivalent"
         else:
-            # Determine directionality
             is_higher = comp["diff_mean"] > 0
-            
-            # For Quality/Accuracy: Higher is Better
             if "Quality" in m or "Accuracy" in m:
                 interp = "superior" if is_higher else "inferior"
-            # For Cost/Latency: Higher is Worse
             else:
-                interp = "less efficient (higher)" if is_higher else "more efficient (lower)"
+                interp = "worse (higher)" if is_higher else "better (lower)"
 
-        text += f"    \\item \\textbf{{{target} vs. {base}}}: The Router proved to be \\textbf{{{interp}}} ($Z = {comp['stat']:.1f}, p {format_p_value(comp['p_val'])}, d={comp['cohen_d']:.2f}$).\n"
+        text += f"    \\item vs. \\textbf{{{base}}}: {interp} ($p {format_p_value(comp['p_val'])}, d={comp['cohen_d']:.2f}$).\n"
         
         sig_mark = '*' if comp['significant'] else 'ns'
         table_rows.append([
@@ -216,7 +183,6 @@ Post-hoc paired Wilcoxon signed-rank tests revealed:
 
     text += "\\end{itemize}\n"
     
-    # LaTeX Table
     text += f"""
 \\begin{{table}}[H]
 \\centering
@@ -234,31 +200,25 @@ Post-hoc paired Wilcoxon signed-rank tests revealed:
 
 def main():
     print("="*80)
-    print("🚀 THESIS STATISTICAL GENERATOR (Multi-Model + FrugalGPT)")
+    print("🚀 THESIS STATISTICAL GENERATOR (Final Sync)")
     print("="*80)
     
     df = load_latest_data()
     print(f"ℹ️  Models found: {df['mode_clean'].unique()}")
     
     sections = []
+    # Ordem de importância
+    metrics = [
+        ("is_correct", "Objective Accuracy"),
+        ("cost", "Inference Cost"),
+        ("latency", "Latency"),
+        ("quality", "Judge Quality Score")
+    ]
     
-    # 1. Objective Accuracy (Ground Truth) - Most Important
-    res_acc = analyze_metric(df, "is_correct", "Objective Accuracy")
-    if res_acc: sections.append(generate_latex_text(res_acc))
-    
-    # 2. Subjective Quality (Judge)
-    res_qual = analyze_metric(df, "quality", "Judge Quality Score")
-    if res_qual: sections.append(generate_latex_text(res_qual))
-    
-    # 3. Cost
-    res_cost = analyze_metric(df, "cost", "Inference Cost")
-    if res_cost: sections.append(generate_latex_text(res_cost))
-    
-    # 4. Latency
-    res_lat = analyze_metric(df, "latency", "Latency")
-    if res_lat: sections.append(generate_latex_text(res_lat))
+    for col, name in metrics:
+        res = analyze_metric(df, col, name)
+        if res: sections.append(generate_latex_text(res))
 
-    # Save to file
     output_file = f"{INPUT_DIR}/statistical_report_final.tex"
     with open(output_file, "w", encoding="utf-8") as f:
         f.write("% Generated by statistical_validation.py\n")
@@ -266,7 +226,6 @@ def main():
             f.write(sec + "\n")
 
     print(f"\n✅ LaTeX file generated: {output_file}")
-    print("="*80)
 
 if __name__ == "__main__":
     main()

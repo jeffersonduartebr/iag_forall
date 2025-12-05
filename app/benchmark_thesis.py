@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-benchmark_thesis.py — Automated Thesis Benchmark Suite (FINAL COMPARATIVE)
-------------------------------------------------------------------------
-Executes a comparative study between:
-1. SOTA Baseline (GPT-5.1)
-2. FrugalGPT (Cascade Strategy)
-3. Hybrid Router (Proposed Solution)
-4. Local Baselines (for reference)
+benchmark_thesis.py — Automated Thesis Benchmark Suite (MASTER VERSION)
+-----------------------------------------------------------------------
+Executes:
+1. Comparative Study (Local vs SOTA vs FrugalGPT vs Router)
+2. Ablation Study (Router vs No-RAG vs No-Rerank vs Random)
 
-Datasets: MMLU, GSM8K, HellaSwag, HumanEval, TruthfulQA, ARC, BBH.
-Output: CSV raw data + High-Quality Plots.
+Features:
+- VRAM Safety (APU Optimized)
+- Ground Truth Validation
+- Full Statistical Data Logging
 """
 
 import asyncio
@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import httpx
 import re
+import random
+from contextlib import contextmanager
 from datasets import load_dataset
 from tqdm.asyncio import tqdm
 from datetime import datetime
@@ -42,14 +44,8 @@ except ImportError:
     from app.app.settings_dynamic import settings
 
 # ==============================================================================
-# ⚙️ CONFIGURATION & PARAMETERS
+# ⚙️ CONFIGURATION
 # ==============================================================================
-
-# --- PARÂMETROS DO EXPERIMENTO ---
-NUM_RUNS = 5                # Número de execuções para validade estatística
-SAMPLES_PER_DATASET = 20    # Número de consultas por dataset (Total = 7 * N)
-
-# --- MODELOS ---
 LOCAL_BASELINES = {
     "Local (Gemma 4B)": "ollama/gemma3:4b",
     # "Local (Qwen 8B)": "ollama/qwen3:8b" 
@@ -57,22 +53,36 @@ LOCAL_BASELINES = {
 MODEL_SOTA = "openai/gpt-5.1"
 OLLAMA_API_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 
-# --- PREÇOS (Fallback) ---
 PRICE_SOTA_INPUT = 0.005
 PRICE_SOTA_OUTPUT = 0.015
 
-# --- DIRETÓRIOS ---
+SAMPLES_PER_DATASET = 10 
+NUM_RUNS = 3
 OUTPUT_DIR = "thesis_results"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("benchmark")
 
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 # ==============================================================================
-# 🧠 OLLAMA MEMORY MANAGER (APU SAFE)
+# 🛠️ UTILS FOR ABLATION
+# ==============================================================================
+@contextmanager
+def temporary_setting(key, value):
+    """Altera uma configuração temporariamente durante o teste."""
+    original_value = settings.get(key)
+    try:
+        settings.set(key, str(value), actor="benchmark_ablation")
+        time.sleep(0.1) # Propagação
+        yield
+    finally:
+        settings.set(key, str(original_value), actor="benchmark_ablation_restore")
+
+# ==============================================================================
+# 🧠 OLLAMA MEMORY MANAGER
 # ==============================================================================
 async def unload_all_ollama_models():
-    """Limpa VRAM para dar espaço ao Juiz ou troca de modelo."""
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             ps_response = await client.get(f"{OLLAMA_API_URL}/api/ps")
@@ -83,7 +93,7 @@ async def unload_all_ollama_models():
                         f"{OLLAMA_API_URL}/api/generate", 
                         json={"model": model['name'], "keep_alive": 0}
                     )
-            await asyncio.sleep(2) # Cool down
+            await asyncio.sleep(2)
         except Exception:
             pass
 
@@ -91,7 +101,6 @@ async def force_switch_ollama_model(target_model_name: str):
     clean_target = target_model_name.replace("ollama/", "").split(":")[0]
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
-            # 1. Matar modelos antigos
             ps_response = await client.get(f"{OLLAMA_API_URL}/api/ps")
             if ps_response.status_code == 200:
                 running_models = ps_response.json().get('models', [])
@@ -110,7 +119,6 @@ async def force_switch_ollama_model(target_model_name: str):
             
             await asyncio.sleep(3)
 
-            # 3. Warmup com Retry
             model_loaded = False
             for attempt in range(3):
                 try:
@@ -170,33 +178,23 @@ def format_mmlu(example):
     choices_str = "\n".join([f"{opt}) {choice}" for opt, choice in zip(options, example['choices'])])
     return f"Question: {example['question']}\nOptions:\n{choices_str}\nAnswer with the correct letter only."
 
-def format_gsm8k(example):
-    return f"Question: {example['question']}\nLet's think step by step."
-
+def format_gsm8k(example): return f"Question: {example['question']}\nLet's think step by step."
 def format_hellaswag(example):
     options = "\n".join([f"{i+1}) {end}" for i, end in enumerate(example['endings'])])
     return f"Context: {example['ctx']}\nWhich ending makes the most sense?\n{options}\nAnswer with the number only."
-
-def format_humaneval(example):
-    return f"Complete the following Python code:\n\n{example['prompt']}\n    # TODO: implementation"
-
-def format_truthfulqa(example):
-    return f"Question: {example['question']}\nAnswer truthfully and concisely."
-
+def format_humaneval(example): return f"Complete the following Python code:\n\n{example['prompt']}\n    # TODO: implementation"
+def format_truthfulqa(example): return f"Question: {example['question']}\nAnswer truthfully and concisely."
 def format_arc(example):
     choices = example['choices']['text']
     labels = example['choices']['label']
     choices_str = "\n".join([f"{lbl}) {txt}" for lbl, txt in zip(labels, choices)])
     return f"Question: {example['question']}\nOptions:\n{choices_str}\nAnswer with the correct letter only."
-
-def format_bbh(example):
-    return f"Q: {example['input']}\nA: Let's think step by step."
+def format_bbh(example): return f"Q: {example['input']}\nA: Let's think step by step."
 
 def load_datasets():
     logger.info("📥 Downloading datasets...")
     tasks = []
     global_id = 1
-    
     datasets_config = [
         ("cais/mmlu", "global_facts", "test", "MMLU", "Knowledge", format_mmlu, lambda x: ["A", "B", "C", "D"][x['answer']]),
         ("gsm8k", "main", "test", "GSM8K", "Reasoning", format_gsm8k, lambda x: x['answer'].split('####')[-1].strip()),
@@ -206,68 +204,47 @@ def load_datasets():
         ("ai2_arc", "ARC-Challenge", "test", "ARC-Challenge", "Reasoning", format_arc, lambda x: x['answerKey']),
         ("lukaemon/bbh", "date_understanding", "test", "BBH-Date", "Symbolic Logic", format_bbh, lambda x: x['target'])
     ]
-
     for path, name, split, label, cat, fmt_func, ref_func in datasets_config:
         try:
             if name: ds = load_dataset(path, name, split=split)
             else: ds = load_dataset(path, split=split)
             ds = ds.shuffle(seed=42).select(range(SAMPLES_PER_DATASET))
             for item in ds:
-                tasks.append({
-                    "id": global_id,
-                    "dataset": label,
-                    "category": cat,
-                    "query": fmt_func(item),
-                    "reference": ref_func(item)
-                })
+                tasks.append({"id": global_id, "dataset": label, "category": cat, "query": fmt_func(item), "reference": ref_func(item)})
                 global_id += 1
         except Exception as e: logger.error(f"Failed {label}: {e}")
-
     logger.info(f"✅ Loaded {len(tasks)} tasks.")
     return tasks
 
 # ==============================================================================
-# 🌊 FRUGAL GPT (CASCADE LOGIC)
+# 🌊 FRUGAL GPT
 # ==============================================================================
 async def run_frugal_cascade(query: str):
-    """
-    Simula FrugalGPT: Local -> Avalia -> Se ruim, SOTA.
-    """
     start_t = time.time()
-    
-    # 1. Tenta Modelo Local
     local_model = list(LOCAL_BASELINES.values())[0]
     await force_switch_ollama_model(local_model)
     
     ans_local, meta_local = await call_model(local_model, query, max_tokens=512, temperature=0.1)
     
-    # 2. Avalia (Scoring Function simulada pelo Juiz)
-    # Nota: Isso adiciona latência!
-    await unload_all_ollama_models() # Libera para o Juiz
+    await unload_all_ollama_models()
     judge_res = await judge_answer(query, ans_local)
     scores = [r["score"] for r in judge_res if "score" in r]
     score_local = sum(scores)/len(scores) if scores else 0.0
     
-    # Threshold de aceitação (ex: 8.0)
     if score_local >= 8.0:
         return {
-            "answer": ans_local,
-            "model": "FrugalGPT (Local)",
+            "answer": ans_local, "model": "FrugalGPT (Local)",
             "cost": meta_local.get("cost_per_1k", 0.0),
             "latency": time.time() - start_t,
             "load_time": meta_local.get("load_time", 0.0)
         }
         
-    # 3. Escala para SOTA
     ans_sota, meta_sota = await call_model(MODEL_SOTA, query, max_tokens=512, temperature=0.1)
-    
     total_cost = meta_local.get("cost_per_1k", 0.0) + meta_sota.get("cost_per_1k", 0.0)
     
     return {
-        "answer": ans_sota,
-        "model": "FrugalGPT (SOTA)",
-        "cost": total_cost,
-        "latency": time.time() - start_t, # Latência somada
+        "answer": ans_sota, "model": "FrugalGPT (SOTA)",
+        "cost": total_cost, "latency": time.time() - start_t,
         "load_time": meta_local.get("load_time", 0.0)
     }
 
@@ -289,7 +266,7 @@ async def evaluate_interaction(mode_label: str, query: str, reference: str, data
     load_time = 0.0
     
     try:
-        # --- 1. ROUTER (PROPOSTA) ---
+        # --- 1. ROUTER (FULL) ---
         if mode_label == "Router (Hybrid)":
             res = await route_and_answer(query=query, use_cache=False, use_rag=True)
             answer = res.get("answer", "")
@@ -297,27 +274,51 @@ async def evaluate_interaction(mode_label: str, query: str, reference: str, data
             cost = res.get("cost_per_1k", 0.0)
             load_time = res.get("load_time_s", 0.0)
 
-        # --- 2. FRUGAL GPT (COMPARATIVO) ---
+        # --- 2. FRUGAL GPT ---
         elif mode_label == "FrugalGPT (Cascade)":
             res = await run_frugal_cascade(query)
             answer = res["answer"]
             model_used = res["model"]
             cost = res["cost"]
-            # Latência já calculada no cascade
             total_latency = res["latency"]
             load_time = res["load_time"]
-            
-            if "SOTA" in model_used and cost <= 1e-6:
-                cost += estimate_fallback_cost(query, answer)
+            if "SOTA" in model_used and cost <= 1e-6: cost += estimate_fallback_cost(query, answer)
 
-        # --- 3. SOTA BASELINE ---
+        # --- 3. ABLATION: NO RAG ---
+        elif mode_label == "Router (No RAG)":
+            res = await route_and_answer(query=query, use_cache=False, use_rag=False)
+            answer = res.get("answer", "")
+            model_used = res.get("model", "error")
+            cost = res.get("cost_per_1k", 0.0)
+            load_time = res.get("load_time_s", 0.0)
+
+        # --- 4. ABLATION: NO RE-RANK ---
+        elif mode_label == "Router (No Re-rank)":
+            with temporary_setting("RERANK_ENABLED", "0"):
+                res = await route_and_answer(query=query, use_cache=False, use_rag=True)
+            answer = res.get("answer", "")
+            model_used = res.get("model", "error")
+            cost = res.get("cost_per_1k", 0.0)
+            load_time = res.get("load_time_s", 0.0)
+
+        # --- 5. ABLATION: RANDOM ---
+        elif mode_label == "Router (Random)":
+            target = random.choice([list(LOCAL_BASELINES.values())[0], MODEL_SOTA])
+            if "ollama" in target: await force_switch_ollama_model(target)
+            answer, meta = await call_model(target, query, max_tokens=512, temperature=0.1)
+            model_used = target
+            cost = meta.get("cost_per_1k", 0.0)
+            load_time = meta.get("load_time", 0.0)
+            if cost <= 1e-6 and "gpt" in target: cost = estimate_fallback_cost(query, answer)
+
+        # --- 6. SOTA ---
         elif mode_label == "SOTA (GPT-5.1)":
             answer, meta = await call_model(MODEL_SOTA, query, max_tokens=512, temperature=0.1)
             model_used = MODEL_SOTA
             cost = meta.get("cost_per_1k", 0.0)
             if cost <= 1e-6: cost = estimate_fallback_cost(query, answer)
 
-        # --- 4. LOCAL BASELINES ---
+        # --- 7. LOCAL ---
         elif mode_label in LOCAL_BASELINES:
             model_id = LOCAL_BASELINES[mode_label]
             await force_switch_ollama_model(model_id)
@@ -329,17 +330,14 @@ async def evaluate_interaction(mode_label: str, query: str, reference: str, data
         else:
             raise ValueError(f"Modo desconhecido: {mode_label}")
         
-        # Cálculo de Latência Efetiva (exceto para Frugal que já calcula)
         if mode_label != "FrugalGPT (Cascade)":
             total_latency = time.time() - start_t
         
         effective_latency = max(0.0, total_latency - load_time)
 
-        # --- LIMPEZA DE VRAM PARA O JUIZ ---
         if "ollama" in model_used or "Local" in model_used:
             await unload_all_ollama_models()
 
-        # 1. Judge Score (Reference Guided)
         judge_score = 0.0
         if answer:
             for _ in range(2):
@@ -349,10 +347,8 @@ async def evaluate_interaction(mode_label: str, query: str, reference: str, data
                     raw_quality = sum(scores)/len(scores) if scores else 0.0
                     judge_score = raw_quality * 10.0 if raw_quality <= 1.0 else raw_quality
                     break
-                except Exception:
-                    await asyncio.sleep(2)
+                except Exception: await asyncio.sleep(2)
 
-        # 2. Ground Truth
         is_correct = check_correctness(dataset, answer, reference)
 
         return {
@@ -368,8 +364,7 @@ async def evaluate_interaction(mode_label: str, query: str, reference: str, data
         return {
             "mode": mode_label, "model_used": "error",
             "latency": 0, "cost": 0, "judge_score": 0, "is_correct": 0,
-            "success": False,
-            "query": query, "answer": "", "reference": reference
+            "success": False, "query": query, "answer": "", "reference": reference
         }
 
 async def run_benchmark_suite():
@@ -377,12 +372,14 @@ async def run_benchmark_suite():
     if not tasks_data: return pd.DataFrame()
 
     results = []
-    
-    # LISTA DE MODOS PARA COMPARAÇÃO
+    # LISTA COMPLETA DE MODOS
     modes = list(LOCAL_BASELINES.keys()) + [
         "SOTA (GPT-5.1)", 
         "FrugalGPT (Cascade)", 
-        "Router (Hybrid)"
+        "Router (Hybrid)",
+        "Router (No RAG)",
+        "Router (No Re-rank)",
+        "Router (Random)"
     ]
     
     total_iterations = NUM_RUNS * len(tasks_data) * len(modes)
@@ -392,10 +389,7 @@ async def run_benchmark_suite():
         for task in tasks_data:
             for mode in modes:
                 data = await evaluate_interaction(mode, task["query"], task["reference"], task["dataset"])
-                data.update({
-                    "run_id": run, "id": task["id"],
-                    "dataset": task["dataset"], "category": task["category"]
-                })
+                data.update({"run_id": run, "id": task["id"], "dataset": task["dataset"], "category": task["category"]})
                 results.append(data)
                 pbar.update(1)
                 await asyncio.sleep(0.5) 
@@ -416,12 +410,15 @@ def generate_meta_plots(df):
     
     sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
     
-    # Paleta de Cores
+    # Paleta Estendida
     palette = {
         "Local (Gemma 4B)": "#95a5a6", # Cinza
         "SOTA (GPT-5.1)": "#3498db",   # Azul
         "FrugalGPT (Cascade)": "#9b59b6", # Roxo
-        "Router (Hybrid)": "#2ecc71"   # Verde (Destaque)
+        "Router (Hybrid)": "#2ecc71",    # Verde (Destaque)
+        "Router (No RAG)": "#f39c12",  # Laranja
+        "Router (No Re-rank)": "#e67e22", # Laranja Escuro
+        "Router (Random)": "#e74c3c"   # Vermelho
     }
 
     # 1. Judge Reliability
@@ -433,21 +430,21 @@ def generate_meta_plots(df):
     plt.savefig(f"{OUTPUT_DIR}/fig_judge_reliability.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-    # 2. Objective Accuracy
+    # 2. Objective Accuracy (Ablation View)
     plt.figure(figsize=(16, 6))
     sns.barplot(data=df_valid, x="dataset", y="is_correct", hue="mode", palette=palette, errorbar=None)
-    plt.title("Objective Accuracy (Ground Truth) by Dataset", fontweight='bold')
+    plt.title("Ablation Study: Objective Accuracy by Dataset", fontweight='bold')
     plt.ylabel("Accuracy (0.0 - 1.0)")
     plt.ylim(0, 1.0)
     plt.legend(title="Approach", bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.savefig(f"{OUTPUT_DIR}/fig_objective_accuracy.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{OUTPUT_DIR}/fig_ablation_accuracy.png", dpi=300, bbox_inches='tight')
     plt.close()
 
     # 3. Cost (Log Scale)
     df['plot_cost'] = df['cost'].apply(lambda x: x if x > 0 else 1e-6)
     plt.figure(figsize=(16, 6))
     sns.barplot(data=df, x="dataset", y="plot_cost", hue="mode", palette=palette, errorbar="sd", capsize=.1)
-    plt.title("Cost Efficiency per Dataset (Log Scale)", fontweight='bold')
+    plt.title("Cost Efficiency (Log Scale)", fontweight='bold')
     plt.ylabel("Cost per Query (USD)")
     plt.yscale("log")
     plt.ylim(bottom=1e-7)
@@ -478,22 +475,13 @@ def calculate_judge_metrics(df):
     print("⚖️ JUDGE RELIABILITY REPORT")
     print("="*60)
     print(f"Correlation (Point-Biserial): {corr:.4f} (p={p_val:.4e})")
-    
-    if corr > 0.5: strength = "Strong"
-    elif corr > 0.3: strength = "Moderate"
-    else: strength = "Weak"
-    
-    print(f"Interpretation: The judge shows {strength} alignment with ground truth.")
     print("-" * 60)
     print("Average Score when Correct:   ", df_valid[df_valid['is_correct']==1]['judge_score'].mean())
     print("Average Score when Incorrect: ", df_valid[df_valid['is_correct']==0]['judge_score'].mean())
     print("="*60)
 
 if __name__ == "__main__":
-    print("🧪 Starting Thesis Benchmark Suite (Comparative)...")
-    print(f"   - Runs: {NUM_RUNS}")
-    print(f"   - Samples/Dataset: {SAMPLES_PER_DATASET}")
-    
+    print("🧪 Starting Thesis Benchmark Suite (Full + Ablation)...")
     df_results = asyncio.run(run_benchmark_suite())
     if not df_results.empty:
         generate_meta_plots(df_results)
