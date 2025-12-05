@@ -1,67 +1,85 @@
 # -*- coding: utf-8 -*-
 """
-statistical_validation.py — Validação Estatística com Geração de Texto LaTeX
-----------------------------------------------------------------------------
-1. Carrega os dados do benchmark.
-2. Gera IDs sintéticos se necessário (Correção do KeyError).
-3. Executa testes (Shapiro-Wilk, Friedman, Wilcoxon).
-4. Gera tabelas e TEXTO DISCURSIVO em formato LaTeX pronto para a tese.
+statistical_validation.py — Universal Statistical Validation (Thesis Edition)
+-----------------------------------------------------------------------------
+1. Loads benchmark data (supports multiple baselines including FrugalGPT).
+2. Generates synthetic IDs if necessary for paired testing.
+3. Executes Friedman (Global) and Wilcoxon (Post-hoc Router vs All) tests.
+4. Generates LaTeX text in formal American English.
 """
 
 import pandas as pd
 import numpy as np
 from scipy import stats
-from tabulate import tabulate
 import logging
 import sys
 import os
 import glob
 
-# Configuração
+# Configuration
 INPUT_DIR = "thesis_results"
 ALPHA = 0.05
+TARGET_MODEL_KEY = "Router" # Keyword to identify the proposed solution
+
+# Mapping for clean LaTeX names
+NAME_MAP = {
+    "Local (Gemma 4B)": "Gemma-4B",
+    "Local (Qwen 8B)": "Qwen-8B",
+    "SOTA (GPT-5.1)": "GPT-5.1",
+    "FrugalGPT (Cascade)": "FrugalGPT",
+    "Router (Hybrid)": "Router",
+    "Router (Full)": "Router",
+    "Router (No RAG)": "Router-NoRAG",
+    "Router (Random)": "Router-Random"
+}
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("stats")
 
 def load_latest_data():
-    files = glob.glob(f"{INPUT_DIR}/raw_data_*.csv")
-    if not files:
-        logger.error(f"❌ Nenhum arquivo CSV encontrado em {INPUT_DIR}/.")
+    # Search in potential directories
+    search_dirs = [INPUT_DIR, "thesis_results_ablation"]
+    latest_file = None
+    
+    for d in search_dirs:
+        files = glob.glob(f"{d}/*data_*.csv")
+        if files:
+            current_latest = max(files, key=os.path.getctime)
+            if latest_file is None or os.path.getctime(current_latest) > os.path.getctime(latest_file):
+                latest_file = current_latest
+    
+    if not latest_file:
+        logger.error(f"❌ No CSV files found in {INPUT_DIR}/.")
         sys.exit(1)
     
-    latest_file = max(files, key=os.path.getctime)
-    logger.info(f"📂 Carregando dados de: {latest_file}")
-    
+    logger.info(f"📂 Loading data from: {latest_file}")
     df = pd.read_csv(latest_file)
     
-    # --- CORREÇÃO: Geração de ID Sintético ---
-    if 'id' not in df.columns:
-        logger.info("⚠️ Coluna 'id' não encontrada. Gerando IDs sintéticos baseados na ordem sequencial...")
-        # Sabemos que existem 3 modos por pergunta (Local, SOTA, Router)
-        # O script roda: Run -> Task -> Mode
-        # Então a cada 3 linhas, mudamos de pergunta.
-        # O ID deve reiniciar ou ser consistente entre Runs para o agrupamento funcionar.
-        
-        # Agrupa por Run e atribui um ID sequencial para cada trio de linhas
-        # Ex: Linhas 0,1,2 (Pergunta A) -> ID 0
-        #     Linhas 3,4,5 (Pergunta B) -> ID 1
-        df['id'] = df.groupby('run_id').cumcount() // 3
-    # -----------------------------------------
-
-    # Normaliza nomes
-    df["mode"] = df["mode"].map({
-        "Local (Gemma 3)": "Local",
-        "SOTA (GPT-5.1)": "SOTA",
-        "Router (Hybrid)": "Router"
-    })
+    # Normalize columns
+    if "judge_score" in df.columns and "quality" not in df.columns:
+        df.rename(columns={"judge_score": "quality"}, inplace=True)
     
-    # Pivota para pareamento (Média das runs por pergunta)
-    df_grouped = df.groupby(["id", "mode"]).agg({
+    # Apply Name Mapping
+    df["mode_clean"] = df["mode"].apply(lambda x: NAME_MAP.get(x, x))
+    
+    # Ensure ID exists for paired testing
+    if 'id' not in df.columns:
+        logger.warning("⚠️ Column 'id' missing. Generating sequential IDs based on run/mode structure...")
+        num_modes = df['mode'].nunique()
+        # Assuming data is ordered by Run -> Task -> Mode
+        df['id'] = df.groupby('run_id').cumcount() // num_modes
+
+    # Aggregation (Mean across Runs per Question)
+    # We average the results of the 5 runs for the same question ID
+    agg_dict = {
         "quality": "mean",
         "cost": "mean",
         "latency": "mean"
-    }).reset_index()
+    }
+    if "is_correct" in df.columns:
+        agg_dict["is_correct"] = "mean" # Becomes accuracy/probability (0.0 to 1.0)
+
+    df_grouped = df.groupby(["id", "mode_clean"]).agg(agg_dict).reset_index()
     
     return df_grouped
 
@@ -70,185 +88,185 @@ def calculate_cohens_d(x, y):
     ny = len(y)
     dof = nx + ny - 2
     pool_std = np.sqrt(((nx-1)*np.std(x, ddof=1) ** 2 + (ny-1)*np.std(y, ddof=1) ** 2) / dof)
+    if pool_std == 0: return 0.0
     return (np.mean(x) - np.mean(y)) / pool_std
 
 def format_p_value(p):
     if p < 0.001: return "< 0.001"
     return f"= {p:.4f}"
 
-def analyze_metric(df, metric_col, metric_name_pt):
-    """
-    Executa os testes e retorna um dicionário com todos os resultados
-    para ser usado no gerador de texto.
-    """
-    pivot = df.pivot(index="id", columns="mode", values=metric_col).dropna()
+def analyze_metric(df, metric_col, metric_name_en):
+    if metric_col not in df.columns:
+        return None
+
+    # Pivot: Index=QuestionID, Columns=Models, Values=Metric
+    pivot = df.pivot(index="id", columns="mode_clean", values=metric_col).dropna()
     
-    # Garante que temos as colunas
-    if not all(col in pivot.columns for col in ["Local", "SOTA", "Router"]):
-        logger.error(f"❌ Dados incompletos para a métrica {metric_col}. Colunas encontradas: {pivot.columns}")
-        sys.exit(1)
+    # Identify Target Column (Router)
+    router_col = next((c for c in pivot.columns if TARGET_MODEL_KEY in c and "No" not in c), None)
+    
+    if not router_col:
+        logger.error(f"❌ Target model containing '{TARGET_MODEL_KEY}' not found in pivot columns: {pivot.columns}")
+        return None
 
-    local = pivot["Local"]
-    sota = pivot["SOTA"]
-    router = pivot["Router"]
+    baselines = [c for c in pivot.columns if c != router_col]
+    
+    # 1. Normality Test (Shapiro-Wilk)
+    try:
+        _, p_shapiro = stats.shapiro(pivot[router_col])
+        is_normal = p_shapiro > ALPHA
+    except: is_normal = False
 
-    # 1. Normalidade
-    _, p_shapiro = stats.shapiro(router)
-    is_normal = p_shapiro > ALPHA
+    # 2. Global Difference Test (Friedman)
+    try:
+        all_groups = [pivot[c] for c in pivot.columns]
+        stat_fried, p_fried = stats.friedmanchisquare(*all_groups)
+        is_global_sig = p_fried < ALPHA
+    except ValueError:
+        p_fried, is_global_sig = 1.0, False
 
-    # 2. Friedman (Global)
-    stat_fried, p_fried = stats.friedmanchisquare(local, sota, router)
-    is_significant = p_fried < ALPHA
-
-    # 3. Post-hoc (Wilcoxon)
+    # 3. Post-hoc Tests (Wilcoxon Signed-Rank)
     comparisons = {}
-    pairs = [("Router", "Local"), ("Router", "SOTA")]
-    
-    for m1, m2 in pairs:
-        stat_w, p_w = stats.wilcoxon(pivot[m1], pivot[m2])
-        d = calculate_cohens_d(pivot[m1], pivot[m2])
-        diff_mean = (pivot[m1] - pivot[m2]).mean()
+    for base in baselines:
+        try:
+            # Paired test
+            stat_w, p_w = stats.wilcoxon(pivot[router_col], pivot[base])
+            d = calculate_cohens_d(pivot[router_col], pivot[base])
+            diff_mean = (pivot[router_col] - pivot[base]).mean()
+            sig = p_w < ALPHA
+        except ValueError:
+            # Handles identical data arrays
+            p_w, d, diff_mean, sig = 1.0, 0.0, 0.0, False
         
-        comparisons[f"{m1}_vs_{m2}"] = {
-            "p_val": p_w,
-            "stat": stat_w,
-            "cohen_d": d,
-            "diff_mean": diff_mean,
-            "significant": p_w < ALPHA
+        comparisons[base] = {
+            "p_val": p_w, "stat": stat_w, "cohen_d": d,
+            "diff_mean": diff_mean, "significant": sig
         }
 
     return {
-        "metric_name": metric_name_pt,
-        "shapiro_p": p_shapiro,
+        "metric_name": metric_name_en,
+        "target": router_col,
+        "shapiro_p": p_shapiro if 'p_shapiro' in locals() else 0,
         "is_normal": is_normal,
-        "friedman_stat": stat_fried,
+        "friedman_stat": stat_fried if 'stat_fried' in locals() else 0,
         "friedman_p": p_fried,
-        "is_global_sig": is_significant,
+        "is_global_sig": is_global_sig,
         "comparisons": comparisons,
-        "means": {
-            "Router": router.mean(),
-            "Local": local.mean(),
-            "SOTA": sota.mean()
-        },
-        "stds": {
-            "Router": router.std(),
-            "Local": local.std(),
-            "SOTA": sota.std()
-        }
+        "baselines": baselines
     }
 
 def generate_latex_text(results):
-    """
-    Gera o texto interpretativo em LaTeX baseado nos números.
-    """
+    if not results: return "% Metric not found\n"
+    
     m = results["metric_name"]
-    comp = results["comparisons"]
+    target = results["target"]
     
-    # Texto sobre Normalidade e Friedman
-    dist_text = "uma distribuição normal" if results["is_normal"] else "uma distribuição não-normal"
-    shapiro_tex = f"$p {format_p_value(results['shapiro_p'])}$"
+    # Introduction Paragraph
+    dist_text = "a normal distribution" if results["is_normal"] else "a non-normal distribution"
+    fried_res = "statistically significant differences" if results["is_global_sig"] else "no significant differences"
     
-    friedman_res = "diferenças estatisticamente significativas" if results["is_global_sig"] else "ausência de diferenças significativas"
-    friedman_tex = f"$\chi^2 = {results['friedman_stat']:.2f}, p {format_p_value(results['friedman_p'])}$"
-
     text = f"""
 % -------------------------------------------------------
-% Resultados para: {m}
+% Statistical Analysis: {m}
 % -------------------------------------------------------
+The analysis of \\textbf{{{m}}} compared the proposed \\textit{{{target}}} against multiple baselines. 
+The Shapiro-Wilk test indicated {dist_text} for the Router data ($p {format_p_value(results['shapiro_p'])}$).
+The Friedman test confirmed {fried_res} among the groups ($\chi^2 = {results['friedman_stat']:.2f}, p {format_p_value(results['friedman_p'])}$).
 
-A análise estatística da métrica de \\textbf{{{m}}} iniciou-se com o teste de Shapiro-Wilk, que indicou {dist_text} para os dados do Router ({shapiro_tex}). 
-Dada a natureza das distribuições e o pareamento das amostras (mesmas perguntas submetidas a diferentes modelos), optou-se por testes não-paramétricos.
-
-O teste de Friedman revelou {friedman_res} entre as três abordagens comparadas ({friedman_tex}). 
-Consequentemente, procedeu-se à análise post-hoc utilizando o teste de postos sinalizados de Wilcoxon com correção de Bonferroni para comparações múltiplas.
+Post-hoc paired Wilcoxon signed-rank tests revealed:
+\\begin{{itemize}}
 """
-
-    # Texto sobre Router vs Local
-    rvl = comp["Router_vs_Local"]
-    rvl_sig = "significativamente superior" if rvl["significant"] and rvl["diff_mean"] > 0 else \
-              "significativamente inferior" if rvl["significant"] and rvl["diff_mean"] < 0 else \
-              "estatisticamente equivalente"
     
-    # Ajuste semântico para Latência/Custo (menor é melhor) vs Qualidade (maior é melhor)
-    if "Custo" in m or "Latência" in m:
-        if rvl["diff_mean"] < 0: rvl_sig = "significativamente melhor (menor)"
-        elif rvl["diff_mean"] > 0: rvl_sig = "significativamente pior (maior)"
-    
-    text += f"""
-Na comparação direta entre o \\textbf{{Router Híbrido}} e o modelo \\textbf{{Local}}, o Router mostrou-se {rvl_sig} 
-($Z = {rvl['stat']:.1f}, p {format_p_value(rvl['p_val'])}$), com um tamanho de efeito de Cohen's $d = {rvl['cohen_d']:.2f}$.
-"""
+    table_rows = []
+    # Sort order: Local -> Frugal -> SOTA -> Ablations
+    def sort_key(name):
+        if "Gemma" in name or "Qwen" in name: return 0
+        if "Frugal" in name: return 1
+        if "GPT" in name or "SOTA" in name: return 2
+        return 3
+        
+    sorted_baselines = sorted(results["baselines"], key=sort_key)
 
-    # Texto sobre Router vs SOTA
-    rvs = comp["Router_vs_SOTA"]
-    if not rvs["significant"]:
-        rvs_text = "não apresentou diferença estatisticamente significativa, suportando a hipótese de equivalência/não-inferioridade"
-    else:
-        if "Custo" in m and rvs["diff_mean"] < 0:
-            rvs_text = "apresentou uma redução estatisticamente significativa"
-        elif "Qualidade" in m and rvs["diff_mean"] < 0:
-            rvs_text = "apresentou uma leve degradação estatisticamente significativa, porém com tamanho de efeito reduzido"
+    for base in sorted_baselines:
+        comp = results["comparisons"][base]
+        
+        if not comp["significant"]:
+            interp = "statistically equivalent"
         else:
-            rvs_text = "apresentou diferença significativa"
+            # Determine directionality
+            is_higher = comp["diff_mean"] > 0
+            
+            # For Quality/Accuracy: Higher is Better
+            if "Quality" in m or "Accuracy" in m:
+                interp = "superior" if is_higher else "inferior"
+            # For Cost/Latency: Higher is Worse
+            else:
+                interp = "less efficient (higher)" if is_higher else "more efficient (lower)"
 
-    text += f"""
-Em relação ao estado da arte (\\textbf{{SOTA}}), a abordagem proposta {rvs_text} 
-($Z = {rvs['stat']:.1f}, p {format_p_value(rvs['p_val'])}, d = {rvs['cohen_d']:.2f}$).
-"""
+        text += f"    \\item \\textbf{{{target} vs. {base}}}: The Router proved to be \\textbf{{{interp}}} ($Z = {comp['stat']:.1f}, p {format_p_value(comp['p_val'])}, d={comp['cohen_d']:.2f}$).\n"
+        
+        sig_mark = '*' if comp['significant'] else 'ns'
+        table_rows.append([
+            f"{target} vs. {base}",
+            f"{comp['diff_mean']:.4f}",
+            f"{format_p_value(comp['p_val'])}",
+            f"{comp['cohen_d']:.2f}",
+            sig_mark
+        ])
+
+    text += "\\end{itemize}\n"
     
-    # Tabela Resumo em LaTeX
+    # LaTeX Table
     text += f"""
-\\begin{{table}}[h]
+\\begin{{table}}[H]
 \\centering
-\\caption{{Resultados Estatísticos: {m}}}
+\\caption{{Statistical Comparison: {m}}}
 \\label{{tab:stats_{m.split()[0].lower()}}}
 \\begin{{tabular}}{{lcccc}}
-\\hline
-\\textbf{{Comparação}} & \\textbf{{Diferença Média}} & \\textbf{{$p$-value}} & \\textbf{{Cohen's $d$}} & \\textbf{{Sig.}} \\\\ \\hline
-Router vs. Local & {rvl['diff_mean']:.4f} & {format_p_value(rvl['p_val'])} & {rvl['cohen_d']:.2f} & {'*' if rvl['significant'] else 'ns'} \\\\
-Router vs. SOTA  & {rvs['diff_mean']:.4f} & {format_p_value(rvs['p_val'])} & {rvs['cohen_d']:.2f} & {'*' if rvs['significant'] else 'ns'} \\\\ \\hline
-\\end{{tabular}}
-\\end{{table}}
+\\toprule
+\\textbf{{Comparison}} & \\textbf{{Mean Diff.}} & \\textbf{{$p$-value}} & \\textbf{{Cohen's $d$}} & \\textbf{{Sig.}} \\\\ \\midrule
 """
+    for row in table_rows:
+        text += f"{row[0]} & {row[1]} & {row[2]} & {row[3]} & {row[4]} \\\\ \n"
+    text += "\\bottomrule\n\\end{tabular}\n\\end{table}\n"
+    
     return text
 
 def main():
+    print("="*80)
+    print("🚀 THESIS STATISTICAL GENERATOR (Multi-Model + FrugalGPT)")
+    print("="*80)
+    
     df = load_latest_data()
+    print(f"ℹ️  Models found: {df['mode_clean'].unique()}")
     
-    print("="*80)
-    print("🚀 GERADOR DE RESULTADOS PARA TESE (LaTeX)")
-    print("="*80)
+    sections = []
+    
+    # 1. Objective Accuracy (Ground Truth) - Most Important
+    res_acc = analyze_metric(df, "is_correct", "Objective Accuracy")
+    if res_acc: sections.append(generate_latex_text(res_acc))
+    
+    # 2. Subjective Quality (Judge)
+    res_qual = analyze_metric(df, "quality", "Judge Quality Score")
+    if res_qual: sections.append(generate_latex_text(res_qual))
+    
+    # 3. Cost
+    res_cost = analyze_metric(df, "cost", "Inference Cost")
+    if res_cost: sections.append(generate_latex_text(res_cost))
+    
+    # 4. Latency
+    res_lat = analyze_metric(df, "latency", "Latency")
+    if res_lat: sections.append(generate_latex_text(res_lat))
 
-    # 1. Qualidade
-    res_qual = analyze_metric(df, "quality", "Qualidade da Resposta")
-    latex_qual = generate_latex_text(res_qual)
-    
-    # 2. Custo
-    res_cost = analyze_metric(df, "cost", "Custo de Inferência")
-    latex_cost = generate_latex_text(res_cost)
-    
-    # 3. Latência
-    res_lat = analyze_metric(df, "latency", "Latência de Resposta")
-    latex_lat = generate_latex_text(res_lat)
-
-    # Salvar em arquivo .tex
-    output_file = f"{INPUT_DIR}/resultados_estatisticos.tex"
+    # Save to file
+    output_file = f"{INPUT_DIR}/statistical_report_final.tex"
     with open(output_file, "w", encoding="utf-8") as f:
-        f.write("% Arquivo gerado automaticamente por statistical_validation.py\n")
-        f.write("\\section{Análise de Qualidade}\n")
-        f.write(latex_qual)
-        f.write("\n\\section{Análise de Custo}\n")
-        f.write(latex_cost)
-        f.write("\n\\section{Análise de Latência}\n")
-        f.write(latex_lat)
+        f.write("% Generated by statistical_validation.py\n")
+        for sec in sections:
+            f.write(sec + "\n")
 
-    print(f"\n✅ Arquivo LaTeX gerado com sucesso: {output_file}")
-    print("Copie o conteúdo deste arquivo e cole no capítulo de Resultados da sua tese.")
+    print(f"\n✅ LaTeX file generated: {output_file}")
     print("="*80)
-    
-    # Preview no console
-    print("\n--- PREVIEW (Qualidade) ---")
-    print(latex_qual[:500] + "...\n")
 
 if __name__ == "__main__":
     main()

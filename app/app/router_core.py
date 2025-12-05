@@ -3,6 +3,10 @@
 router_core.py — Multimodal + UM-RAG + Meta-bandit + UQ + Background Tasks
 --------------------------------------------------------------------------
 O Core do sistema de roteamento.
+
+ATUALIZAÇÃO (Tese):
+- Implementação de "Risk-Aware Hybrid Sampling" para o Juiz.
+- Combina Monte Carlo Adaptativo com Detecção de Incerteza.
 """
 
 from __future__ import annotations
@@ -13,6 +17,8 @@ import json
 import asyncio
 import threading
 import uuid
+import math
+import random
 from typing import Dict, Tuple, Any, Optional
 
 import numpy as np
@@ -24,7 +30,7 @@ from .providers_async import call_model, _ensure_ollama_model
 from .router_strategy import choose_top2_models
 from .semantic_cache import check_cache, store_cache
 from .settings_dynamic import settings
-from .bandits import select_model, bandit_update, compute_reward
+from .bandits import select_model, bandit_update, compute_reward, _get_ctx_stats
 from .judges import judge_answer
 from .metrics_collector import update_model_metrics
 from .rag_local import build_augmented_prompt
@@ -68,13 +74,12 @@ LOG_RETENTION_DAYS = int(settings.get("QUERY_LOG_RETENTION_DAYS", 7))
 rds = get_redis()
 
 # ============================================================
-# 🧠 RECUPERAÇÃO DINÂMICA DE PESOS (NSGA-II) - CORRIGIDO
+# 🧠 RECUPERAÇÃO DINÂMICA DE PESOS (NSGA-II)
 # ============================================================
 
 def get_dynamic_strategy_weights(modality: str) -> Dict[str, float]:
     """
     Recupera os pesos da estratégia (Objetivos) diretamente do Settings Dinâmico.
-    Isso permite que o Dashboard ou o NSGA Updater ajustem o comportamento do Router em tempo real.
     """
     return {
         "w_quality": settings.NSGA_W_QUALITY,
@@ -227,7 +232,6 @@ async def route_and_answer(
     uncertainty_score = 0.5 # Valor neutro padrão
     try:
         # Calcula quão "nova" é a query em relação ao conhecimento do bandit
-        # Executa em thread para não bloquear
         uncertainty_score = await asyncio.to_thread(get_uncertainty_score, query, modality)
     except Exception as e:
         logger.warning(f"[router] UQ fail: {e}")
@@ -254,7 +258,7 @@ async def route_and_answer(
     # Estratégia + Bandit (Considerando Incerteza e Pesos)
     top2 = choose_top2_models(
         candidates=valid_models,
-        weights=current_weights, # <--- CORRIGIDO: Passando os pesos
+        weights=current_weights,
         query_text=query, 
         modality=modality,
         uncertainty_score=uncertainty_score
@@ -299,6 +303,9 @@ async def route_and_answer(
 
     latency_s = round(time.time() - start_time, 3)
     
+    # Extrai load_time do meta (se existir)
+    load_time_s = meta.get("load_time", 0.0) if isinstance(meta, dict) else 0.0
+
     # ============================================================
     # 7. Cálculo Preciso de Custo
     # ============================================================
@@ -333,11 +340,13 @@ async def route_and_answer(
         "modality": modality,
         "image_output_b64": meta_safe.get("image_output_b64"),
         "latency_s": latency_s,
+        "load_time_s": load_time_s,
         "cost_per_1k": total_cost,
         "metadata": {
             "raw_payload": meta_safe.get("raw_payload"),
             "prompt_tokens": p_tok,
-            "completion_tokens": c_tok
+            "completion_tokens": c_tok,
+            "load_time": load_time_s
         },
         "route": {
             "chosen_model": chosen,
@@ -374,34 +383,77 @@ async def process_background_feedback(
     """
     Executado após a resposta ser enviada ao usuário.
     Responsável por: Juízes, Reward, Bandit Update (com UQ learning), Cache Store, Logging.
+    
+    ATUALIZADO: Risk-Aware Hybrid Sampling (Monte Carlo + Incerteza).
     """
     try:
-        # 1. Avaliação
-        if len(answer) < 5 or "Erro" in answer:
-            final_quality = 1.0
+        # 1. Recupera estatísticas atuais do modelo
+        stats = _get_ctx_stats("global")
+        model_stats = stats.get(chosen_model, {})
+        n_samples = model_stats.get("count", 0)
+        
+        # 2. Cálculo da Probabilidade Base (Decaimento)
+        if n_samples < 5:
+            base_prob = 1.0 # Cold Start: Julga tudo
         else:
+            base_prob = 1.0 / math.sqrt(n_samples)
+
+        # 3. Fator de Incerteza (Risk-Aware)
+        # Recalcula UQ (rápido pois embedding é cacheado)
+        try:
+            uq_score = await asyncio.to_thread(get_uncertainty_score, query, modality)
+        except:
+            uq_score = 0.5
+            
+        # Se incerteza alta (>0.4), aumenta drasticamente a chance de julgar
+        uq_factor = 1.0
+        if uq_score > 0.4:
+            uq_factor = 5.0 
+
+        # 4. Fator de Confiança SOTA
+        # Se é GPT-4/5, confiamos mais (reduz amostragem para economizar)
+        sota_factor = 1.0
+        if "gpt-5" in chosen_model or "gpt-4" in chosen_model or "claude" in chosen_model:
+            sota_factor = 0.1 
+        
+        # Probabilidade Final
+        prob_judge = min(1.0, base_prob * uq_factor * sota_factor)
+        # Piso mínimo de segurança
+        prob_judge = max(settings.JUDGE_MIN_SAMPLE_RATE, prob_judge)
+
+        # 5. O Sorteio
+        should_judge = random.random() < prob_judge
+        
+        final_quality = 0.0
+        reward = 0.0
+
+        if should_judge:
             try:
+                logger.info(f"[Background] 🎲 Sampling Judge for {chosen_model} (p={prob_judge:.2f}, UQ={uq_score:.2f})")
                 judge_scores = await judge_answer(query, answer)
                 valid_scores = [s["score"] for s in judge_scores if "score" in s]
                 q_mean = float(np.mean(valid_scores)) if valid_scores else 5.0
                 final_quality = round(q_mean * 10.0, 2)
             except Exception:
                 final_quality = 5.0
+        else:
+            # Se não julgamos, usamos a média histórica para não quebrar o gráfico
+            logger.info(f"[Background] ⏩ Skipping Judge for {chosen_model} (p={prob_judge:.2f})")
+            final_quality = model_stats.get("mean", 0.5) * 10.0
 
-        # 2. Reward (NSGA-II weights)
+        # 6. Reward (NSGA-II weights)
         try:
             reward = compute_reward(chosen_model, final_quality, latency_s, cost_val)
         except Exception:
             reward = 0.0
 
-        # 3. Bandit Update (AQUI O UQ APRENDE!)
-        # O bandit_update chama _update_centroids se o reward for alto
+        # 7. Bandit Update (AQUI O UQ APRENDE!)
         try:
             bandit_update(model=chosen_model, query=query, reward=reward, modality=modality)
         except Exception as e:
             logger.warning(f"[Background] Bandit fail: {e}")
 
-        # 4. EMA Update
+        # 8. EMA Update
         try:
             global EMA_HISTORY
             alpha = 0.2
@@ -426,7 +478,7 @@ async def process_background_feedback(
         except Exception:
             pass
 
-        # 5. Cache (Apenas se for bom)
+        # 9. Cache (Apenas se for bom)
         if final_quality >= 7.0:
             try:
                 await store_cache(
@@ -436,7 +488,7 @@ async def process_background_feedback(
             except Exception:
                 pass
 
-        # 6. Metrics
+        # 10. Metrics
         try:
             ROUTER_QUALITY_AVG.labels(model=chosen_model).set(final_quality)
             if "ollama" in chosen_model:
@@ -444,7 +496,7 @@ async def process_background_feedback(
         except Exception:
             pass
 
-        # 7. Log Definitivo
+        # 11. Log Definitivo
         try:
             q_emb = await asyncio.to_thread(embed_text, query)
             insert_query_log(
@@ -465,8 +517,6 @@ async def process_background_feedback(
             )
         except Exception as e:
             logger.warning(f"[Background] Log fail: {e}")
-        
-        logger.info(f"[Background] OK | {chosen_model} | Q:{final_quality} | R:{reward:.2f}")
 
     except Exception as e:
         logger.exception(f"[Background] Critical fail: {e}")

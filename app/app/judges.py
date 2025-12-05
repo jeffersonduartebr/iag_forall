@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-judges.py (CORRIGIDO: Persistência de Logs Detalhados)
-----------------------------------------------------
+judges.py (VERSÃO FINAL: Binary Verdict + Tie-Breaker Meta-Judge)
+-----------------------------------------------------------------
 Sistema de avaliação de respostas.
 
-Correções:
-✔ Grava em 'judge_logs' (detalhe) além de 'judge_performance_log' (stats).
-✔ Usa 'await' corretamente.
+Mudanças Arquiteturais:
+1. Avaliação Binária: O juiz decide apenas entre CORRECT (10) ou INCORRECT (0).
+2. Chain-of-Thought (CoT): Obrigatório para evitar "chutes".
+3. Meta-Juiz de Desempate: Acionado apenas em conflito direto (0 vs 10).
 """
 
 from __future__ import annotations
@@ -57,11 +58,13 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 ALPHA_DECAY = float(settings.get("JUDGES_FITNESS_DECAY", 0.90))
 MIN_FITNESS = float(settings.get("JUDGES_MIN_FITNESS", 0.30))
 CONSIST_WINDOW_MIN = int(settings.get("JUDGES_WINDOW_MIN", 180))
-DISAGREE_PERCENT = float(settings.get("JUDGES_DISAGREE_PERCENT", 0.20))
 
+# Meta-Juiz preferencial (deve ser um modelo forte)
 META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "openai/gpt-4o-mini"))
-MAX_TOKENS_JUDGE = int(settings.get("JUDGES_MAX_TOKENS", 32))
-TEMP_JUDGE = float(settings.get("JUDGES_TEMPERATURE", 0.2))
+
+# Aumentado para permitir CoT (Raciocínio)
+MAX_TOKENS_JUDGE = 512 
+TEMP_JUDGE = 0.0 # Temperatura zero para determinismo máximo
 
 W_FIT = float(settings.get("JUDGES_WEIGHT_FITNESS", 0.6))
 W_QC = float(settings.get("JUDGES_WEIGHT_QC", 0.4))
@@ -124,46 +127,8 @@ def _image_hash_from_b64(image_b64: Optional[str]) -> Optional[str]:
 # ============================================================
 
 def _ensure_judge_logs_table() -> None:
-    ddl_logs = """
-        CREATE TABLE IF NOT EXISTS judge_logs (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            query TEXT,
-            answer TEXT,
-            judge_model VARCHAR(255),
-            score_before FLOAT,
-            fallback_model VARCHAR(255),
-            score_after FLOAT,
-            event_type VARCHAR(50),
-            modality VARCHAR(32) DEFAULT 'text',
-            image_hash VARCHAR(128) NULL
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-          COLLATE=utf8mb4_unicode_ci;
-    """
-
-    ddl_perf = """
-        CREATE TABLE IF NOT EXISTS judge_performance_log (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            judge_model VARCHAR(255) NOT NULL,
-            avg_score FLOAT DEFAULT 0,
-            avg_latency FLOAT DEFAULT 0,
-            avg_cost FLOAT DEFAULT 0,
-            consistency FLOAT DEFAULT 0,
-            fitness FLOAT DEFAULT 0,
-            window_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            window_end TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            INDEX idx_judge_model (judge_model),
-            INDEX idx_window_end (window_end)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """
-
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(ddl_logs))
-            conn.execute(text(ddl_perf))
-    except SQLAlchemyError as exc:
-        logger.warning("[Judges] Falha ao criar tabelas: %s", exc)
+    # Assume-se que o db_manager.py ou alembic já criou as tabelas
+    pass 
 
 
 # ============================================================
@@ -175,8 +140,6 @@ def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
     stats: Dict[str, JudgeStats] = {}
 
     try:
-        _ensure_judge_logs_table()
-
         with engine.connect() as conn:
             rs = conn.execute(
                 text(
@@ -299,9 +262,7 @@ def heuristic_score(answer: str) -> float:
 # ============================================================
 
 def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitness):
-    """Salva estatísticas de performance do juiz."""
     try:
-        _ensure_judge_logs_table()
         with engine.begin() as conn:
             conn.execute(
                 text(
@@ -322,9 +283,7 @@ def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitne
         logger.warning("[Judges] persist metrics fail: %s", exc)
 
 def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=None):
-    """Salva o LOG detalhado do julgamento individual."""
     try:
-        # Trunca textos muito longos para economizar banco
         q_short = query[:2000] if query else ""
         a_short = answer[:4000] if answer else ""
         
@@ -395,84 +354,126 @@ async def _describe_image_if_needed(image_b64: Optional[str], modality: str) -> 
 
 
 # ============================================================
-# ⚖️ Core LLM scoring
+# ⚖️ Core LLM scoring (XML + BINARY + META-JUDGE)
 # ============================================================
 
-_SCORE_RE = re.compile(r"(\d+(?:\.\d+)?)(?:\s*/\s*10)?")
-
-def _extract_score(text: str) -> float:
+def _extract_binary_verdict(text: str) -> float:
+    """
+    Extrai o veredito binário da resposta do juiz.
+    Retorna 10.0 (CORRECT) ou 0.0 (INCORRECT).
+    """
     if not text: return 0.0
-    clean = text.strip().lower()
-    m = _SCORE_RE.search(clean)
-    if m:
-        try:
-            return float(m.group(1))
-        except:
-            pass
-            
-    if any(w in clean for w in ["excelente", "ótima"]): return 9.0
-    if any(w in clean for w in ["boa", "adequada"]): return 7.0
-    if any(w in clean for w in ["regular", "parcial"]): return 5.0
-    if any(w in clean for w in ["ruim", "fraca"]): return 3.0
+    
+    # 1. Tenta extrair de XML (Mais robusto)
+    match = re.search(r"<verdict>\s*(.*?)\s*</verdict>", text, re.IGNORECASE | re.DOTALL)
+    if match:
+        content = match.group(1).strip().upper()
+        if "INCORRECT" in content: return 0.0
+        if "CORRECT" in content: return 10.0
+    
+    # 2. Fallback: Procura no texto inteiro
+    text_upper = text.upper()
+    if "VERDICT: INCORRECT" in text_upper or "VEREDITO: INCORRETO" in text_upper: return 0.0
+    if "VERDICT: CORRECT" in text_upper or "VEREDITO: CORRETO" in text_upper: return 10.0
+        
     return 0.0
 
 
-async def _meta_evaluate(query, answer, pair_scores, base_prompt):
-    judge_models = getattr(settings, "JUDGE_MODELS", []) or [META_JUDGE_HINT]
-    stats = _load_judge_stats(CONSIST_WINDOW_MIN)
+async def _meta_evaluate_binary(query, answer, conflicting_verdicts, base_prompt, reference=None):
+    """
+    Meta-Juiz para desempate binário.
+    Acionado quando há conflito direto (0 vs 10).
+    """
+    meta_model = META_JUDGE_HINT
+    
+    v1_model, v1_score = conflicting_verdicts[0]
+    v2_model, v2_score = conflicting_verdicts[1]
+    
+    v1_text = "CORRETO" if v1_score > 5 else "INCORRETO"
+    v2_text = "CORRETO" if v2_score > 5 else "INCORRETO"
 
-    scored_all = [
-        (m, _score_candidate(stats.get(m, JudgeStats(m)))) for m in judge_models
-    ]
-    scored_all.sort(key=lambda x: x[1], reverse=True)
+    ref_block = f"\nGABARITO OFICIAL: {reference}\n" if reference else ""
 
-    candidates = [META_JUDGE_HINT] + [m for m, _ in scored_all[:3]]
+    arb_prompt = f"""
+Você é um Juiz Supremo de IA. Existe um conflito entre dois avaliadores sobre a resposta abaixo.
+Sua tarefa é decidir quem está certo.
 
-    a, b = pair_scores
-    arb_prompt = (
-        base_prompt
-        + f"\n\nNotas preliminares:"
-          f"\n- {a[0]}: {a[1]:.2f}/10"
-          f"\n- {b[0]}: {b[1]:.2f}/10"
-          f"\nReavalie e responda somente com um número."
-    )
+PERGUNTA: {query}
+{ref_block}
+RESPOSTA DO MODELO: {answer}
 
-    for cm in candidates[:2]:
-        try:
-            text_out, _ = await call_model(
-                model=cm,
-                prompt=arb_prompt,
-                temperature=TEMP_JUDGE,
-                max_tokens=MAX_TOKENS_JUDGE,
-            )
-            n10 = _extract_score(text_out)
-            return max(0.0, min(n10 / 10.0, 1.0))
-        except:
-            continue
-    return 0.0
+--- CONFLITO ---
+Avaliador 1 ({v1_model}): Veredito {v1_text}
+Avaliador 2 ({v2_model}): Veredito {v2_text}
+----------------
+
+INSTRUÇÕES:
+1. Analise a resposta friamente em relação à pergunta (e ao gabarito, se houver).
+2. Decida se a resposta é FACTUALMENTE CORRETA ou INCORRETA.
+3. Dê o veredito final de desempate.
+
+SAÍDA OBRIGATÓRIA:
+<reasoning>
+Explique quem está certo e por quê.
+</reasoning>
+<verdict>
+CORRECT ou INCORRECT
+</verdict>
+"""
+
+    try:
+        text_out, _ = await call_model(
+            model=meta_model,
+            prompt=arb_prompt,
+            temperature=0.0,
+            max_tokens=512,
+        )
+        return _extract_binary_verdict(text_out)
+    except Exception as e:
+        logger.error(f"[MetaJudge] Falha: {e}")
+        return 0.0
 
 
-async def _llm_pair_score(query, answer, use_rag, modality, image_b64):
+async def _llm_pair_score(query, answer, use_rag, modality, image_b64, reference=None):
     ctx = await get_rag_context(query) if use_rag else ""
     img_desc = await _describe_image_if_needed(image_b64, modality)
 
-    rag_block = f"\nContexto adicional:\n{ctx}\n" if ctx else ""
-    img_block = ""
-    if image_b64:
-        img_block = "\nO usuário enviou uma imagem.\n"
-        if img_desc:
-            img_block += f"Descrição automática:\n{img_desc}\n"
-            
-    ih = _image_hash_from_b64(image_b64)
+    rag_block = f"\nCONTEXTO ADICIONAL (RAG):\n{ctx}\n" if ctx else ""
+    img_block = f"\nDESCRIÇÃO DA IMAGEM:\n{img_desc}\n" if img_desc else ""
+    
+    # --- ESTRATÉGIA 1: REFERENCE-GUIDED ---
+    if reference:
+        ref_block = f"\nGABARITO OFICIAL (GROUND TRUTH): {reference}\n"
+        task_desc = "Compare a RESPOSTA DO MODELO com o GABARITO OFICIAL."
+    else:
+        ref_block = ""
+        task_desc = "Avalie a precisão factual e lógica da resposta."
 
-    prompt = (
-        "Você é um avaliador técnico de respostas de IA.\n"
-        "Avalie de 0 a 10 apenas a CORREÇÃO, CLAREZA e RELEVÂNCIA.\n\n"
-        f"Modalidade: {modality}\n\n"
-        f"Pergunta: {query}\n\nResposta: {answer}\n\n"
-        f"{rag_block}{img_block}"
-        "Responda SOMENTE com um número de 0 a 10."
-    )
+    # --- ESTRATÉGIA 3: BINARY CLASSIFICATION + CoT ---
+    prompt = f"""
+Você é um juiz técnico imparcial. Sua tarefa é avaliar se a resposta do modelo está CORRETA ou INCORRETA.
+
+PERGUNTA: {query}
+{ref_block}
+{rag_block}
+{img_block}
+RESPOSTA DO MODELO: {answer}
+
+### INSTRUÇÕES DE AVALIAÇÃO:
+1. Pense passo a passo dentro da tag <reasoning>.
+2. {task_desc}
+3. Ignore o estilo, tom ou tamanho do texto. Foque apenas na FATUALIDADE e LÓGICA.
+4. Se a resposta final contradizer o gabarito ou contiver erros factuais graves, o veredito é INCORRECT.
+5. Se a resposta final estiver correta (mesmo que breve), o veredito é CORRECT.
+
+### FORMATO DE SAÍDA OBRIGATÓRIO:
+<reasoning>
+Descreva aqui os erros ou acertos encontrados.
+</reasoning>
+<verdict>
+CORRECT ou INCORRECT
+</verdict>
+"""
 
     judge_models_all = getattr(settings, "JUDGE_MODELS", []) or ["openai/gpt-4o-mini"]
     stats = _load_judge_stats(CONSIST_WINDOW_MIN)
@@ -485,20 +486,21 @@ async def _llm_pair_score(query, answer, use_rag, modality, image_b64):
             text_out, meta = await call_model(
                 model=sj.model,
                 prompt=prompt,
-                temperature=TEMP_JUDGE,
+                temperature=0.0, # Determinístico
                 max_tokens=MAX_TOKENS_JUDGE,
             )
-            score10 = _extract_score(text_out)
-            score01 = max(0.0, min(score10 / 10.0, 1.0))
+            
+            # Extração Binária (10.0 ou 0.0)
+            score10 = _extract_binary_verdict(text_out)
+            score01 = score10 / 10.0
 
             lat = float(meta.get("latency", 2.0))
             cost = float(meta.get("cost_per_1k", 0.001))
 
             speed_term = 1.0 - min(lat, 10.0) / 10.0
             fitness = (score01 * 0.7) + (speed_term * 0.3)
-            consistency = 1.0 - abs(score01 - 0.5)
+            consistency = 1.0 
 
-            # 1. Grava estatísticas agregadas
             _persist_judge_metrics(
                 judge_model=sj.model,
                 score=score01,
@@ -508,14 +510,13 @@ async def _llm_pair_score(query, answer, use_rag, modality, image_b64):
                 fitness=fitness,
             )
             
-            # 2. Grava o log DETALHADO (AQUI ERA O PONTO FALTANTE)
             _persist_judge_log(
                 query=query,
                 answer=answer,
                 judge_model=sj.model,
-                score=score10, # Salva nota 0-10 para legibilidade
+                score=score10,
                 modality=modality,
-                image_hash=ih
+                image_hash=None
             )
 
             results.append((sj.model, score10, score01, meta))
@@ -524,32 +525,46 @@ async def _llm_pair_score(query, answer, use_rag, modality, image_b64):
             logger.warning("[Judges] Falha juiz %s: %s", sj.model, exc)
             results.append((sj.model, 0.0, 0.0, {"latency": 5.0}))
 
-    if len(results) >= 2:
-        n1, n2 = results[0][1], results[1][1]
-        bigger, smaller = max(n1, n2), min(n1, n2)
-        if bigger > 0 and (bigger - smaller) / bigger >= DISAGREE_PERCENT:
-            meta = await _meta_evaluate(
-                query, answer, [(results[0][0], n1), (results[1][0], n2)], prompt
-            )
-            base = (results[0][2] + results[1][2]) / 2.0
-            return round(0.6 * meta + 0.4 * base, 3)
+    if not results:
+        return 0.0
 
-        return round((results[0][2] + results[1][2]) / 2.0, 3)
+    # --- LÓGICA DE DESEMPATE (META-JUIZ) ---
+    if len(results) == 1:
+        return results[0][1] # score01
 
-    return results[0][2] if results else 0.0
+    score_a = results[0][2] # score01
+    score_b = results[1][2] # score01
+
+    # Se houver conflito (0 vs 1)
+    if score_a != score_b:
+        logger.info(f"[Judges] Conflito ({results[0][0]}={score_a} vs {results[1][0]}={score_b}). Chamando Meta-Juiz.")
+        
+        conflicting_data = [
+            (results[0][0], results[0][1]), 
+            (results[1][0], results[1][1])
+        ]
+        
+        final_score_10 = await _meta_evaluate_binary(
+            query, answer, conflicting_data, prompt, reference
+        )
+        return final_score_10 / 10.0
+
+    # Se concordaram
+    return score_a
 
 
 # ============================================================
 # 🌐 API pública
 # ============================================================
 
-async def llm_based_score(query, answer, use_rag, modality, image_b64):
+async def llm_based_score(query, answer, use_rag, modality, image_b64, reference=None):
     return await _llm_pair_score(
         query=query,
         answer=answer,
         use_rag=use_rag,
         modality=modality,
         image_b64=image_b64,
+        reference=reference
     )
 
 
@@ -559,6 +574,7 @@ async def judge_answer(
     use_rag: bool = False,
     modality: str = "text",
     image_b64: Optional[str] = None,
+    reference: Optional[str] = None
 ) -> List[Dict[str, Any]]:
 
     if not answer or not isinstance(answer, str):
@@ -579,6 +595,7 @@ async def judge_answer(
             use_rag=use_rag,
             modality=modality,
             image_b64=image_b64,
+            reference=reference
         )
         results.append({"judge_id": "llm", "score": round(score_llm, 3)})
 

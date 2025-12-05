@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-settings_dynamic.py (VERSÃO FINAL CORRIGIDA: PubSub sem Timeout + NSGA Weights + RAG Configs)
+settings_dynamic.py (VERSÃO FINAL: Com Configuração de Amostragem)
 --------------------------------------------------------------------------
 Carrega configurações com fallback em camadas.
 """
@@ -208,10 +208,11 @@ class DynamicSettings:
 
         # Judges
         "JUDGES_ENABLED": "1",
-        "JUDGES_MODE": "hybrid",
+        "JUDGES_MODE": "llm",
         "JUDGES_LOCAL_MODEL": "ollama/phi4:latest",
         "JUDGES_REMOTE_MODEL": "gpt-5-mini",
         "JUDGES_TIMEOUT_S": "15",
+        "JUDGE_MIN_SAMPLE_RATE": "0.05", # <--- NOVO: Mínimo 5% de amostragem
 
         # Ollama
         "OLLAMA_BASE_URL": "http://ollama:11434",
@@ -229,6 +230,7 @@ class DynamicSettings:
             "llama3.2:3b",
             "llama3:8b",
             "llava:7b",
+            "llama3.2-vision:11b",
             "llava-llama3:8b",
             "granite3.2-vision:2b",
         ]),
@@ -384,6 +386,8 @@ class DynamicSettings:
     def JUDGES_REMOTE_MODEL(self) -> str: return self.get("JUDGES_REMOTE_MODEL")
     @property
     def JUDGES_TIMEOUT_S(self) -> int: return int(self.get("JUDGES_TIMEOUT_S"))
+    @property
+    def JUDGE_MIN_SAMPLE_RATE(self) -> float: return float(self.get("JUDGE_MIN_SAMPLE_RATE", 0.05))
 
     # Ollama
     @property
