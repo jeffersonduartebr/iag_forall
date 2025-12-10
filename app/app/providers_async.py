@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-providers_async.py (ATUALIZADO: Debugging Avançado + Resiliência)
+providers_async.py (FINAL: Suporte a Reasoning/Thinking Explícito)
 ------------------------------------------------------------------
 Implementação Robusta, Assíncrona e Resiliente de TODOS os provedores.
 
 Melhorias:
-- Exponential Backoff with Jitter para Rate Limits.
-- Logging detalhado com Traceback para erros vazios.
-- Timeout estendido para Ollama (Cold Start).
+- Injeção automática de instrução <think> para modelos de raciocínio.
+- Extração e separação do pensamento (CoT) da resposta final.
+- Timeout estendido para 20 min (1200s) para evitar erros de Cold Start.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ import logging
 import asyncio
 import base64
 import json
-import traceback  # <--- Adicionado para debug profundo
+import traceback
+import re
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
 
@@ -72,11 +73,10 @@ logger = logging.getLogger("providers_async")
 # 1. ESTRATÉGIA DE RETRY (RATE LIMITS)
 # ==============================================================================
 
-# Lista de exceções que indicam sobrecarga ou rate limit
 RETRYABLE_ERRORS = (
     httpx.ConnectTimeout,
     httpx.ReadTimeout,
-    httpx.HTTPStatusError, # Cobre 429 e 5xx do Ollama/HTTP
+    httpx.HTTPStatusError,
 )
 
 if AsyncOpenAI:
@@ -88,7 +88,6 @@ if AsyncAnthropic:
 if genai:
     RETRYABLE_ERRORS += (ResourceExhausted, ServiceUnavailable)
 
-# Decorator reutilizável para todos os providers
 COMMON_RETRY_STRATEGY = retry(
     reraise=True,
     stop=stop_after_attempt(5), 
@@ -125,6 +124,9 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 if genai and GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+# Lista de palavras-chave que identificam modelos de raciocínio
+REASONING_MODEL_KEYWORDS = ["phi4", "reasoning", "deepseek-r1", "cot", "math"]
+
 def heuristic_quality_estimate(text: str) -> float:
     if not text or not text.strip():
         return 0.0
@@ -142,17 +144,19 @@ def render_metrics_response():
     return generate_latest(registry), CONTENT_TYPE_LATEST
 
 # ==============================================================================
-# 4. MODELOS DE DADOS
+# 4. MODELOS DE DADOS (ATUALIZADO)
 # ==============================================================================
 
 class LLMResponse(BaseModel):
     text: str
     latency: float
+    load_time: float = 0.0
     cost: float
     prompt_tokens: int
     completion_tokens: int
     model_used: str
-    raw_payload: Optional[str] = None 
+    raw_payload: Optional[str] = None
+    reasoning: Optional[str] = None  # <--- NOVO CAMPO: Armazena o pensamento (CoT)
 
 # ==============================================================================
 # 5. ARQUITETURA BASE
@@ -231,9 +235,10 @@ class OpenAIProvider(BaseProvider):
                     raw_payload = str(resp)
 
                 return LLMResponse(
-                    text=text_out, latency=latency, cost=cost,
-                    prompt_tokens=p_tok, completion_tokens=c_tok,
-                    model_used=model, raw_payload=raw_payload
+                    text=text_out, latency=latency, load_time=0.0,
+                    cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
+                    model_used=model, raw_payload=raw_payload,
+                    reasoning=None # OpenAI o1 não expõe o reasoning token a token publicamente ainda
                 )
             except Exception as e:
                 self._record_metrics(model, time.time()-start, 0, False)
@@ -282,9 +287,10 @@ class AnthropicProvider(BaseProvider):
                 self._record_metrics(model, latency, cost, True)
 
                 return LLMResponse(
-                    text=text_out, latency=latency, cost=cost,
-                    prompt_tokens=p_tok, completion_tokens=c_tok,
-                    model_used=model, raw_payload=str(resp)
+                    text=text_out, latency=latency, load_time=0.0,
+                    cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
+                    model_used=model, raw_payload=str(resp),
+                    reasoning=None
                 )
             except Exception as e:
                 self._record_metrics(model, time.time()-start, 0, False)
@@ -331,9 +337,10 @@ class GeminiProvider(BaseProvider):
                 self._record_metrics(model_name, latency, cost, True)
 
                 return LLMResponse(
-                    text=text_out, latency=latency, cost=cost,
-                    prompt_tokens=p_tok, completion_tokens=c_tok,
-                    model_used=model_name, raw_payload=str(resp)
+                    text=text_out, latency=latency, load_time=0.0,
+                    cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
+                    model_used=model_name, raw_payload=str(resp),
+                    reasoning=None
                 )
             except Exception as e:
                 self._record_metrics(model_name, time.time()-start, 0, False)
@@ -354,11 +361,26 @@ class OllamaProvider(BaseProvider):
         model = kwargs.get("model", "phi4:latest")
         start = time.time()
 
+        # --- LÓGICA DE INJEÇÃO DE THINKING ---
+        # Se for um modelo de raciocínio, forçamos a tag <think> no prompt
+        # para garantir que o modelo saiba o que fazer, caso o template padrão não tenha.
+        is_reasoning_model = any(k in model.lower() for k in REASONING_MODEL_KEYWORDS)
+        final_prompt = prompt
+        
+        if is_reasoning_model:
+            # Adiciona instrução de sistema implícita se não houver
+            if "<think>" not in prompt:
+                final_prompt = (
+                    "You are a reasoning model. "
+                    "Please output your thought process within <think> tags before your final answer.\n\n"
+                    f"{prompt}"
+                )
+
         async with self.semaphore:
             try:
                 payload = {
                     "model": model,
-                    "prompt": prompt,
+                    "prompt": final_prompt,
                     "stream": False,
                     "options": {
                         "temperature": kwargs.get("temperature", 0.5),
@@ -369,37 +391,55 @@ class OllamaProvider(BaseProvider):
                 if image_b64:
                     payload["images"] = [image_b64]
 
-                # Timeout aumentado para 300s para lidar com Cold Start de modelos pesados
-                async with httpx.AsyncClient(timeout=300.0) as client:
+                # Timeout aumentado para 1200s (20 min) para lidar com Cold Start severo em hardware limitado
+                async with httpx.AsyncClient(timeout=1200.0) as client:
                     resp = await client.post(f"{self.host}/api/generate", json=payload)
                     resp.raise_for_status() 
                     data = resp.json()
 
-                text_out = data.get("response", "").strip()
+                raw_text = data.get("response", "").strip()
+                
+                # --- EXTRAÇÃO DE REASONING (THINKING) ---
+                # Modelos como Phi-4 e DeepSeek-R1 retornam o raciocínio dentro de <think>...</think>
+                reasoning = None
+                text_out = raw_text
+
+                # Regex para capturar o conteúdo dentro de <think>
+                think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
+                if think_match:
+                    reasoning = think_match.group(1).strip()
+                    # Remove o pensamento da resposta final para o usuário
+                    text_out = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+                
+                # --- EXTRAÇÃO DE LOAD TIME ---
+                load_ns = data.get("load_duration", 0)
+                load_sec = float(load_ns) / 1_000_000_000.0
+                
                 p_tok = data.get("prompt_eval_count", 0)
                 c_tok = data.get("eval_count", 0)
-                
                 cost = get_model_cost(model, p_tok, c_tok)
                 latency = time.time() - start
+                
                 self._record_metrics(model, latency, cost, True)
 
                 return LLMResponse(
-                    text=text_out, latency=latency, cost=cost,
-                    prompt_tokens=p_tok, completion_tokens=c_tok,
-                    model_used=model, raw_payload=json.dumps(data)
+                    text=text_out, 
+                    latency=latency, 
+                    load_time=load_sec,
+                    cost=cost,
+                    prompt_tokens=p_tok, 
+                    completion_tokens=c_tok,
+                    model_used=model, 
+                    raw_payload=json.dumps(data),
+                    reasoning=reasoning # <--- Campo preenchido se houver <think>
                 )
             except Exception as e:
                 self._record_metrics(model, time.time()-start, 0, False)
                 
-                # --- DEBUG AVANÇADO PARA OLLAMA ---
                 error_msg = str(e)
-                error_body = ""
-                
-                # Tenta extrair o corpo da resposta se for erro HTTP (ex: 404 Model Not Found)
                 if isinstance(e, httpx.HTTPStatusError):
                     try:
-                        error_body = e.response.text
-                        error_msg += f" | Body: {error_body}"
+                        error_msg += f" | Body: {e.response.text}"
                     except: pass
                 
                 structlog_logger.error(
@@ -407,7 +447,7 @@ class OllamaProvider(BaseProvider):
                     model=model, 
                     error=error_msg,
                     error_type=type(e).__name__,
-                    traceback=traceback.format_exc() # Stack trace completo
+                    traceback=traceback.format_exc()
                 )
                 raise
 
@@ -461,27 +501,28 @@ async def call_model(
 
         meta = {
             "latency": result.latency,
+            "load_time": result.load_time,
             "cost_per_1k": result.cost,
             "quality": heuristic_quality_estimate(result.text),
             "raw_payload": result.raw_payload,
             "image_output_b64": None,
             "prompt_tokens": result.prompt_tokens,
-            "completion_tokens": result.completion_tokens
+            "completion_tokens": result.completion_tokens,
+            "reasoning": result.reasoning # <--- Passando para cima
         }
         return result.text, meta
 
     except pybreaker.CircuitBreakerError:
-        return "[Erro: Circuito Aberto - Serviço Indisponível]", {"latency": 0.0, "cost_per_1k": 0.0, "quality": 0.0}
+        return "[Erro: Circuito Aberto - Serviço Indisponível]", {"latency": 0.0, "load_time": 0.0, "cost_per_1k": 0.0, "quality": 0.0}
     
     except Exception as e:
-        # Log de último recurso se o provider não pegou
         structlog_logger.error(
             "call_model_wrapper_failed", 
             model=model, 
             error=str(e),
             traceback=traceback.format_exc()
         )
-        return f"[Erro ao chamar {model}: {str(e)}]", {"latency": 0.0, "cost_per_1k": 0.0, "quality": 0.0}
+        return f"[Erro ao chamar {model}: {str(e)}]", {"latency": 0.0, "load_time": 0.0, "cost_per_1k": 0.0, "quality": 0.0}
 
 
 # ==============================================================================

@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-vectorstore.py — RAG Multimodal com Versionamento de Coleção
+vectorstore.py — RAG Multimodal com Versionamento e Auto-Healing
 ----------------------------------------------------------------------
 Gerencia a persistência de embeddings no ChromaDB.
-Atualizado para incluir o nome do modelo de embedding no nome da coleção.
-Isso evita conflitos de espaço vetorial ao trocar de modelo.
+
+Funcionalidades:
+- Versionamento de coleção por modelo (evita mistura de dimensões).
+- Auto-Healing: Reseta a coleção se detectar conflito de dimensão.
+- Integração com Sparse Index (BM25) para Busca Híbrida.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import numpy as np
 
 from .embeddings import embed_text, embed_image, embed_multimodal
 from .settings_dynamic import settings
-from .sparse_index import sparse_index # <--- Importar o módulo BM25
+from .sparse_index import sparse_index  # Integração com BM25
 
 # ============================================================
 # Logging
@@ -31,7 +34,6 @@ if not logger.handlers:
         level=logging.INFO,
         format="[%(asctime)s] [%(levelname)s] vectorstore: %(message)s"
     )
-
 
 # ============================================================
 # Configurações & Versionamento
@@ -186,7 +188,7 @@ def init_vectorstore():
 
 
 # ============================================================
-# Inserção
+# Inserção (Com Auto-Healing)
 # ============================================================
 def _insert_embedding_sync(
     collection_name: str,
@@ -195,17 +197,38 @@ def _insert_embedding_sync(
     embedding: List[float],
     metadata: Optional[Dict[str, Any]],
 ):
-    col = chroma_client.get_or_create_collection(
-        name=collection_name,
-        metadata=_safe_metadata(metadata),
-    )
+    try:
+        col = chroma_client.get_or_create_collection(
+            name=collection_name,
+            metadata=_safe_metadata(metadata),
+        )
 
-    col.add(
-        ids=[str(doc_id)],
-        documents=[text or ""],
-        embeddings=[_ensure_list_of_floats(embedding)],
-        metadatas=[_safe_metadata(metadata)],
-    )
+        col.add(
+            ids=[str(doc_id)],
+            documents=[text or ""],
+            embeddings=[_ensure_list_of_floats(embedding)],
+            metadatas=[_safe_metadata(metadata)],
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        # AUTO-HEALING: Se a dimensão não bater, reseta a coleção
+        if "dimension" in msg and "match" in msg:
+            logger.warning(f"[vectorstore] ⚠️ Dimensão incompatível em '{collection_name}'. Resetando coleção para corrigir...")
+            try:
+                chroma_client.delete_collection(collection_name)
+                # Recria imediatamente
+                col = chroma_client.create_collection(name=collection_name)
+                col.add(
+                    ids=[str(doc_id)],
+                    documents=[text or ""],
+                    embeddings=[_ensure_list_of_floats(embedding)],
+                    metadatas=[_safe_metadata(metadata)],
+                )
+                logger.info("[vectorstore] ✅ Coleção recriada e documento inserido com sucesso.")
+            except Exception as e2:
+                logger.error(f"[vectorstore] ❌ Falha crítica ao recriar coleção: {e2}")
+        else:
+            logger.error(f"[vectorstore] Erro na inserção: {e}")
 
 
 async def add_document(
@@ -244,7 +267,6 @@ async def add_document(
         # Adiciona ao índice em memória
         sparse_index.add_document(doc_id, text)
         # Commita (em produção, faríamos isso em batch ou periodicamente)
-        # Para a tese, commit imediato garante consistência nos testes
         await asyncio.to_thread(sparse_index.commit)
 
     logger.info(f"[vectorstore] Inserido doc_id={doc_id} em {collection_name} + BM25")
@@ -252,7 +274,7 @@ async def add_document(
 
 
 # ============================================================
-# Consulta
+# Consulta (Com Auto-Healing)
 # ============================================================
 def _query_embedding_sync(collection_name: str, embedding, n_results: int):
     try:
@@ -260,10 +282,20 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int):
         return col.query(
             query_embeddings=[_ensure_list_of_floats(embedding)],
             n_results=n_results,
-            # CORRIGIDO: Removido "ids" da lista include. O Chroma retorna IDs por padrão.
+            # CORRIGIDO: Removido "ids" da lista include.
             include=["documents", "metadatas", "distances"], 
         )
     except Exception as e:
+        msg = str(e).lower()
+        # AUTO-HEALING: Se a dimensão não bater na consulta, a coleção está suja.
+        if "dimension" in msg and "match" in msg:
+            logger.warning(f"[vectorstore] ⚠️ Dimensão incompatível na consulta '{collection_name}'. Deletando coleção corrompida.")
+            try:
+                chroma_client.delete_collection(collection_name)
+                return {}
+            except:
+                pass
+        
         logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
         return {}
 

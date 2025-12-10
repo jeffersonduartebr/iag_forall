@@ -242,7 +242,7 @@ async def build_augmented_prompt(
     # Pega os Top-N da fusão e reordena com precisão máxima
     if str(settings.get("RERANK_ENABLED", "1")) == "1":
         # Re-rankeia os top 10 candidatos da fusão
-        final_docs = await asyncio.to_thread(rerank_documents, query, candidate_texts[:10], k)
+        final_docs = await asyncio.to_thread(rerank_documents, query, candidate_texts[:5], k)
     else:
         final_docs = candidate_texts[:k]
 

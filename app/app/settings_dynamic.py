@@ -238,7 +238,7 @@ class DynamicSettings:
         # Cache & RAG
         "CACHE_TTL_DAYS": "7",
         "CACHE_THRESHOLD": "0.92",
-        "UNCERTAINTY_THRESHOLD": "0.45",
+        "UNCERTAINTY_THRESHOLD": "0.7",
         "RERANK_MODEL": "cross-encoder/ms-marco-MiniLM-L-6-v2",
         "RERANK_ENABLED": "1",
         "RAG_DATA_DIR": "/app/data",
@@ -246,7 +246,7 @@ class DynamicSettings:
         # Pesos NSGA-II Dinâmicos
         "NSGA_W_QUALITY": "1.0",
         "NSGA_W_LATENCY": "0.5",
-        "NSGA_W_COST": "50.0",
+        "NSGA_W_COST": "100.0",
         "NSGA_W_ALIGNMENT": "1.0",
     }
 
