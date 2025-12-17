@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-router_core.py — Multimodal + UM-RAG + Meta-bandit + UQ + Background Tasks
---------------------------------------------------------------------------
+router_core.py — Multimodal + UM-RAG + Meta-bandit + UQ + Online Learning
+-------------------------------------------------------------------------
 O Core do sistema de roteamento.
 
 ATUALIZAÇÃO (Tese):
-- Implementação de "Risk-Aware Hybrid Sampling" para o Juiz.
-- Combina Monte Carlo Adaptativo com Detecção de Incerteza.
+- Integração com Online Machine Learning (River) para predição de erro.
+- Amostragem Híbrida: Monte Carlo (Decaimento) + Active Learning (Predição de Erro).
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from .metrics_collector import update_model_metrics
 from .rag_local import build_augmented_prompt
 from .embeddings import embed_text
 from .query_service import insert_query_log, ensure_query_log
+from .online_predictor import get_predictor  # <--- NOVO IMPORT
 
 # --- Novos Módulos de Inteligência e Precisão ---
 from .utils.pricing import get_model_cost
@@ -382,46 +383,46 @@ async def process_background_feedback(
 ):
     """
     Executado após a resposta ser enviada ao usuário.
-    Responsável por: Juízes, Reward, Bandit Update (com UQ learning), Cache Store, Logging.
+    Responsável por: Juízes, Reward, Bandit Update, Online Learning, Cache Store.
     
-    ATUALIZADO: Risk-Aware Hybrid Sampling (Monte Carlo + Incerteza).
+    ATUALIZADO: Risk-Aware Hybrid Sampling com Online Learning.
     """
     try:
-        # 1. Recupera estatísticas atuais do modelo
+        # 1. Recupera estatísticas e Preditor Online
         stats = _get_ctx_stats("global")
         model_stats = stats.get(chosen_model, {})
         n_samples = model_stats.get("count", 0)
         
-        # 2. Cálculo da Probabilidade Base (Decaimento)
+        # --- ONLINE LEARNING PREDICTION ---
+        # Instancia o preditor para este modelo
+        predictor = get_predictor(chosen_model)
+        
+        # Gera embedding se necessário (geralmente já temos, mas aqui garantimos)
+        query_embedding = await asyncio.to_thread(embed_text, query)
+        
+        # Prediz a probabilidade de erro (0.0 a 1.0)
+        predicted_error_prob = predictor.predict_error_probability(query_embedding)
+        # ----------------------------------
+
+        # 2. Cálculo da Probabilidade de Julgamento (Híbrida)
+        # Base: Decaimento de Monte Carlo
         if n_samples < 5:
-            base_prob = 1.0 # Cold Start: Julga tudo
+            base_prob = 1.0 
         else:
             base_prob = 1.0 / math.sqrt(n_samples)
 
-        # 3. Fator de Incerteza (Risk-Aware)
-        # Recalcula UQ (rápido pois embedding é cacheado)
-        try:
-            uq_score = await asyncio.to_thread(get_uncertainty_score, query, modality)
-        except:
-            uq_score = 0.5
-            
-        # Se incerteza alta (>0.4), aumenta drasticamente a chance de julgar
-        uq_factor = 1.0
-        if uq_score > 0.4:
-            uq_factor = 5.0 
+        # Fator de Risco: Se o modelo online diz que vai errar, aumentamos a chance de auditar
+        # Usamos o MAX entre a base e a predição de erro
+        prob_judge = max(base_prob, predicted_error_prob)
 
-        # 4. Fator de Confiança SOTA
-        # Se é GPT-4/5, confiamos mais (reduz amostragem para economizar)
-        sota_factor = 1.0
+        # Fator de Confiança SOTA
         if "gpt-5" in chosen_model or "gpt-4" in chosen_model or "claude" in chosen_model:
-            sota_factor = 0.1 
+            prob_judge *= 0.1 
         
-        # Probabilidade Final
-        prob_judge = min(1.0, base_prob * uq_factor * sota_factor)
         # Piso mínimo de segurança
         prob_judge = max(settings.JUDGE_MIN_SAMPLE_RATE, prob_judge)
 
-        # 5. O Sorteio
+        # 3. O Sorteio
         should_judge = random.random() < prob_judge
         
         final_quality = 0.0
@@ -429,31 +430,40 @@ async def process_background_feedback(
 
         if should_judge:
             try:
-                logger.info(f"[Background] 🎲 Sampling Judge for {chosen_model} (p={prob_judge:.2f}, UQ={uq_score:.2f})")
+                logger.info(f"[Background] 🎲 Sampling Judge for {chosen_model} (p={prob_judge:.2f}, pred_err={predicted_error_prob:.2f})")
                 judge_scores = await judge_answer(query, answer)
                 valid_scores = [s["score"] for s in judge_scores if "score" in s]
                 q_mean = float(np.mean(valid_scores)) if valid_scores else 5.0
                 final_quality = round(q_mean * 10.0, 2)
+                
+                # --- ONLINE LEARNING UPDATE ---
+                # Se julgamos, temos o rótulo real (ou aproximado pelo juiz)
+                # Consideramos "Correto" se nota > 7.0
+                is_correct_label = final_quality >= 7.0
+                predictor.learn(query_embedding, is_correct_label)
+                predictor.save() # Persiste o aprendizado
+                # ------------------------------
+                
             except Exception:
                 final_quality = 5.0
         else:
-            # Se não julgamos, usamos a média histórica para não quebrar o gráfico
-            logger.info(f"[Background] ⏩ Skipping Judge for {chosen_model} (p={prob_judge:.2f})")
+            # Se não julgamos, usamos a média histórica
+            # logger.info(f"[Background] ⏩ Skipping Judge for {chosen_model}")
             final_quality = model_stats.get("mean", 0.5) * 10.0
 
-        # 6. Reward (NSGA-II weights)
+        # 4. Reward (NSGA-II weights)
         try:
             reward = compute_reward(chosen_model, final_quality, latency_s, cost_val)
         except Exception:
             reward = 0.0
 
-        # 7. Bandit Update (AQUI O UQ APRENDE!)
+        # 5. Bandit Update
         try:
             bandit_update(model=chosen_model, query=query, reward=reward, modality=modality)
         except Exception as e:
             logger.warning(f"[Background] Bandit fail: {e}")
 
-        # 8. EMA Update
+        # 6. EMA Update
         try:
             global EMA_HISTORY
             alpha = 0.2
@@ -478,7 +488,7 @@ async def process_background_feedback(
         except Exception:
             pass
 
-        # 9. Cache (Apenas se for bom)
+        # 7. Cache (Apenas se for bom)
         if final_quality >= 7.0:
             try:
                 await store_cache(
@@ -488,7 +498,7 @@ async def process_background_feedback(
             except Exception:
                 pass
 
-        # 10. Metrics
+        # 8. Metrics
         try:
             ROUTER_QUALITY_AVG.labels(model=chosen_model).set(final_quality)
             if "ollama" in chosen_model:
@@ -496,9 +506,9 @@ async def process_background_feedback(
         except Exception:
             pass
 
-        # 11. Log Definitivo
+        # 9. Log Definitivo
         try:
-            q_emb = await asyncio.to_thread(embed_text, query)
+            # Embedding já gerado acima
             insert_query_log(
                 query_text=query,
                 model=chosen_model,
@@ -512,7 +522,7 @@ async def process_background_feedback(
                 reward=reward,
                 context_label="async_processed",
                 raw_payload=raw_payload,
-                query_embedding=q_emb,
+                query_embedding=query_embedding,
                 answer_embedding=None
             )
         except Exception as e:

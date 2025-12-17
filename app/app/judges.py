@@ -60,7 +60,7 @@ MIN_FITNESS = float(settings.get("JUDGES_MIN_FITNESS", 0.30))
 CONSIST_WINDOW_MIN = int(settings.get("JUDGES_WINDOW_MIN", 180))
 
 # Meta-Juiz preferencial (deve ser um modelo forte)
-META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "openai/gpt-4o-mini"))
+META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "openai/gpt-5.1"))
 
 # Aumentado para permitir CoT (Raciocínio)
 MAX_TOKENS_JUDGE = 512 
@@ -475,7 +475,7 @@ CORRECT ou INCORRECT
 </verdict>
 """
 
-    judge_models_all = getattr(settings, "JUDGE_MODELS", []) or ["openai/gpt-4o-mini"]
+    judge_models_all = getattr(settings, "JUDGE_MODELS", []) or ["openai/gpt-5.1"]
     stats = _load_judge_stats(CONSIST_WINDOW_MIN)
     selected = _choose_two(judge_models_all, stats)
 

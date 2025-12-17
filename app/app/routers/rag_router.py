@@ -13,7 +13,10 @@ import logging
 import fitz  # PyMuPDF
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
-# ✅ CORREÇÃO 1: Importar do novo providers_async
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
+
+
 from app.providers_async import call_model
 from app.vectorstore import add_document
 from app.settings_dynamic import settings
@@ -168,4 +171,40 @@ async def add_doc(file: UploadFile = File(...)):
         raise
     except Exception as e:
         logger.exception(f"[rag_router] Erro inesperado: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+
+class IngestRequest(BaseModel):
+    text: str
+    doc_id: str
+    metadata: Dict[str, Any]
+    collection_name: Optional[str] = None # Para suportar "Coleção por Curso"
+
+@router.post("/ingest")
+async def ingest_text(req: IngestRequest):
+    """
+    Endpoint para ingestão direta de texto (usado por serviços externos como o Auditor).
+    """
+    try:
+        # Se um nome de coleção específico for passado (ex: course_101), 
+        # o vectorstore deve ser capaz de lidar ou usamos metadata filtering.
+        # Aqui, vamos injetar o collection_name nos metadados para garantir isolamento lógico
+        if req.collection_name:
+            req.metadata["target_collection"] = req.collection_name
+
+        success = await add_document(
+            modality="text", # Força texto
+            doc_id=req.doc_id,
+            text=req.text,
+            metadata=req.metadata
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Falha ao inserir no Vectorstore")
+            
+        return {"status": "ok", "doc_id": req.doc_id}
+        
+    except Exception as e:
+        logger.error(f"[RAG API] Erro na ingestão: {e}")
         raise HTTPException(status_code=500, detail=str(e))

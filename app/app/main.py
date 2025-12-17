@@ -194,7 +194,10 @@ async def startup_event():
                 "Qual a relação entre taxa de juros e inflação em uma economia de mercado?",
                 "Resuma o conceito de 'Imperativo Categórico' de Immanuel Kant.",
                 "O que são direitos fundamentais segundo a Constituição Brasileira de 1988?",
-                "Quais são as principais características culturais e culinárias do Nordeste brasileiro?"
+                "Quais são as principais características culturais e culinárias do Nordeste brasileiro?",
+                "Explique como ocorreu a separação dos continentes ao longo dos milênios.",
+                "Se eu tenho um triângulo retângulo cujos valores dos catetos são 8 e 10, qual é o valor da hipotenusa?",
+                "Cite três características do mercantilismo."
             ]
 
             logger.info(f"[warmup] Executando {len(tests)} smoke tests diversificados...")
