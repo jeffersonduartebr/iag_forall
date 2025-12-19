@@ -141,6 +141,7 @@ services:
 
     networks:
       - ai_net
+      - ai_backbone
 
 
   # =========================================================
@@ -446,3 +447,5 @@ volumes:
 networks:
   ai_net:
     driver: bridge
+  ai_backbone:
+    external: true
