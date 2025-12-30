@@ -10,6 +10,7 @@ __pycache__/
 # Distribution / packaging
 ollama_data/
 chromadb-data/
+state/
 *.sqlite3
 vllm_cache/
 models/
@@ -33,7 +34,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-.env*
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.

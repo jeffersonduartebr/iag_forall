@@ -66,10 +66,9 @@ def get_uncertainty_score(query_text: str, modality: str = "text") -> float:
              return 1.0
         
         q_np = np.array(query_vec_list, dtype=np.float32)
-        q_dim = q_np.shape[0] # Detecta a dimensão da query atual (ex: 1536)
+
         # 3. Encontra a maior similaridade com o conhecimento existente
         max_similarity = -1.0
-        valid_centroids = 0
         
         for centroid in centroids_data:
             # Formato esperado do centróide: {"vec": [floats], "text": "..."}
@@ -77,10 +76,6 @@ def get_uncertainty_score(query_text: str, modality: str = "text") -> float:
             if not c_vec_list: continue
             
             c_np = np.array(c_vec_list, dtype=np.float32)
-            if c_np.shape[0] != q_dim:
-                # Se a dimensão não bater, ignora este centróide
-                continue
-            valid_centroids += 1 
             sim = _cosine_similarity(q_np, c_np)
             
             if sim > max_similarity:
@@ -93,9 +88,6 @@ def get_uncertainty_score(query_text: str, modality: str = "text") -> float:
         # Se similaridade é alta (1.0), incerteza é baixa (0.0).
         uncertainty = 1.0 - max_similarity
         
-        # Se nenhum centróide era compatível, assume incerteza máxima (nova era de embeddings)
-        if valid_centroids == 0:
-            return 1.0
         # Logging para análise (pode ser ruidoso em produção)
         # logger.debug(f"[UQ] Query: '{query_text[:20]}...' | MaxSim: {max_similarity:.3f} | UQ: {uncertainty:.3f}")
         

@@ -1,50 +1,37 @@
 # -*- coding: utf-8 -*-
 """
-evaluate_results.py — Ultra-Optimized Phase 2: Batch Evaluation (Strict Evaluated Logic)
---------------------------------------------------------------------------------------
-Otimizações: 
-1. Lógica de Retomada Estrita: Baseia-se apenas na coluna 'evaluated'.
-2. Ollama JSON Mode: Extração de dados estruturada e rápida.
-3. Persistent HTTP Connection Pooling: Reuso de sockets para performance máxima.
-4. Concorrência controlada: Otimizado para RTX 5070 Ti (8-12 workers).
+evaluate_results.py — Phase 2: Batch Evaluation (Parallelized)
+--------------------------------------------------------------
+Executes LLM-as-a-Judge on the generated CSV data.
+Optimized for high throughput on RTX 5070 Ti + 128GB RAM.
 """
 
 import pandas as pd
 import asyncio
 import httpx
 import logging
-import json
+import re
 import os
 import glob
-import time
 from tqdm.asyncio import tqdm
 
-# ==============================================================================
-# ⚙️ CONFIGURAÇÃO
-# ==============================================================================
-JUDGE_MODEL = "deepseek-r1:32b" 
+# --- CONFIGURAÇÃO ---
+# Modelo Juiz (Deve ser forte: Qwen 32B, Llama 70B ou DeepSeek R1)
+JUDGE_MODEL = "ollama/deepseek-r1:32b" 
 OLLAMA_API_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 INPUT_DIR = "thesis_results"
 
-# Ajuste de Performance para RTX 5070 Ti + 128GB RAM
-JUDGE_CONCURRENCY = 8  
-SAVE_INTERVAL = 20     # Salva o progresso no CSV a cada 20 avaliações
+# Aumente para 8 ou 10 se tiver configurado OLLAMA_NUM_PARALLEL=8
+JUDGE_CONCURRENCY = 4 
 
-logging.basicConfig(
-    level=logging.INFO, 
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("evaluator")
 
-# ==============================================================================
-# 🧠 NÚCLEO DE AVALIAÇÃO
-# ==============================================================================
-
-async def get_judge_score(client: httpx.AsyncClient, query, answer, reference):
+async def get_judge_score(query, answer, reference):
     """
-    Chama a API do Ollama forçando o modo JSON para obter o veredito técnico.
+    Chama o Ollama para julgar. Suporta extração de <think> e Score.
     """
+    # Prompt otimizado para extração robusta
     prompt = f"""
     You are an impartial technical judge. Evaluate the AI response based on the Ground Truth.
     
@@ -58,132 +45,120 @@ async def get_judge_score(client: httpx.AsyncClient, query, answer, reference):
     3. If the answer is correct according to the ground truth, score 10.
     4. If it contradicts the ground truth or is wrong, score 0.
     
-    Return ONLY a JSON object with the following keys:
-    "reasoning": (string) a very brief explanation of your decision.
-    "score": (number) 0 or 10.
+    OUTPUT FORMAT:
+    Reasoning: <brief explanation>
+    Score: <0 or 10>
     """
     
     payload = {
-        "model": JUDGE_MODEL,
+        "model": JUDGE_MODEL.replace("ollama/", ""),
         "prompt": prompt,
         "stream": False,
-        "format": "json", 
         "options": {
-            "temperature": 0,
-            "num_predict": 150, 
-            "num_ctx": 4096
+            "temperature": 0.0, 
+            "num_predict": 512,
+            "num_ctx": 4096 # Garante contexto suficiente para input + output
         }
     }
     
-    try:
-        resp = await client.post(f"{OLLAMA_API_URL}/api/generate", json=payload, timeout=120.0)
-        
-        if resp.status_code == 200:
-            data = json.loads(resp.json().get("response", "{}"))
-            return float(data.get("score", 0.0))
-        else:
-            logger.error(f"Erro na API Ollama: Status {resp.status_code}")
-            return None
+    # Timeout generoso para modelos grandes rodando em paralelo
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        try:
+            resp = await client.post(f"{OLLAMA_API_URL}/api/generate", json=payload)
+            if resp.status_code != 200: 
+                logger.warning(f"Judge API Error: {resp.status_code} - {resp.text}")
+                return 0.0
             
-    except Exception as e:
-        logger.error(f"Falha na comunicação: {str(e)}")
-        return None
-
-# ==============================================================================
-# 🚀 PROCESSAMENTO EM LOTE
-# ==============================================================================
+            text = resp.json().get("response", "")
+            
+            # Remove bloco de pensamento <think> se existir (DeepSeek/Phi-4)
+            text_clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            
+            # Extrai nota (procura pelo último número após "Score:")
+            match = re.findall(r"Score:\s*(\d+(?:\.\d+)?)", text_clean, re.IGNORECASE)
+            if match:
+                val = float(match[-1])
+                # Normaliza se o modelo alucinar e der nota fora de 0-10
+                return max(0.0, min(10.0, val))
+            
+            # Fallback: Procura apenas números isolados no final
+            # Útil se o modelo responder apenas "10"
+            if text_clean.strip().isdigit():
+                return float(text_clean.strip())
+                
+            return 0.0
+        except Exception as e:
+            logger.error(f"Judge exception: {e}")
+            return 0.0
 
 async def process_batch():
-    # 1. Localização do arquivo
+    # 1. Carrega o CSV mais recente
     files = glob.glob(f"{INPUT_DIR}/raw_data_*.csv")
     if not files:
-        logger.error(f"Nenhum arquivo CSV encontrado em {INPUT_DIR}")
+        logger.error("No CSV found.")
         return
     
     latest_file = max(files, key=os.path.getctime)
-    logger.info(f"📂 Carregando dados: {latest_file}")
+    logger.info(f"📂 Processing: {latest_file}")
     df = pd.read_csv(latest_file)
     
-    # 2. Inicialização Estrita das Colunas
+    # Verifica se já tem notas parciais (Resume)
     if 'judge_score' not in df.columns:
         df['judge_score'] = 0.0
+        
+    # Identifica linhas que precisam de avaliação
+    # (Score 0 pode ser nota real ou não avaliado. 
+    #  Melhor critério: se já rodou, não roda de novo, a menos que queira reavaliar zeros)
+    # Aqui assumimos: Se judge_score é 0 E a resposta não é vazia, vamos reavaliar 
+    # (ou você pode criar uma coluna 'evaluated' para controle explícito)
     
-    if 'evaluated' not in df.columns:
-        df['evaluated'] = False
-    else:
-        # Garante que valores nulos sejam tratados como False
-        df['evaluated'] = df['evaluated'].fillna(False).astype(bool)
-
-    # 3. Filtro de Pendentes (Independente da nota atual)
-    # Só avaliamos se evaluated == False E se houver uma resposta para ler
-    mask_pending = (df['evaluated'] == False) & (df['answer'].notna()) & (df['answer'] != "")
-    pending_indices = df[mask_pending].index.tolist()
-
-    if not pending_indices:
-        logger.info("✅ Todas as linhas já estão marcadas como 'evaluated'.")
-        return
-
-    logger.info(f"🚀 Pendentes para avaliação: {len(pending_indices)}")
-
-    # 4. Pool de Conexões e Execução
-    limits = httpx.Limits(max_keepalive_connections=10, max_connections=JUDGE_CONCURRENCY)
-    async with httpx.AsyncClient(limits=limits, timeout=None) as client:
-        
-        # Warmup
-        try:
-            await client.post(f"{OLLAMA_API_URL}/api/generate", json={"model": JUDGE_MODEL, "keep_alive": -1})
-        except: pass
-
-        sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
-
-        async def worker(idx):
-            async with sem:
-                row = df.iloc[idx]
-                score = await get_judge_score(client, row['query'], row['answer'], row['reference'])
-                return idx, score
-
-        tasks = [worker(i) for i in pending_indices]
-        
-        count = 0
-        pbar = tqdm(total=len(tasks), desc="Judging")
-        
-        for coro in asyncio.as_completed(tasks):
-            idx, score = await coro
-            
-            # Se o score for retornado (mesmo que seja 0), marcamos como avaliado
-            if score is not None:
-                df.at[idx, 'judge_score'] = score
-                df.at[idx, 'evaluated'] = True
-            
-            count += 1
-            pbar.update(1)
-
-            # Checkpoint periódico
-            if count % SAVE_INTERVAL == 0:
-                df.to_csv(latest_file, index=False)
-
-        pbar.close()
-
-    # 5. Finalização
-    df.to_csv(latest_file, index=False)
+    # Para simplificar: Avalia tudo que ainda não foi processado na Fase 1
+    # Na Fase 1, judge_score foi setado como 0.0.
+    # Vamos processar todas as linhas.
     
+    # 2. Prepara o Modelo do Juiz (Warmup)
+    model_name = JUDGE_MODEL.replace("ollama/", "")
+    logger.info(f"🧠 Loading Judge: {model_name}...")
+    async with httpx.AsyncClient(timeout=600.0) as client:
+        await client.post(f"{OLLAMA_API_URL}/api/pull", json={"name": model_name})
+        await client.post(f"{OLLAMA_API_URL}/api/generate", json={"model": model_name, "keep_alive": -1})
+
+    # 3. Loop de Avaliação Paralela
+    sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
+    
+    async def evaluate_row(index, row):
+        async with sem:
+            # Se a resposta for vazia (erro na inferência), nota é 0
+            if pd.isna(row['answer']) or str(row['answer']).strip() == "":
+                return index, 0.0
+            
+            score = await get_judge_score(row['query'], row['answer'], row['reference'])
+            return index, score
+
+    tasks = []
+    for idx, row in df.iterrows():
+        tasks.append(evaluate_row(idx, row))
+    
+    logger.info(f"🚀 Evaluating {len(tasks)} responses with concurrency={JUDGE_CONCURRENCY}...")
+    
+    # Barra de progresso
+    counter = 0
+    for f in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Judging"):
+        idx, score = await f
+        df.at[idx, 'judge_score'] = score
+        
+        counter += 1
+        # Salva checkpoint a cada 50 avaliações
+        if counter % 50 == 0:
+            df.to_csv(latest_file, index=False)
+
+    # 5. Salva Final
     output_file = latest_file.replace(".csv", "_evaluated.csv")
     df.to_csv(output_file, index=False)
+    logger.info(f"✅ Done! Saved to {output_file}")
     
-    logger.info(f"✨ Concluído! Arquivo final: {output_file}")
-
-# ==============================================================================
-# ▶️ EXECUÇÃO
-# ==============================================================================
+    # Atualiza o arquivo original também para facilitar scripts subsequentes
+    df.to_csv(latest_file, index=False)
 
 if __name__ == "__main__":
-    start_time = time.perf_counter()
-    try:
-        asyncio.run(process_batch())
-    except KeyboardInterrupt:
-        logger.info("\n🛑 Interrompido! O progresso foi salvo.")
-    except Exception as e:
-        logger.error(f"🔥 Erro fatal: {e}")
-    finally:
-        end_time = time.perf_counter()
-        logger.info(f"⏱️ Tempo total: {end_time - start_time:.2f}s")
+    asyncio.run(process_batch())
