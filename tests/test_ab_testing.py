@@ -12,7 +12,7 @@ class TestVariant:
 
     def test_variant_creation(self):
         """Test creating a variant."""
-        from app.app.ab_testing import Variant
+        from app.ab_testing import Variant
 
         variant = Variant(name="control", weight=0.5, config={"model": "gpt-4"})
 
@@ -26,7 +26,7 @@ class TestExperiment:
 
     def test_experiment_to_dict(self):
         """Test experiment serialization."""
-        from app.app.ab_testing import Experiment, Variant, ExperimentStatus
+        from app.ab_testing import Experiment, Variant, ExperimentStatus
 
         experiment = Experiment(
             id="exp_123",
@@ -48,7 +48,7 @@ class TestExperiment:
 
     def test_experiment_from_dict(self):
         """Test experiment deserialization."""
-        from app.app.ab_testing import Experiment, ExperimentStatus
+        from app.ab_testing import Experiment, ExperimentStatus
 
         data = {
             "id": "exp_123",
@@ -74,11 +74,11 @@ class TestABTestManager:
     @pytest.fixture
     def ab_manager(self):
         """Create a fresh A/B test manager instance."""
-        with patch("app.app.ab_testing.get_redis", return_value=None):
-            with patch("app.app.ab_testing.settings") as mock_settings:
+        with patch("app.ab_testing.get_redis", return_value=None):
+            with patch("app.ab_testing.settings") as mock_settings:
                 mock_settings.AB_TESTING_ENABLED = True
 
-                from app.app.ab_testing import ABTestManager
+                from app.ab_testing import ABTestManager
                 # Reset singleton
                 ABTestManager._instance = None
                 return ABTestManager()
@@ -100,7 +100,7 @@ class TestABTestManager:
 
     def test_create_experiment(self, ab_manager):
         """Test creating an experiment."""
-        from app.app.ab_testing import ExperimentCreateRequest, ExperimentStatus
+        from app.ab_testing import ExperimentCreateRequest, ExperimentStatus
 
         request = ExperimentCreateRequest(
             name="Test Experiment",
@@ -122,7 +122,7 @@ class TestABTestManager:
 
     def test_start_experiment(self, ab_manager):
         """Test starting an experiment."""
-        from app.app.ab_testing import ExperimentCreateRequest, ExperimentStatus
+        from app.ab_testing import ExperimentCreateRequest, ExperimentStatus
 
         request = ExperimentCreateRequest(
             name="Test",
@@ -140,7 +140,7 @@ class TestABTestManager:
 
     def test_pause_experiment(self, ab_manager):
         """Test pausing an experiment."""
-        from app.app.ab_testing import ExperimentCreateRequest, ExperimentStatus
+        from app.ab_testing import ExperimentCreateRequest, ExperimentStatus
 
         request = ExperimentCreateRequest(
             name="Test",
@@ -158,7 +158,7 @@ class TestABTestManager:
 
     def test_complete_experiment(self, ab_manager):
         """Test completing an experiment."""
-        from app.app.ab_testing import ExperimentCreateRequest, ExperimentStatus
+        from app.ab_testing import ExperimentCreateRequest, ExperimentStatus
 
         request = ExperimentCreateRequest(
             name="Test",
@@ -177,7 +177,7 @@ class TestABTestManager:
 
     def test_get_assignment_not_running(self, ab_manager):
         """Test that assignment returns None for non-running experiment."""
-        from app.app.ab_testing import ExperimentCreateRequest
+        from app.ab_testing import ExperimentCreateRequest
 
         request = ExperimentCreateRequest(
             name="Test",
@@ -196,9 +196,9 @@ class TestABTestManager:
 
     def test_get_assignment_consistent(self, ab_manager):
         """Test that assignment is consistent for same user."""
-        from app.app.ab_testing import ExperimentCreateRequest
+        from app.ab_testing import ExperimentCreateRequest
 
-        with patch("app.app.ab_testing.AB_EXPERIMENT_ASSIGNMENTS") as mock_metric:
+        with patch("app.ab_testing.AB_EXPERIMENT_ASSIGNMENTS") as mock_metric:
             request = ExperimentCreateRequest(
                 name="Test",
                 variants=[
@@ -217,7 +217,7 @@ class TestABTestManager:
 
     def test_list_experiments_filter_by_status(self, ab_manager):
         """Test listing experiments filtered by status."""
-        from app.app.ab_testing import ExperimentCreateRequest, ExperimentStatus
+        from app.ab_testing import ExperimentCreateRequest, ExperimentStatus
 
         # Create multiple experiments
         for i in range(3):
@@ -240,7 +240,7 @@ class TestABTestManager:
 
     def test_delete_experiment(self, ab_manager):
         """Test deleting an experiment."""
-        from app.app.ab_testing import ExperimentCreateRequest
+        from app.ab_testing import ExperimentCreateRequest
 
         request = ExperimentCreateRequest(
             name="Test",
@@ -266,11 +266,11 @@ class TestGetABTestManager:
 
     def test_returns_singleton(self):
         """Test that get_ab_test_manager returns singleton instance."""
-        with patch("app.app.ab_testing.get_redis", return_value=None):
-            with patch("app.app.ab_testing.settings") as mock_settings:
+        with patch("app.ab_testing.get_redis", return_value=None):
+            with patch("app.ab_testing.settings") as mock_settings:
                 mock_settings.AB_TESTING_ENABLED = True
 
-                from app.app.ab_testing import get_ab_test_manager, ABTestManager
+                from app.ab_testing import get_ab_test_manager, ABTestManager
                 ABTestManager._instance = None
 
                 manager1 = get_ab_test_manager()

@@ -13,8 +13,8 @@ class TestCascadeDetector:
     @pytest.fixture
     def cascade_detector(self):
         """Create a fresh cascade detector instance."""
-        with patch("app.app.reliability.get_circuit_breaker_manager"):
-            from app.app.reliability import CascadeDetector
+        with patch("app.reliability.get_circuit_breaker_manager"):
+            from app.reliability import CascadeDetector
             # Reset singleton
             CascadeDetector._instance = None
             return CascadeDetector()
@@ -82,7 +82,7 @@ class TestCascadeDetector:
             "total_models": 10,
             "failed_model_ratio": 0.9,
         }):
-            with patch("app.app.reliability.logger") as mock_logger:
+            with patch("app.reliability.logger") as mock_logger:
                 status = cascade_detector.check_and_log_warnings()
                 assert len(status.get("warnings", [])) > 0
 
@@ -98,8 +98,8 @@ class TestGetCascadeDetector:
 
     def test_returns_singleton(self):
         """Test that get_cascade_detector returns singleton instance."""
-        with patch("app.app.reliability.get_circuit_breaker_manager"):
-            from app.app.reliability import get_cascade_detector, CascadeDetector
+        with patch("app.reliability.get_circuit_breaker_manager"):
+            from app.reliability import get_cascade_detector, CascadeDetector
             CascadeDetector._instance = None
 
             detector1 = get_cascade_detector()

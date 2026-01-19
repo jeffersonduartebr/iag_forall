@@ -4,11 +4,15 @@ rag_local.py — RAG Multimodal Unificado (Com suporte Imagem -> Texto)
 ---------------------------------------------------------------------
 Implementa a lógica de recuperação de contexto, incluindo a estratégia
 de "Visual Query Generation" para RAG baseado em imagem.
+
+Quick Win #5: Added Redis cache for visual query descriptions.
 """
 
 from __future__ import annotations
 import logging
 import asyncio
+import hashlib
+import json
 import re
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -27,8 +31,9 @@ from .vectorstore import (
 # Importamos o call_model para gerar a descrição da imagem (Ponte Visual)
 from .providers_async import call_model
 from .settings_dynamic import settings
-from .reranker import rerank_documents # <--- Importar o novo módulo
-from .sparse_index import sparse_index # <--- Importar BM25
+from .reranker import rerank_documents  # <--- Importar o novo módulo
+from .sparse_index import sparse_index  # <--- Importar BM25
+from .utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -39,7 +44,24 @@ if not logger.handlers:
 
 # Modelo rápido para descrever imagens para busca (Moondream é ótimo aqui, ou Llama 3.2)
 # Se não tiver configurado, usa o primeiro da lista de visão
-VISION_HELPER_MODEL = "ollama/moondream:latest" 
+VISION_HELPER_MODEL = "ollama/moondream:latest"
+
+# Visual Query Cache (Quick Win #5)
+VISUAL_CACHE_TTL = 86400  # 24 hours
+VISUAL_CACHE_PREFIX = "visual_query:"
+_rds = get_redis()
+
+# Metrics (safe import)
+try:
+    from .observability import VISUAL_QUERY_CACHE_HITS, VISUAL_QUERY_CACHE_MISSES
+except ImportError:
+    VISUAL_QUERY_CACHE_HITS = None
+    VISUAL_QUERY_CACHE_MISSES = None
+
+
+def _hash_image(image_b64: str) -> str:
+    """Generate a hash for image caching."""
+    return hashlib.sha256(image_b64[:10000].encode()).hexdigest()[:32] 
 
 # ================================================================
 # 🔍 DETECÇÃO AUTOMÁTICA DE MODALIDADE
@@ -67,12 +89,33 @@ async def _generate_visual_search_query(image_b64: str) -> str:
     """
     Usa um VLM para descrever a imagem e criar uma string de busca textual.
     Isso permite usar a imagem para encontrar documentos de texto no Chroma.
+
+    Quick Win #5: Added Redis cache for visual descriptions.
     """
+    # Check cache first
+    image_hash = _hash_image(image_b64)
+    cache_key = f"{VISUAL_CACHE_PREFIX}{image_hash}"
+
+    if _rds:
+        try:
+            cached = _rds.get(cache_key)
+            if cached:
+                result = cached.decode() if isinstance(cached, bytes) else str(cached)
+                logger.debug(f"[RAG-Vision] Cache HIT for image hash {image_hash[:8]}")
+                if VISUAL_QUERY_CACHE_HITS:
+                    VISUAL_QUERY_CACHE_HITS.inc()
+                return result
+        except Exception as e:
+            logger.debug(f"[RAG-Vision] Cache read error: {e}")
+
+    if VISUAL_QUERY_CACHE_MISSES:
+        VISUAL_QUERY_CACHE_MISSES.inc()
+
     try:
         # Tenta pegar um modelo da lista de candidatos se o helper não estiver fixo
         candidates = settings.CANDIDATE_VISION_MODELS_LIST
         model_to_use = list(candidates)[0] if candidates else "ollama/llava:7b"
-        
+
         # Prompt focado em extração de keywords para busca
         prompt = (
             "Identifique o objeto principal, cenário ou problema nesta imagem. "
@@ -87,9 +130,17 @@ async def _generate_visual_search_query(image_b64: str) -> str:
             max_tokens=64,
             temperature=0.1
         )
-        
+
         search_query = response.strip()
         logger.info(f"[RAG-Vision] Query gerada da imagem: '{search_query}'")
+
+        # Cache the result
+        if _rds and search_query:
+            try:
+                _rds.setex(cache_key, VISUAL_CACHE_TTL, search_query)
+            except Exception as e:
+                logger.debug(f"[RAG-Vision] Cache write error: {e}")
+
         return search_query
 
     except Exception as e:

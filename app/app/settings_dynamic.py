@@ -223,6 +223,7 @@ class DynamicSettings:
         # Ollama
         "OLLAMA_BASE_URL": "http://ollama:11434",
         "OLLAMA_HOST": "http://ollama:11434",
+        "OLLAMA_CONCURRENCY_LIMIT": "30",  # Quick Win #7: Configurable concurrency
 
         # Listas multimodais
         "CANDIDATE_MODELS_LIST": "[]",
@@ -573,6 +574,43 @@ class DynamicSettings:
 
 
 settings = DynamicSettings()
+
+
+# ============================================================
+# DB Connection Pool Metrics (Quick Win #10)
+# ============================================================
+
+def get_db_pool_stats() -> dict:
+    """Get database connection pool statistics."""
+    try:
+        pool = engine.pool
+        return {
+            "size": pool.size(),
+            "checked_in": pool.checkedin(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "invalid": pool.invalidatedcount() if hasattr(pool, 'invalidatedcount') else 0,
+        }
+    except Exception:
+        return {"size": 0, "checked_in": 0, "checked_out": 0, "overflow": 0, "invalid": 0}
+
+
+def update_db_pool_metrics():
+    """Update Prometheus metrics for DB pool (call periodically)."""
+    try:
+        from app.observability import (
+            DB_POOL_SIZE,
+            DB_POOL_CHECKED_IN,
+            DB_POOL_CHECKED_OUT,
+            DB_POOL_OVERFLOW,
+        )
+        stats = get_db_pool_stats()
+        DB_POOL_SIZE.set(stats["size"])
+        DB_POOL_CHECKED_IN.set(stats["checked_in"])
+        DB_POOL_CHECKED_OUT.set(stats["checked_out"])
+        DB_POOL_OVERFLOW.set(stats["overflow"])
+    except Exception:
+        pass  # Metrics not available
 
 
 # ============================================================

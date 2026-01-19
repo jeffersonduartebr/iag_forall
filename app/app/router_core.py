@@ -50,7 +50,12 @@ from .observability import (
     ROUTER_LOCAL_USAGE_RATIO,
     ROUTER_COST_PER_QUERY,
     ROUTER_HISTORY_ENTRIES,
+    FEEDBACK_PROCESSING_LATENCY,
+    EMA_BATCH_QUEUE_SIZE,
+    EMA_BATCH_FLUSHES,
+    EMA_LOG_CLEANUP_ROWS,
 )
+from .settings_dynamic import update_db_pool_metrics
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -151,6 +156,160 @@ class EMAHistoryCache:
 EMA_HISTORY = EMAHistoryCache()
 
 # ============================================================
+# 🚀 BATCH EMA UPDATES (Quick Win #1)
+# ============================================================
+EMA_BATCH_INTERVAL_S = 30  # Flush every 30 seconds
+EMA_BATCH_MAX_SIZE = 100   # Force flush if queue gets too large
+
+class EMABatchQueue:
+    """Queue for batching EMA updates to reduce DB writes."""
+
+    def __init__(self, max_size: int = EMA_BATCH_MAX_SIZE, flush_interval: int = EMA_BATCH_INTERVAL_S):
+        self.max_size = max_size
+        self.flush_interval = flush_interval
+        self._lock = threading.Lock()
+        self._queue: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (modality, model) -> latest record
+        self._last_flush = time.time()
+
+    def add(self, modality: str, model: str, record: Dict[str, Any]) -> None:
+        """Add or update an EMA record in the queue."""
+        key = (modality, model)
+        with self._lock:
+            self._queue[key] = record.copy()
+            EMA_BATCH_QUEUE_SIZE.set(len(self._queue))
+
+            # Force flush if queue is too large
+            if len(self._queue) >= self.max_size:
+                self._flush_locked()
+
+    def _flush_locked(self) -> int:
+        """Flush all queued updates to DB. Must hold lock."""
+        if not self._queue:
+            return 0
+
+        items = list(self._queue.items())
+        self._queue.clear()
+        EMA_BATCH_QUEUE_SIZE.set(0)
+        self._last_flush = time.time()
+
+        # Release lock before DB operations
+        return self._persist_batch(items)
+
+    def _persist_batch(self, items: list) -> int:
+        """Persist batch of EMA updates to database."""
+        if not items:
+            return 0
+
+        count = 0
+        try:
+            with engine.begin() as conn:
+                for (modality, model), record in items:
+                    try:
+                        # Upsert EMA history
+                        conn.execute(
+                            text("""
+                                INSERT INTO ema_history (modality, model, ema_latency, ema_quality, ema_cost, ema_alignment)
+                                VALUES (:mod, :m, :lat, :q, :c, :align)
+                                ON DUPLICATE KEY UPDATE
+                                    ema_latency = :lat, ema_quality = :q, ema_cost = :c,
+                                    ema_alignment = :align, updated_at = CURRENT_TIMESTAMP
+                            """),
+                            {
+                                "mod": modality, "m": model,
+                                "lat": record["ema_latency"], "q": record["ema_quality"],
+                                "c": record["ema_cost"], "align": record.get("ema_alignment", 1.0)
+                            }
+                        )
+                        # Log history (sampling - only log every 10th update to reduce writes further)
+                        if record.get("updates", 1) % 10 == 0:
+                            conn.execute(
+                                text("""
+                                    INSERT INTO ema_history_log (modality, model, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
+                                    VALUES (:mod, :m, :lat, :c, :q, :align, :u)
+                                """),
+                                {
+                                    "mod": modality, "m": model,
+                                    "lat": record["ema_latency"], "c": record["ema_cost"],
+                                    "q": record["ema_quality"], "align": record.get("ema_alignment", 1.0),
+                                    "u": record.get("updates", 1)
+                                }
+                            )
+                        count += 1
+                    except SQLAlchemyError as e:
+                        logger.warning(f"[EMA Batch] Error persisting {modality}/{model}: {e}")
+
+            EMA_BATCH_FLUSHES.inc()
+            logger.debug(f"[EMA Batch] Flushed {count} updates to DB")
+        except SQLAlchemyError as e:
+            logger.warning(f"[EMA Batch] Batch persist error: {e}")
+
+        return count
+
+    def flush(self) -> int:
+        """Public flush method."""
+        with self._lock:
+            return self._flush_locked()
+
+    def should_flush(self) -> bool:
+        """Check if it's time to flush based on interval."""
+        return (time.time() - self._last_flush) >= self.flush_interval
+
+    def size(self) -> int:
+        with self._lock:
+            return len(self._queue)
+
+
+EMA_BATCH = EMABatchQueue()
+
+
+def _ema_batch_flusher() -> None:
+    """Background thread that periodically flushes EMA batch queue."""
+    while True:
+        try:
+            if EMA_BATCH.should_flush():
+                flushed = EMA_BATCH.flush()
+                if flushed > 0:
+                    logger.info(f"[EMA Batch] Periodic flush: {flushed} updates")
+        except Exception as e:
+            logger.warning(f"[EMA Batch] Flusher error: {e}")
+        time.sleep(10)  # Check every 10 seconds
+
+
+# ============================================================
+# 🧹 EMA HISTORY LOG RETENTION (Quick Win #2)
+# ============================================================
+EMA_LOG_RETENTION_DAYS = 30  # Keep logs for 30 days
+
+
+def _cleanup_ema_history_log() -> None:
+    """Cleanup old ema_history_log entries (runs daily)."""
+    while True:
+        try:
+            with engine.begin() as conn:
+                result = conn.execute(
+                    text("DELETE FROM ema_history_log WHERE created_at < (NOW() - INTERVAL :d DAY)"),
+                    {"d": EMA_LOG_RETENTION_DAYS},
+                )
+                deleted = result.rowcount if result else 0
+                if deleted > 0:
+                    logger.info(f"[EMA Log Cleanup] Removed {deleted} rows older than {EMA_LOG_RETENTION_DAYS} days")
+                    EMA_LOG_CLEANUP_ROWS.inc(deleted)
+        except Exception as e:
+            logger.warning(f"[EMA Log Cleanup] Error: {e}")
+        time.sleep(86400)  # Run once per day
+
+
+def _update_db_pool_metrics() -> None:
+    """Background thread to update DB pool metrics (Quick Win #10)."""
+    while True:
+        try:
+            update_db_pool_metrics()
+        except Exception as e:
+            logger.debug(f"[DB Pool Metrics] Error: {e}")
+        time.sleep(30)  # Update every 30 seconds
+
+
+# ============================================================
 # 🧠 RECUPERAÇÃO DINÂMICA DE PESOS (NSGA-II)
 # ============================================================
 
@@ -192,38 +351,8 @@ def _load_ema_from_db() -> None:
         logger.warning("[EMA] Banco vazio ou erro ao carregar histórico (primeira execução?).")
 
 def _persist_ema(modality: str, model: str, record: Dict[str, Any]) -> None:
-    """Persiste a atualização do EMA no banco."""
-    try:
-        with engine.begin() as conn:
-            conn.execute(
-                text("""
-                    INSERT INTO ema_history (modality, model, ema_latency, ema_quality, ema_cost, ema_alignment)
-                    VALUES (:mod, :m, :lat, :q, :c, :align)
-                    ON DUPLICATE KEY UPDATE
-                        ema_latency = :lat, ema_quality = :q, ema_cost = :c, 
-                        ema_alignment = :align, updated_at = CURRENT_TIMESTAMP
-                """),
-                {
-                    "mod": modality, "m": model,
-                    "lat": record["ema_latency"], "q": record["ema_quality"],
-                    "c": record["ema_cost"], "align": record.get("ema_alignment", 1.0)
-                }
-            )
-            # Log histórico detalhado
-            conn.execute(
-                text("""
-                    INSERT INTO ema_history_log (modality, model, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
-                    VALUES (:mod, :m, :lat, :c, :q, :align, :u)
-                """),
-                {
-                    "mod": modality, "m": model,
-                    "lat": record["ema_latency"], "c": record["ema_cost"],
-                    "q": record["ema_quality"], "align": record.get("ema_alignment", 1.0),
-                    "u": record.get("updates", 1)
-                }
-            )
-    except SQLAlchemyError as e:
-        logger.warning(f"[EMA] Erro de persistência: {e}")
+    """Queue EMA update for batch persistence (Quick Win #1)."""
+    EMA_BATCH.add(modality, model, record)
 
 def _cleanup_old_query_logs() -> None:
     """Limpeza periódica de logs antigos."""
@@ -258,6 +387,9 @@ def _cleanup_ema_history() -> None:
 _load_ema_from_db()
 threading.Thread(target=_cleanup_old_query_logs, daemon=True).start()
 threading.Thread(target=_cleanup_ema_history, daemon=True).start()
+threading.Thread(target=_ema_batch_flusher, daemon=True).start()       # Quick Win #1: Batch EMA
+threading.Thread(target=_cleanup_ema_history_log, daemon=True).start() # Quick Win #2: Log Retention
+threading.Thread(target=_update_db_pool_metrics, daemon=True).start()  # Quick Win #10: DB Pool Metrics
 
 
 # ============================================================
@@ -496,9 +628,11 @@ async def process_background_feedback(
     """
     Executado após a resposta ser enviada ao usuário.
     Responsável por: Juízes, Reward, Bandit Update, Online Learning, Cache Store.
-    
+
     ATUALIZADO: Risk-Aware Hybrid Sampling com Online Learning.
+    Quick Win #9: Added latency tracking metric.
     """
+    feedback_start = time.time()
     try:
         # 1. Recupera estatísticas e Preditor Online
         stats = _get_ctx_stats("global")
@@ -646,5 +780,12 @@ async def process_background_feedback(
         except Exception as e:
             logger.warning(f"[Background] Log fail: {e}")
 
+        # 10. Record feedback processing latency (Quick Win #9)
+        feedback_duration = time.time() - feedback_start
+        FEEDBACK_PROCESSING_LATENCY.observe(feedback_duration)
+
     except Exception as e:
+        # Still record latency even on failure
+        feedback_duration = time.time() - feedback_start
+        FEEDBACK_PROCESSING_LATENCY.observe(feedback_duration)
         logger.exception(f"[Background] Critical fail: {e}")

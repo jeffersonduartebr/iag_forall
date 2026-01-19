@@ -13,7 +13,7 @@ class TestCosineDistance:
 
     def test_identical_vectors(self):
         """Test that identical vectors have distance 0."""
-        from app.app.drift_detector import cosine_distance
+        from app.drift_detector import cosine_distance
 
         a = np.array([1.0, 0.0, 0.0])
         b = np.array([1.0, 0.0, 0.0])
@@ -22,7 +22,7 @@ class TestCosineDistance:
 
     def test_orthogonal_vectors(self):
         """Test that orthogonal vectors have distance 1."""
-        from app.app.drift_detector import cosine_distance
+        from app.drift_detector import cosine_distance
 
         a = np.array([1.0, 0.0, 0.0])
         b = np.array([0.0, 1.0, 0.0])
@@ -31,7 +31,7 @@ class TestCosineDistance:
 
     def test_opposite_vectors(self):
         """Test that opposite vectors have distance 2."""
-        from app.app.drift_detector import cosine_distance
+        from app.drift_detector import cosine_distance
 
         a = np.array([1.0, 0.0, 0.0])
         b = np.array([-1.0, 0.0, 0.0])
@@ -40,7 +40,7 @@ class TestCosineDistance:
 
     def test_zero_vector(self):
         """Test that zero vectors return neutral distance."""
-        from app.app.drift_detector import cosine_distance
+        from app.drift_detector import cosine_distance
 
         a = np.array([0.0, 0.0, 0.0])
         b = np.array([1.0, 0.0, 0.0])
@@ -54,12 +54,12 @@ class TestQueryDriftDetector:
     @pytest.fixture
     def drift_detector(self):
         """Create a fresh drift detector instance."""
-        with patch("app.app.drift_detector.get_redis", return_value=None):
-            with patch("app.app.drift_detector.settings") as mock_settings:
+        with patch("app.drift_detector.get_redis", return_value=None):
+            with patch("app.drift_detector.settings") as mock_settings:
                 mock_settings.DRIFT_WINDOW_SIZE = 100
                 mock_settings.DRIFT_THRESHOLD = 0.15
 
-                from app.app.drift_detector import QueryDriftDetector
+                from app.drift_detector import QueryDriftDetector
                 # Reset singleton
                 QueryDriftDetector._instance = None
                 return QueryDriftDetector()
@@ -147,12 +147,12 @@ class TestGetDriftDetector:
 
     def test_returns_singleton(self):
         """Test that get_drift_detector returns singleton instance."""
-        with patch("app.app.drift_detector.get_redis", return_value=None):
-            with patch("app.app.drift_detector.settings") as mock_settings:
+        with patch("app.drift_detector.get_redis", return_value=None):
+            with patch("app.drift_detector.settings") as mock_settings:
                 mock_settings.DRIFT_WINDOW_SIZE = 100
                 mock_settings.DRIFT_THRESHOLD = 0.15
 
-                from app.app.drift_detector import get_drift_detector, QueryDriftDetector
+                from app.drift_detector import get_drift_detector, QueryDriftDetector
                 QueryDriftDetector._instance = None
 
                 detector1 = get_drift_detector()

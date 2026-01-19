@@ -7,7 +7,9 @@ Implementação Robusta, Assíncrona e Resiliente de TODOS os provedores.
 Melhorias:
 - Injeção automática de instrução <think> para modelos de raciocínio.
 - Extração e separação do pensamento (CoT) da resposta final.
-- Timeout estendido para 20 min (1200s) para evitar erros de Cold Start.
+- Quick Win #6: Adaptive timeout based on model type.
+- Quick Win #7: Configurable Ollama concurrency limit.
+- Quick Win #8: Async Ollama model ensure using httpx.
 """
 
 from __future__ import annotations
@@ -126,6 +128,49 @@ if genai and GEMINI_API_KEY:
 
 # Lista de palavras-chave que identificam modelos de raciocínio
 REASONING_MODEL_KEYWORDS = ["phi4", "reasoning", "deepseek-r1", "cot", "math"]
+
+# Quick Win #6 & #7: Configurable timeouts and concurrency
+try:
+    from app.settings_dynamic import settings as dynamic_settings
+    OLLAMA_CONCURRENCY_LIMIT = int(dynamic_settings.get("OLLAMA_CONCURRENCY_LIMIT", "30"))
+    ADAPTIVE_TIMEOUT_ENABLED = str(dynamic_settings.get("ADAPTIVE_TIMEOUT_ENABLED", "1")).strip() in ("1", "true", "True")
+    BASE_TIMEOUT = int(dynamic_settings.get("MIN_TIMEOUT", "60"))
+    MAX_TIMEOUT = int(dynamic_settings.get("MAX_TIMEOUT", "1200"))
+    TIMEOUT_MULTIPLIER = float(dynamic_settings.get("ADAPTIVE_TIMEOUT_MULTIPLIER", "2.0"))
+    REASONING_MULTIPLIER = float(dynamic_settings.get("ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER", "3.0"))
+except Exception:
+    # Fallback defaults
+    OLLAMA_CONCURRENCY_LIMIT = 30
+    ADAPTIVE_TIMEOUT_ENABLED = True
+    BASE_TIMEOUT = 60
+    MAX_TIMEOUT = 1200
+    TIMEOUT_MULTIPLIER = 2.0
+    REASONING_MULTIPLIER = 3.0
+
+
+def _get_adaptive_timeout(model: str) -> float:
+    """
+    Calculate adaptive timeout based on model type (Quick Win #6).
+    - Reasoning models: 3x base timeout
+    - Large models: 2x base timeout
+    - Standard models: base timeout
+    """
+    if not ADAPTIVE_TIMEOUT_ENABLED:
+        return MAX_TIMEOUT  # Fall back to original behavior
+
+    model_lower = model.lower()
+
+    # Reasoning models need more time for chain-of-thought
+    if any(k in model_lower for k in REASONING_MODEL_KEYWORDS):
+        timeout = BASE_TIMEOUT * REASONING_MULTIPLIER
+    # Large models (>7B parameters indicated by name)
+    elif any(size in model_lower for size in ["70b", "65b", "33b", "13b", "11b"]):
+        timeout = BASE_TIMEOUT * TIMEOUT_MULTIPLIER
+    # Standard models
+    else:
+        timeout = BASE_TIMEOUT * 1.5
+
+    return min(timeout, MAX_TIMEOUT)
 
 def heuristic_quality_estimate(text: str) -> float:
     if not text or not text.strip():
@@ -353,7 +398,8 @@ class GeminiProvider(BaseProvider):
 class OllamaProvider(BaseProvider):
     def __init__(self):
         self.host = OLLAMA_HOST
-        super().__init__("ollama", concurrency_limit=10) 
+        # Quick Win #7: Configurable concurrency limit
+        super().__init__("ollama", concurrency_limit=OLLAMA_CONCURRENCY_LIMIT) 
 
     @COMMON_RETRY_STRATEGY
     @local_breaker
@@ -391,8 +437,9 @@ class OllamaProvider(BaseProvider):
                 if image_b64:
                     payload["images"] = [image_b64]
 
-                # Timeout aumentado para 1200s (20 min) para lidar com Cold Start severo em hardware limitado
-                async with httpx.AsyncClient(timeout=1200.0) as client:
+                # Quick Win #6: Adaptive timeout based on model type
+                timeout = _get_adaptive_timeout(model)
+                async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.post(f"{self.host}/api/generate", json=payload)
                     resp.raise_for_status() 
                     data = resp.json()
@@ -527,24 +574,57 @@ async def call_model(
 
 
 # ==============================================================================
-# 12. FUNÇÃO LEGACY
+# 12. FUNÇÃO LEGACY (ATUALIZADA: Quick Win #8 - Async com httpx)
 # ==============================================================================
 
-def _ensure_ollama_model(model_name: str) -> bool:
+async def _ensure_ollama_model_async(model_name: str) -> bool:
+    """Async version using httpx (Quick Win #8)."""
     try:
-        resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
-        if resp.status_code == 200:
-            existing = [m.get("name") for m in resp.json().get("models", [])]
-            if any(model_name in m for m in existing):
-                return True
-        
-        logger.info(f"[ensure_ollama_model] Baixando modelo: {model_name}")
-        resp = requests.post(f"{OLLAMA_HOST}/api/pull", json={"name": model_name}, stream=True, timeout=900)
-        if resp.status_code == 200:
-            for _ in resp.iter_lines(): pass
-            return True
-            
-        return False
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{OLLAMA_HOST}/api/tags")
+            if resp.status_code == 200:
+                existing = [m.get("name") for m in resp.json().get("models", [])]
+                if any(model_name in m for m in existing):
+                    return True
+
+            logger.info(f"[ensure_ollama_model] Downloading model: {model_name}")
+            # Use longer timeout for pull
+            async with httpx.AsyncClient(timeout=900.0) as pull_client:
+                resp = await pull_client.post(
+                    f"{OLLAMA_HOST}/api/pull",
+                    json={"name": model_name}
+                )
+                return resp.status_code == 200
+
     except Exception as e:
-        logger.warning(f"[ensure_ollama_model] Falha ao garantir modelo {model_name}: {e}")
+        logger.warning(f"[ensure_ollama_model] Failed to ensure model {model_name}: {e}")
+        return False
+
+
+def _ensure_ollama_model(model_name: str) -> bool:
+    """Sync wrapper for backward compatibility."""
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If we're already in an async context, create a task
+            # This shouldn't block since we're in a thread
+            import requests
+            resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                existing = [m.get("name") for m in resp.json().get("models", [])]
+                if any(model_name in m for m in existing):
+                    return True
+
+            logger.info(f"[ensure_ollama_model] Downloading model: {model_name}")
+            resp = requests.post(f"{OLLAMA_HOST}/api/pull", json={"name": model_name}, stream=True, timeout=900)
+            if resp.status_code == 200:
+                for _ in resp.iter_lines():
+                    pass
+                return True
+            return False
+        else:
+            return loop.run_until_complete(_ensure_ollama_model_async(model_name))
+    except Exception as e:
+        logger.warning(f"[ensure_ollama_model] Failed to ensure model {model_name}: {e}")
         return False

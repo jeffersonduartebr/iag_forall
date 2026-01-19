@@ -559,6 +559,71 @@ EMA_HISTORY_EVICTIONS = Counter(
     registry=registry,
 )
 
+# ------------------------------------------------------------
+# 23. PHASE 2 QUICK WINS - Feedback & DB Pool Metrics
+# ------------------------------------------------------------
+FEEDBACK_PROCESSING_LATENCY = Histogram(
+    "feedback_processing_latency_seconds",
+    "Latency of background feedback processing",
+    registry=registry,
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+)
+EMA_BATCH_QUEUE_SIZE = Gauge(
+    "ema_batch_queue_size",
+    "Current size of EMA batch update queue",
+    registry=registry,
+)
+EMA_BATCH_FLUSHES = Counter(
+    "ema_batch_flushes_total",
+    "Total number of EMA batch flushes",
+    registry=registry,
+)
+EMA_LOG_CLEANUP_ROWS = Counter(
+    "ema_log_cleanup_rows_total",
+    "Total rows cleaned up from ema_history_log",
+    registry=registry,
+)
+DB_POOL_SIZE = Gauge(
+    "db_pool_size",
+    "Current database connection pool size",
+    registry=registry,
+)
+DB_POOL_CHECKED_IN = Gauge(
+    "db_pool_checked_in",
+    "Number of connections currently checked in (idle)",
+    registry=registry,
+)
+DB_POOL_CHECKED_OUT = Gauge(
+    "db_pool_checked_out",
+    "Number of connections currently checked out (active)",
+    registry=registry,
+)
+DB_POOL_OVERFLOW = Gauge(
+    "db_pool_overflow",
+    "Current overflow connections beyond pool size",
+    registry=registry,
+)
+VISUAL_QUERY_CACHE_HITS = Counter(
+    "visual_query_cache_hits_total",
+    "Total visual query description cache hits",
+    registry=registry,
+)
+VISUAL_QUERY_CACHE_MISSES = Counter(
+    "visual_query_cache_misses_total",
+    "Total visual query description cache misses",
+    registry=registry,
+)
+PRICING_CACHE_HITS = Counter(
+    "pricing_cache_hits_total",
+    "Total pricing cache hits (Redis layer)",
+    registry=registry,
+)
+PRICING_CACHE_MISSES = Counter(
+    "pricing_cache_misses_total",
+    "Total pricing cache misses (Redis layer)",
+    registry=registry,
+)
+
 
 # ============================================================
 # 🪵 Logging estruturado (Structlog + JSON)

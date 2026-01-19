@@ -12,7 +12,7 @@ class TestFeedbackQualityMapping:
 
     def test_rating_to_quality(self):
         """Test rating to quality conversion."""
-        from app.app.user_feedback import rating_to_quality
+        from app.user_feedback import rating_to_quality
 
         assert rating_to_quality(1) == 2.0
         assert rating_to_quality(2) == 4.0
@@ -22,7 +22,7 @@ class TestFeedbackQualityMapping:
 
     def test_thumbs_up_quality(self):
         """Test thumbs up maps to high quality."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             FEEDBACK_QUALITY_MAP,
             FeedbackType,
         )
@@ -31,7 +31,7 @@ class TestFeedbackQualityMapping:
 
     def test_thumbs_down_quality(self):
         """Test thumbs down maps to low quality."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             FEEDBACK_QUALITY_MAP,
             FeedbackType,
         )
@@ -44,7 +44,7 @@ class TestGetQualityFromFeedback:
 
     def test_thumbs_up(self):
         """Test getting quality from thumbs up feedback."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             get_quality_from_feedback,
             UserFeedbackRequest,
             FeedbackType,
@@ -60,7 +60,7 @@ class TestGetQualityFromFeedback:
 
     def test_thumbs_down(self):
         """Test getting quality from thumbs down feedback."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             get_quality_from_feedback,
             UserFeedbackRequest,
             FeedbackType,
@@ -76,7 +76,7 @@ class TestGetQualityFromFeedback:
 
     def test_rating(self):
         """Test getting quality from rating feedback."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             get_quality_from_feedback,
             UserFeedbackRequest,
             FeedbackType,
@@ -93,7 +93,7 @@ class TestGetQualityFromFeedback:
 
     def test_rating_missing_value(self):
         """Test that rating without value raises error."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             get_quality_from_feedback,
             UserFeedbackRequest,
             FeedbackType,
@@ -110,7 +110,7 @@ class TestGetQualityFromFeedback:
 
     def test_explicit_quality(self):
         """Test getting quality from explicit quality feedback."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             get_quality_from_feedback,
             UserFeedbackRequest,
             FeedbackType,
@@ -131,9 +131,9 @@ class TestBlendQuality:
 
     def test_blend_quality_default_weight(self):
         """Test quality blending with default weight."""
-        from app.app.user_feedback import blend_quality
+        from app.user_feedback import blend_quality
 
-        with patch("app.app.user_feedback.settings") as mock_settings:
+        with patch("app.user_feedback.settings") as mock_settings:
             mock_settings.USER_FEEDBACK_WEIGHT = 0.7
 
             result = blend_quality(user_quality=9.0, original_quality=5.0)
@@ -143,9 +143,9 @@ class TestBlendQuality:
 
     def test_blend_quality_full_user_weight(self):
         """Test quality blending with full user weight."""
-        from app.app.user_feedback import blend_quality
+        from app.user_feedback import blend_quality
 
-        with patch("app.app.user_feedback.settings") as mock_settings:
+        with patch("app.user_feedback.settings") as mock_settings:
             mock_settings.USER_FEEDBACK_WEIGHT = 1.0
 
             result = blend_quality(user_quality=9.0, original_quality=5.0)
@@ -154,9 +154,9 @@ class TestBlendQuality:
 
     def test_blend_quality_full_original_weight(self):
         """Test quality blending with full original weight."""
-        from app.app.user_feedback import blend_quality
+        from app.user_feedback import blend_quality
 
-        with patch("app.app.user_feedback.settings") as mock_settings:
+        with patch("app.user_feedback.settings") as mock_settings:
             mock_settings.USER_FEEDBACK_WEIGHT = 0.0
 
             result = blend_quality(user_quality=9.0, original_quality=5.0)
@@ -169,21 +169,21 @@ class TestProcessFeedback:
 
     def test_process_feedback_returns_result(self):
         """Test that process_feedback returns ProcessedFeedback."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             process_feedback,
             UserFeedbackRequest,
             FeedbackType,
             ProcessedFeedback,
         )
 
-        with patch("app.app.user_feedback.settings") as mock_settings:
+        with patch("app.user_feedback.settings") as mock_settings:
             mock_settings.USER_FEEDBACK_WEIGHT = 0.7
 
-            with patch("app.app.user_feedback.compute_reward", return_value=0.8):
-                with patch("app.app.user_feedback.bandit_update"):
-                    with patch("app.app.user_feedback._persist_feedback"):
-                        with patch("app.app.user_feedback.USER_FEEDBACK_RECEIVED"):
-                            with patch("app.app.user_feedback.USER_FEEDBACK_QUALITY_AVG"):
+            with patch("app.user_feedback.compute_reward", return_value=0.8):
+                with patch("app.user_feedback.bandit_update"):
+                    with patch("app.user_feedback._persist_feedback"):
+                        with patch("app.user_feedback.USER_FEEDBACK_RECEIVED"):
+                            with patch("app.user_feedback.USER_FEEDBACK_QUALITY_AVG"):
                                 request = UserFeedbackRequest(
                                     query="test query",
                                     model="test-model",
@@ -199,20 +199,20 @@ class TestProcessFeedback:
 
     def test_process_feedback_updates_bandit(self):
         """Test that process_feedback calls bandit_update."""
-        from app.app.user_feedback import (
+        from app.user_feedback import (
             process_feedback,
             UserFeedbackRequest,
             FeedbackType,
         )
 
-        with patch("app.app.user_feedback.settings") as mock_settings:
+        with patch("app.user_feedback.settings") as mock_settings:
             mock_settings.USER_FEEDBACK_WEIGHT = 0.7
 
-            with patch("app.app.user_feedback.compute_reward", return_value=0.8):
-                with patch("app.app.user_feedback.bandit_update") as mock_bandit:
-                    with patch("app.app.user_feedback._persist_feedback"):
-                        with patch("app.app.user_feedback.USER_FEEDBACK_RECEIVED"):
-                            with patch("app.app.user_feedback.USER_FEEDBACK_QUALITY_AVG"):
+            with patch("app.user_feedback.compute_reward", return_value=0.8):
+                with patch("app.user_feedback.bandit_update") as mock_bandit:
+                    with patch("app.user_feedback._persist_feedback"):
+                        with patch("app.user_feedback.USER_FEEDBACK_RECEIVED"):
+                            with patch("app.user_feedback.USER_FEEDBACK_QUALITY_AVG"):
                                 request = UserFeedbackRequest(
                                     query="test query",
                                     model="test-model",
@@ -229,7 +229,7 @@ class TestUserFeedbackRequest:
 
     def test_valid_thumbs_up(self):
         """Test valid thumbs up request."""
-        from app.app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import UserFeedbackRequest, FeedbackType
 
         request = UserFeedbackRequest(
             query="test",
@@ -241,7 +241,7 @@ class TestUserFeedbackRequest:
 
     def test_valid_rating(self):
         """Test valid rating request."""
-        from app.app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import UserFeedbackRequest, FeedbackType
 
         request = UserFeedbackRequest(
             query="test",
@@ -254,7 +254,7 @@ class TestUserFeedbackRequest:
 
     def test_rating_out_of_range(self):
         """Test that rating must be 1-5."""
-        from app.app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import UserFeedbackRequest, FeedbackType
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
@@ -267,7 +267,7 @@ class TestUserFeedbackRequest:
 
     def test_quality_out_of_range(self):
         """Test that quality must be 0-10."""
-        from app.app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import UserFeedbackRequest, FeedbackType
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):

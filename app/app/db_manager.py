@@ -421,24 +421,51 @@ def ensure_columns(table_name: str, columns: Dict[str, str], conn):
             logger.warning(f"⚠️ Erro ao verificar coluna '{col_name}' em '{table_name}': {e}")
 
 
+def ensure_indexes(conn):
+    """Create performance indexes (Quick Win #3)."""
+    indexes = [
+        # Semantic Cache: optimize lookup by modality + query_hash
+        ("idx_semantic_cache_lookup", "semantic_cache", "(modality, query_hash)"),
+        # EMA History Log: optimize cleanup queries
+        ("idx_ema_log_created", "ema_history_log", "(created_at)"),
+        # Query Log: optimize by model and created_at for analytics
+        ("idx_query_log_model", "query_log", "(chosen_model, created_at)"),
+    ]
+
+    for idx_name, table, columns in indexes:
+        try:
+            # MariaDB/MySQL syntax for CREATE INDEX IF NOT EXISTS
+            conn.execute(text(f"""
+                CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {columns}
+            """))
+            logger.info(f"✅ Index '{idx_name}' on '{table}' ensured")
+        except SQLAlchemyError as e:
+            # Index might already exist with different definition, ignore
+            if "Duplicate" not in str(e):
+                logger.warning(f"⚠️ Error creating index '{idx_name}': {e}")
+
+
 def initialize_system() -> None:
     """Executa o setup completo do banco."""
     logger.info("🚀 Iniciando verificação e migração do Schema...")
-    
+
     try:
         with engine.begin() as conn:
             for table_name, schema in SCHEMA_DEFINITIONS.items():
                 # 1. Criar tabela base
                 ensure_table(table_name, schema["ddl"], conn)
-                
+
                 # 2. Garantir todas as colunas (migração)
                 ensure_columns(table_name, schema.get("columns", {}), conn)
-            
+
             # 3. Popular Preços
             seed_pricing_data(conn)
 
+            # 4. Criar índices de performance (Quick Win #3)
+            ensure_indexes(conn)
+
         logger.info("✅ Schema do banco de dados e preços atualizados com sucesso!")
-        
+
     except SQLAlchemyError as e:
         logger.critical(f"🔥 Erro crítico no setup do banco: {e}")
         raise
