@@ -8,6 +8,9 @@ rodamos o modelo de embedding (que é leve) localmente na CPU do container
 usando 'sentence-transformers'.
 
 Isso deixa a GPU livre para o LLM/VLM pesado.
+
+CACHE L1: In-memory LRU cache para acesso ultra-rápido
+CACHE L2: Redis cache para persistência
 """
 
 from __future__ import annotations
@@ -16,8 +19,11 @@ import os
 import json
 import hashlib
 import logging
+import time
+import threading
+from collections import OrderedDict
 import numpy as np
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 # Importação Condicional para não quebrar se a lib faltar
 try:
@@ -38,6 +44,62 @@ from app.utils.redis_client import get_redis
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
+
+
+# ============================================================
+# L1 Cache In-Memory com LRU e TTL
+# ============================================================
+EMBED_L1_CACHE_SIZE = 1000
+EMBED_L1_CACHE_TTL_S = 300  # 5 minutos
+
+
+class EmbeddingL1Cache:
+    """Cache LRU in-memory para embeddings com TTL."""
+
+    def __init__(self, maxsize: int = EMBED_L1_CACHE_SIZE, ttl_s: int = EMBED_L1_CACHE_TTL_S):
+        self.maxsize = maxsize
+        self.ttl_s = ttl_s
+        self._lock = threading.Lock()
+        self._data: "OrderedDict[str, Tuple[List[float], float]]" = OrderedDict()
+        self._hits = 0
+        self._misses = 0
+
+    def get(self, key: str) -> Optional[List[float]]:
+        now = time.time()
+        with self._lock:
+            if key not in self._data:
+                self._misses += 1
+                return None
+            vec, ts = self._data[key]
+            if self.ttl_s > 0 and (now - ts) > self.ttl_s:
+                del self._data[key]
+                self._misses += 1
+                return None
+            # Move to end (most recently used)
+            self._data.move_to_end(key)
+            self._hits += 1
+            return vec
+
+    def set(self, key: str, vec: List[float]) -> None:
+        now = time.time()
+        with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
+            self._data[key] = (vec, now)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+    def stats(self) -> Dict[str, Any]:
+        total = self._hits + self._misses
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": self._hits / total if total > 0 else 0.0,
+            "size": len(self._data),
+        }
+
+
+_embed_l1_cache = EmbeddingL1Cache()
 
 # Configs
 EMBED_MODEL_TEXT = settings.get("EMBED_TEXT_MODEL", "nomic-ai/nomic-embed-text-v1.5")
@@ -79,15 +141,19 @@ def _norm(vec: np.ndarray) -> np.ndarray:
 
 def _save_cache(key: str, vec: List[float]):
     if _rds:
-        try: _rds.setex(key, EMBED_CACHE_TTL_S, json.dumps({"v": vec}))
-        except: pass
+        try:
+            _rds.setex(key, EMBED_CACHE_TTL_S, json.dumps({"v": vec}))
+        except Exception as e:
+            logger.warning(f"[Embeddings] Failed to save cache for key {key[:20]}...: {e}")
 
 def _load_cache(key: str) -> Optional[List[float]]:
     if _rds:
         try:
             raw = _rds.get(key)
-            if raw: return json.loads(raw).get("v")
-        except: pass
+            if raw:
+                return json.loads(raw).get("v")
+        except Exception as e:
+            logger.warning(f"[Embeddings] Failed to load cache for key {key[:20]}...: {e}")
     return None
 
 # ============================================================
@@ -114,25 +180,34 @@ def _local_cpu_embed(text: str) -> List[float]:
 
 def embed_text(text: str) -> List[float]:
     text = (text or "").strip()
-    if not text: return [0.0]
+    if not text:
+        return [0.0]
 
-    # 1. Cache Redis
+    # Cache key
     key = f"{REDIS_KEY_PREFIX}:{EMBED_MODEL_TEXT}:{_hash_text(text, EMBED_MODEL_TEXT)}"
+
+    # 1. L1 Cache (In-Memory) - Ultra-rápido
+    if cached := _embed_l1_cache.get(key):
+        return cached
+
+    # 2. L2 Cache (Redis)
     if cached := _load_cache(key):
+        _embed_l1_cache.set(key, cached)  # Populate L1
         return cached
 
     vec = []
-    
-    # 2. Tenta Local CPU (Prioridade Máxima para Performance)
+
+    # 3. Tenta Local CPU (Prioridade Máxima para Performance)
     try:
         vec = _local_cpu_embed(text)
     except Exception as e:
         logger.warning(f"[Embeddings] Falha local CPU: {e}. Tentando OpenAI...")
-        
-        # 3. Fallback OpenAI (se configurado)
+
+        # 4. Fallback OpenAI (se configurado)
         if settings.get("OPENAI_API_KEY"):
             try:
                 from openai import OpenAI
+
                 client = OpenAI(api_key=settings.get("OPENAI_API_KEY"))
                 resp = client.embeddings.create(model="text-embedding-3-small", input=text)
                 vec = resp.data[0].embedding
@@ -140,10 +215,16 @@ def embed_text(text: str) -> List[float]:
                 logger.error(f"[Embeddings] Falha OpenAI: {ex}")
 
     if vec:
-        _save_cache(key, vec)
+        _save_cache(key, vec)           # L2 Cache
+        _embed_l1_cache.set(key, vec)   # L1 Cache
         return vec
-    
-    return [0.0] * 768 # Retorna vetor zerado em caso de falha total
+
+    return [0.0] * 768  # Retorna vetor zerado em caso de falha total
+
+
+def get_embedding_cache_stats() -> Dict[str, Any]:
+    """Retorna estatísticas do cache L1 de embeddings."""
+    return _embed_l1_cache.stats()
 
 # Vision embedding removido/simplificado pois o RAG agora usa "Ponte Descritiva"
 # (VLM gera texto -> Texto vira embedding)

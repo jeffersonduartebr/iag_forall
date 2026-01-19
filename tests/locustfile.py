@@ -2588,11 +2588,13 @@ QUERIES = [
 # Classe Locust
 # ==========================================================
 class RouterUser(HttpUser):
+    """Standard user sending random queries."""
     wait_time = between(1, 3)
     host = "http://llm_router_api:8000"
 
-    @task
+    @task(10)
     def send_query(self):
+        """Standard query task."""
         q = random.choice(QUERIES)
         payload = {
             "query": q["query"],
@@ -2601,3 +2603,170 @@ class RouterUser(HttpUser):
             "temperature": 0.3
         }
         self.client.post("/query", json=payload)
+
+    @task(2)
+    def health_check(self):
+        """Health check task - lower weight."""
+        self.client.get("/health")
+
+    @task(1)
+    def metrics(self):
+        """Metrics endpoint task - lowest weight."""
+        self.client.get("/metrics")
+
+
+class RAGUser(HttpUser):
+    """User that primarily uses RAG-enabled queries."""
+    wait_time = between(2, 5)
+    host = "http://llm_router_api:8000"
+    weight = 3  # Lower weight compared to standard users
+
+    @task
+    def send_rag_query(self):
+        """RAG-enabled query task."""
+        q = random.choice(QUERIES)
+        payload = {
+            "query": q["query"],
+            "enable_rag_for_answer": True,
+            "rag_modality": "text",
+            "max_tokens": 2048,
+            "temperature": 0.5
+        }
+        self.client.post("/query", json=payload)
+
+
+class HighTemperatureUser(HttpUser):
+    """Creative user with high temperature settings."""
+    wait_time = between(2, 4)
+    host = "http://llm_router_api:8000"
+    weight = 2
+
+    @task
+    def send_creative_query(self):
+        """High temperature query for creative tasks."""
+        creative_queries = [
+            "Escreva um breve poema no estilo barroco sobre a passagem do tempo.",
+            "Crie uma história curta sobre um viajante do tempo que visita o Brasil colonial.",
+            "Invente uma teoria científica absurda mas que soe plausível.",
+            "Escreva um diálogo entre Einstein e Newton sobre física moderna.",
+        ]
+        payload = {
+            "query": random.choice(creative_queries),
+            "enable_rag_for_answer": False,
+            "max_tokens": 4096,
+            "temperature": 1.5  # High temperature for creativity
+        }
+        self.client.post("/query", json=payload)
+
+
+class BurstUser(HttpUser):
+    """Simulates burst traffic patterns."""
+    wait_time = between(0.1, 0.5)  # Very fast requests
+    host = "http://llm_router_api:8000"
+    weight = 1  # Lowest weight, sporadic bursts
+
+    @task
+    def burst_queries(self):
+        """Rapid burst of queries."""
+        q = random.choice(QUERIES)
+        payload = {
+            "query": q["query"],
+            "enable_rag_for_answer": False,
+            "max_tokens": 512,  # Shorter responses for speed
+            "temperature": 0.3
+        }
+        self.client.post("/query", json=payload)
+
+
+class LongRunningUser(HttpUser):
+    """User that sends complex, long-running queries."""
+    wait_time = between(5, 10)
+    host = "http://llm_router_api:8000"
+    weight = 1
+
+    @task
+    def send_complex_query(self):
+        """Complex query requiring more processing."""
+        complex_queries = [
+            "Analise detalhadamente o impacto de longo prazo do Tratado de Tordesilhas nas Américas, considerando aspectos políticos, econômicos e culturais.",
+            "Desenvolva uma solução completa em Python usando programação orientada a objetos para um sistema de biblioteca, incluindo classes para livros, usuários, empréstimos e reservas.",
+            "Compare e contraste as teorias da relatividade especial e geral de Einstein, explicando as implicações de cada uma para nossa compreensão do universo.",
+            "Explique o ciclo completo de Krebs em detalhes, incluindo todas as reações, enzimas envolvidas e a produção de ATP.",
+        ]
+        payload = {
+            "query": random.choice(complex_queries),
+            "enable_rag_for_answer": True,
+            "max_tokens": 8192,
+            "temperature": 0.7,
+            "timeout_seconds": 180
+        }
+        self.client.post("/query", json=payload)
+
+
+class MixedWorkloadUser(HttpUser):
+    """Simulates realistic mixed workload with varying request types."""
+    wait_time = between(1, 5)
+    host = "http://llm_router_api:8000"
+    weight = 5  # Most common user type
+
+    @task(7)
+    def simple_query(self):
+        """Simple, short queries - most common."""
+        simple = [
+            "O que é Python?",
+            "Quanto é 2+2?",
+            "Qual a capital do Brasil?",
+            "O que é uma API REST?",
+            "Explique o conceito de classe.",
+        ]
+        payload = {
+            "query": random.choice(simple),
+            "max_tokens": 512,
+            "temperature": 0.3
+        }
+        self.client.post("/query", json=payload)
+
+    @task(2)
+    def medium_query(self):
+        """Medium complexity queries."""
+        q = random.choice(QUERIES)
+        payload = {
+            "query": q["query"],
+            "max_tokens": 2048,
+            "temperature": 0.5
+        }
+        self.client.post("/query", json=payload)
+
+    @task(1)
+    def complex_query(self):
+        """Complex queries - least common."""
+        payload = {
+            "query": "Explique detalhadamente como funciona o algoritmo NSGA-II para otimização multiobjetivo e como ele pode ser aplicado em problemas de roteamento de LLMs.",
+            "enable_rag_for_answer": True,
+            "max_tokens": 4096,
+            "temperature": 0.7
+        }
+        self.client.post("/query", json=payload)
+
+
+class APIVersionUser(HttpUser):
+    """Tests versioned API endpoints."""
+    wait_time = between(2, 4)
+    host = "http://llm_router_api:8000"
+    weight = 2
+
+    @task
+    def v1_query(self):
+        """Test v1 API endpoint."""
+        q = random.choice(QUERIES)
+        payload = {
+            "query": q["query"],
+            "max_tokens": 1024,
+            "temperature": 0.3
+        }
+        self.client.post("/v1/query", json=payload)
+
+    @task
+    def v1_health(self):
+        """Test v1 health endpoint."""
+        self.client.get("/v1/health")

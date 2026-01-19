@@ -38,7 +38,13 @@ DB_PORT_ENV = int(os.getenv("DB_PORT", "3306"))
 
 DB_URL = f"mysql+pymysql://{DB_USER_ENV}:{DB_PASS_ENV}@{DB_HOST_ENV}:{DB_PORT_ENV}/{DB_NAME_ENV}"
 
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+engine = create_engine(
+    DB_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,  # Reduzido de 3600s para evitar conexões stale em cloud
+    pool_size=20,      # Melhor concorrência
+    max_overflow=10,   # Conexões extras sob carga
+)
 
 DDL = """
 CREATE TABLE IF NOT EXISTS settings_dynamic (
@@ -248,6 +254,54 @@ class DynamicSettings:
         "NSGA_W_LATENCY": "0.5",
         "NSGA_W_COST": "100.0",
         "NSGA_W_ALIGNMENT": "1.0",
+
+        # Phase 1: Monitoring
+        "NSGA_CONVERGENCE_HISTORY_SIZE": "20",
+        "CASCADE_WARNING_THRESHOLD": "0.3",
+        "CASCADE_CRITICAL_THRESHOLD": "0.5",
+
+        # Phase 2: Self-Tuning
+        "RISK_FACTOR_SOTA_HIGH_UQ": "1.3",
+        "RISK_FACTOR_LOCAL_HIGH_UQ": "0.6",
+        "RISK_FACTOR_LOCAL_LOW_UQ": "1.1",
+        "RISK_FACTOR_ADAPT_ENABLED": "0",
+        "RISK_FACTOR_ADAPT_RATE": "0.02",
+        "ADAPTIVE_TIMEOUT_ENABLED": "0",
+        "ADAPTIVE_TIMEOUT_MULTIPLIER": "2.0",
+        "ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER": "3.0",
+        "MIN_TIMEOUT": "30",
+        "MAX_TIMEOUT": "1200",
+        "META_OPT_ENABLED": "0",
+        "META_OPT_SCHEDULE_HOUR": "3",
+        "META_OPT_SCHEDULED_TRIALS": "20",
+
+        # Phase 3: Feedback
+        "DRIFT_THRESHOLD": "0.15",
+        "DRIFT_WINDOW_SIZE": "100",
+        "USER_FEEDBACK_WEIGHT": "0.7",
+
+        # Phase 4: A/B Testing
+        "AB_TESTING_ENABLED": "0",
+
+        # Phase 5: Autonomous Behavior - Adaptive Cache Threshold
+        "CACHE_THRESHOLD_MIN": "0.85",
+        "CACHE_THRESHOLD_MAX": "0.98",
+        "CACHE_HIT_RATE_TARGET": "0.20",
+        "CACHE_THRESHOLD_ADAPT_ENABLED": "0",
+
+        # Phase 5: Autonomous Behavior - Predictor Validation
+        "PREDICTOR_VALIDATION_ENABLED": "1",
+        "PREDICTOR_BRIER_SCORE_THRESHOLD": "0.25",
+        "PREDICTOR_CALIBRATION_WINDOW": "1000",
+
+        # Phase 5: Autonomous Behavior - UQ Calibration
+        "UQ_CALIBRATION_ENABLED": "1",
+        "UQ_QUALITY_GAP_RELAX": "0.5",
+        "UQ_QUALITY_GAP_TIGHTEN": "2.0",
+
+        # Phase 5: Autonomous Behavior - Judge Calibration
+        "JUDGE_CALIBRATION_ENABLED": "1",
+        "JUDGE_CACHE_AGREEMENT_TARGET": "0.7",
     }
 
     def get(self, key: str, fallback: Any = None) -> Any:
@@ -436,6 +490,86 @@ class DynamicSettings:
     def NSGA_W_COST(self) -> float: return float(self.get("NSGA_W_COST", 50.0))
     @property
     def NSGA_W_ALIGNMENT(self) -> float: return float(self.get("NSGA_W_ALIGNMENT", 1.0))
+
+    # Phase 1: Monitoring Properties
+    @property
+    def NSGA_CONVERGENCE_HISTORY_SIZE(self) -> int: return int(self.get("NSGA_CONVERGENCE_HISTORY_SIZE", 20))
+    @property
+    def CASCADE_WARNING_THRESHOLD(self) -> float: return float(self.get("CASCADE_WARNING_THRESHOLD", 0.3))
+    @property
+    def CASCADE_CRITICAL_THRESHOLD(self) -> float: return float(self.get("CASCADE_CRITICAL_THRESHOLD", 0.5))
+
+    # Phase 2: Self-Tuning Properties
+    @property
+    def RISK_FACTOR_SOTA_HIGH_UQ(self) -> float: return float(self.get("RISK_FACTOR_SOTA_HIGH_UQ", 1.3))
+    @property
+    def RISK_FACTOR_LOCAL_HIGH_UQ(self) -> float: return float(self.get("RISK_FACTOR_LOCAL_HIGH_UQ", 0.6))
+    @property
+    def RISK_FACTOR_LOCAL_LOW_UQ(self) -> float: return float(self.get("RISK_FACTOR_LOCAL_LOW_UQ", 1.1))
+    @property
+    def RISK_FACTOR_ADAPT_ENABLED(self) -> bool: return str(self.get("RISK_FACTOR_ADAPT_ENABLED")).strip() in ("1", "true", "True")
+    @property
+    def RISK_FACTOR_ADAPT_RATE(self) -> float: return float(self.get("RISK_FACTOR_ADAPT_RATE", 0.02))
+    @property
+    def ADAPTIVE_TIMEOUT_ENABLED(self) -> bool: return str(self.get("ADAPTIVE_TIMEOUT_ENABLED")).strip() in ("1", "true", "True")
+    @property
+    def ADAPTIVE_TIMEOUT_MULTIPLIER(self) -> float: return float(self.get("ADAPTIVE_TIMEOUT_MULTIPLIER", 2.0))
+    @property
+    def ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER(self) -> float: return float(self.get("ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER", 3.0))
+    @property
+    def MIN_TIMEOUT(self) -> int: return int(self.get("MIN_TIMEOUT", 30))
+    @property
+    def MAX_TIMEOUT(self) -> int: return int(self.get("MAX_TIMEOUT", 1200))
+    @property
+    def META_OPT_ENABLED(self) -> bool: return str(self.get("META_OPT_ENABLED")).strip() in ("1", "true", "True")
+    @property
+    def META_OPT_SCHEDULE_HOUR(self) -> int: return int(self.get("META_OPT_SCHEDULE_HOUR", 3))
+    @property
+    def META_OPT_SCHEDULED_TRIALS(self) -> int: return int(self.get("META_OPT_SCHEDULED_TRIALS", 20))
+
+    # Phase 3: Feedback Properties
+    @property
+    def DRIFT_THRESHOLD(self) -> float: return float(self.get("DRIFT_THRESHOLD", 0.15))
+    @property
+    def DRIFT_WINDOW_SIZE(self) -> int: return int(self.get("DRIFT_WINDOW_SIZE", 100))
+    @property
+    def USER_FEEDBACK_WEIGHT(self) -> float: return float(self.get("USER_FEEDBACK_WEIGHT", 0.7))
+
+    # Phase 4: A/B Testing Properties
+    @property
+    def AB_TESTING_ENABLED(self) -> bool: return str(self.get("AB_TESTING_ENABLED")).strip() in ("1", "true", "True")
+
+    # Phase 5: Autonomous Behavior - Adaptive Cache Properties
+    @property
+    def CACHE_THRESHOLD_MIN(self) -> float: return float(self.get("CACHE_THRESHOLD_MIN", 0.85))
+    @property
+    def CACHE_THRESHOLD_MAX(self) -> float: return float(self.get("CACHE_THRESHOLD_MAX", 0.98))
+    @property
+    def CACHE_HIT_RATE_TARGET(self) -> float: return float(self.get("CACHE_HIT_RATE_TARGET", 0.20))
+    @property
+    def CACHE_THRESHOLD_ADAPT_ENABLED(self) -> bool: return str(self.get("CACHE_THRESHOLD_ADAPT_ENABLED")).strip() in ("1", "true", "True")
+
+    # Phase 5: Autonomous Behavior - Predictor Validation Properties
+    @property
+    def PREDICTOR_VALIDATION_ENABLED(self) -> bool: return str(self.get("PREDICTOR_VALIDATION_ENABLED")).strip() in ("1", "true", "True")
+    @property
+    def PREDICTOR_BRIER_SCORE_THRESHOLD(self) -> float: return float(self.get("PREDICTOR_BRIER_SCORE_THRESHOLD", 0.25))
+    @property
+    def PREDICTOR_CALIBRATION_WINDOW(self) -> int: return int(self.get("PREDICTOR_CALIBRATION_WINDOW", 1000))
+
+    # Phase 5: Autonomous Behavior - UQ Calibration Properties
+    @property
+    def UQ_CALIBRATION_ENABLED(self) -> bool: return str(self.get("UQ_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
+    @property
+    def UQ_QUALITY_GAP_RELAX(self) -> float: return float(self.get("UQ_QUALITY_GAP_RELAX", 0.5))
+    @property
+    def UQ_QUALITY_GAP_TIGHTEN(self) -> float: return float(self.get("UQ_QUALITY_GAP_TIGHTEN", 2.0))
+
+    # Phase 5: Autonomous Behavior - Judge Calibration Properties
+    @property
+    def JUDGE_CALIBRATION_ENABLED(self) -> bool: return str(self.get("JUDGE_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
+    @property
+    def JUDGE_CACHE_AGREEMENT_TARGET(self) -> float: return float(self.get("JUDGE_CACHE_AGREEMENT_TARGET", 0.7))
 
 
 settings = DynamicSettings()

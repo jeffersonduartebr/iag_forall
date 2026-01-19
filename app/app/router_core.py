@@ -70,9 +70,85 @@ DB_URL = (
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
 BLOCKED_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")
-EMA_HISTORY: Dict[Tuple[str, str], Dict[str, Any]] = {}
 LOG_RETENTION_DAYS = int(settings.get("QUERY_LOG_RETENTION_DAYS", 7))
 rds = get_redis()
+
+# ============================================================
+# EMA History com TTL e LRU Eviction
+# ============================================================
+EMA_MAX_ENTRIES = 1000
+EMA_TTL_SECONDS = 86400  # 24 horas
+
+class EMAHistoryCache:
+    """Cache LRU com TTL para histórico EMA."""
+
+    def __init__(self, maxsize: int = EMA_MAX_ENTRIES, ttl_s: int = EMA_TTL_SECONDS):
+        self.maxsize = maxsize
+        self.ttl_s = ttl_s
+        self._lock = threading.Lock()
+        self._data: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._access_order: list = []
+
+    def get(self, key: Tuple[str, str]) -> Optional[Dict[str, Any]]:
+        now = time.time()
+        with self._lock:
+            if key not in self._data:
+                return None
+            entry = self._data[key]
+            last_update = entry.get("_last_update", 0)
+            if self.ttl_s > 0 and (now - last_update) > self.ttl_s:
+                del self._data[key]
+                if key in self._access_order:
+                    self._access_order.remove(key)
+                return None
+            # Move to end (most recently used)
+            if key in self._access_order:
+                self._access_order.remove(key)
+            self._access_order.append(key)
+            return entry
+
+    def set(self, key: Tuple[str, str], value: Dict[str, Any]) -> None:
+        now = time.time()
+        value["_last_update"] = now
+        with self._lock:
+            if key in self._data:
+                if key in self._access_order:
+                    self._access_order.remove(key)
+            self._data[key] = value
+            self._access_order.append(key)
+            # Evict oldest entries if over capacity
+            while len(self._data) > self.maxsize and self._access_order:
+                oldest = self._access_order.pop(0)
+                self._data.pop(oldest, None)
+
+    def __contains__(self, key: Tuple[str, str]) -> bool:
+        return key in self._data
+
+    def items(self):
+        with self._lock:
+            return list(self._data.items())
+
+    def cleanup_expired(self) -> int:
+        """Remove entradas expiradas. Retorna número de itens removidos."""
+        now = time.time()
+        removed = 0
+        with self._lock:
+            expired_keys = []
+            for key, entry in self._data.items():
+                last_update = entry.get("_last_update", 0)
+                if self.ttl_s > 0 and (now - last_update) > self.ttl_s:
+                    expired_keys.append(key)
+            for key in expired_keys:
+                del self._data[key]
+                if key in self._access_order:
+                    self._access_order.remove(key)
+                removed += 1
+        return removed
+
+    def size(self) -> int:
+        return len(self._data)
+
+EMA_HISTORY = EMAHistoryCache()
 
 # ============================================================
 # 🧠 RECUPERAÇÃO DINÂMICA DE PESOS (NSGA-II)
@@ -102,17 +178,16 @@ def _load_ema_from_db() -> None:
                 text("SELECT modality, model, ema_latency, ema_quality, ema_cost, ema_alignment FROM ema_history")
             ).mappings().all()
 
-        EMA_HISTORY = {}
         for r in rows:
             key = (r["modality"], r["model"])
-            EMA_HISTORY[key] = {
+            EMA_HISTORY.set(key, {
                 "ema_latency": float(r["ema_latency"]),
                 "ema_quality": float(r["ema_quality"]),
                 "ema_cost": float(r["ema_cost"]),
                 "ema_alignment": float(r["ema_alignment"]),
                 "updates": 0,
-            }
-        logger.info(f"[EMA] Carregado: {len(EMA_HISTORY)} modelos.")
+            })
+        logger.info(f"[EMA] Carregado: {EMA_HISTORY.size()} modelos.")
     except Exception:
         logger.warning("[EMA] Banco vazio ou erro ao carregar histórico (primeira execução?).")
 
@@ -162,11 +237,27 @@ def _cleanup_old_query_logs() -> None:
                 )
         except Exception:
             pass
-        time.sleep(86400) # Roda uma vez por dia
+        time.sleep(86400)  # Roda uma vez por dia
+
+
+def _cleanup_ema_history() -> None:
+    """Limpeza periódica de entradas EMA expiradas."""
+    while True:
+        try:
+            removed = EMA_HISTORY.cleanup_expired()
+            if removed > 0:
+                logger.info(f"[EMA] Cleanup: {removed} entradas expiradas removidas. Tamanho atual: {EMA_HISTORY.size()}")
+            # Atualiza métrica
+            ROUTER_HISTORY_ENTRIES.set(EMA_HISTORY.size())
+        except Exception as e:
+            logger.warning(f"[EMA] Erro no cleanup: {e}")
+        time.sleep(3600)  # Roda a cada hora
+
 
 # Inicialização
 _load_ema_from_db()
 threading.Thread(target=_cleanup_old_query_logs, daemon=True).start()
+threading.Thread(target=_cleanup_ema_history, daemon=True).start()
 
 
 # ============================================================
@@ -183,12 +274,32 @@ async def route_and_answer(
     image_b64: str | None = None,
     rag_modality: str = "text",
     use_cache: bool = True,
+    timeout_seconds: int | None = None,
 ) -> Dict[str, Any]:
     """
     Executa o fluxo crítico de resposta.
+
+    Args:
+        query: User query text
+        system_prompt: Optional system prompt
+        use_rag: Whether to use RAG augmentation
+        max_tokens: Max tokens for response
+        temperature: Temperature for generation
+        modality: text, vision, or multimodal
+        image_b64: Base64 encoded image for vision
+        rag_modality: RAG search modality
+        use_cache: Whether to use semantic cache
+        timeout_seconds: Optional request timeout override
+
+    Returns:
+        Dict with answer, model, cost, latency, and metadata
     """
     start_time = time.time()
     modality = modality or "text"
+
+    # Apply timeout if specified
+    default_timeout = int(settings.get("REQUEST_TIMEOUT_SECONDS", 120))
+    effective_timeout = timeout_seconds or default_timeout
     
     # 1. Heurística de imagem
     if bool(image_b64) and modality == "text":
@@ -347,7 +458,8 @@ async def route_and_answer(
             "raw_payload": meta_safe.get("raw_payload"),
             "prompt_tokens": p_tok,
             "completion_tokens": c_tok,
-            "load_time": load_time_s
+            "load_time": load_time_s,
+            "uncertainty_score": uncertainty_score,
         },
         "route": {
             "chosen_model": chosen,
@@ -435,15 +547,21 @@ async def process_background_feedback(
                 valid_scores = [s["score"] for s in judge_scores if "score" in s]
                 q_mean = float(np.mean(valid_scores)) if valid_scores else 5.0
                 final_quality = round(q_mean * 10.0, 2)
-                
+
                 # --- ONLINE LEARNING UPDATE ---
                 # Se julgamos, temos o rótulo real (ou aproximado pelo juiz)
-                # Consideramos "Correto" se nota > 7.0
+                # Consideramos "Correto" se nota >= 7.0
                 is_correct_label = final_quality >= 7.0
                 predictor.learn(query_embedding, is_correct_label)
-                predictor.save() # Persiste o aprendizado
+
+                # --- PREDICTOR VALIDATION (Phase 5) ---
+                # Record prediction vs actual outcome for calibration
+                actual_error = not is_correct_label
+                predictor.record_outcome(predicted_error_prob, actual_error)
+
+                predictor.save()  # Persiste o aprendizado e validação
                 # ------------------------------
-                
+
             except Exception:
                 final_quality = 5.0
         else:
@@ -465,26 +583,26 @@ async def process_background_feedback(
 
         # 6. EMA Update
         try:
-            global EMA_HISTORY
             alpha = 0.2
             key = (modality, chosen_model)
-            
-            if key not in EMA_HISTORY:
-                EMA_HISTORY[key] = {
+            prev = EMA_HISTORY.get(key)
+
+            if prev is None:
+                new_entry = {
                     "ema_latency": latency_s, "ema_quality": final_quality,
                     "ema_cost": cost_val, "ema_alignment": 1.0, "updates": 1
                 }
             else:
-                prev = EMA_HISTORY[key]
-                EMA_HISTORY[key] = {
+                new_entry = {
                     "ema_latency": alpha * latency_s + (1-alpha) * prev["ema_latency"],
                     "ema_quality": alpha * final_quality + (1-alpha) * prev["ema_quality"],
                     "ema_cost": alpha * cost_val + (1-alpha) * prev["ema_cost"],
                     "ema_alignment": prev.get("ema_alignment", 1.0),
                     "updates": prev.get("updates", 0) + 1
                 }
-            
-            asyncio.create_task(asyncio.to_thread(_persist_ema, modality, chosen_model, EMA_HISTORY[key]))
+
+            EMA_HISTORY.set(key, new_entry)
+            asyncio.create_task(asyncio.to_thread(_persist_ema, modality, chosen_model, new_entry))
         except Exception:
             pass
 

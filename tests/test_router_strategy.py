@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from app.app.router_strategy import choose_top2_models
+from app.router_strategy import choose_top2_models
 
 # Dados simulados do Bandit (Snapshot)
 MOCK_SNAPSHOT = {
@@ -18,8 +18,8 @@ MOCK_SAMPLED_QS = {
 
 @pytest.fixture
 def mock_bandit_data():
-    with patch("app.app.router_strategy.get_snapshot", return_value=MOCK_SNAPSHOT), \
-         patch("app.app.router_strategy.sample_metrics_from_snapshot", return_value=MOCK_SAMPLED_QS):
+    with patch("app.router_strategy.get_snapshot", return_value=MOCK_SNAPSHOT), \
+         patch("app.router_strategy.sample_metrics_from_snapshot", return_value=MOCK_SAMPLED_QS):
         yield
 
 def test_router_prefers_quality(mock_bandit_data):

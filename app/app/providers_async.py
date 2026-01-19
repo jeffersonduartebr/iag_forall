@@ -440,7 +440,8 @@ class OllamaProvider(BaseProvider):
                 if isinstance(e, httpx.HTTPStatusError):
                     try:
                         error_msg += f" | Body: {e.response.text}"
-                    except: pass
+                    except Exception as body_err:
+                        error_msg += f" | Body read failed: {body_err}"
                 
                 structlog_logger.error(
                     "provider_call_failed", 

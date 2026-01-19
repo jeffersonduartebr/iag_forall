@@ -1,5 +1,5 @@
 import pytest
-from app.app.bandits import compute_reward, _dynamic_epsilon
+from app.bandits import compute_reward, _dynamic_epsilon
 
 def test_compute_reward_logic():
     """Testa se a função de recompensa respeita os limites [0, 1]."""

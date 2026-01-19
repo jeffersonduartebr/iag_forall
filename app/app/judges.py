@@ -8,6 +8,7 @@ Mudanças Arquiteturais:
 1. Avaliação Binária: O juiz decide apenas entre CORRECT (10) ou INCORRECT (0).
 2. Chain-of-Thought (CoT): Obrigatório para evitar "chutes".
 3. Meta-Juiz de Desempate: Acionado apenas em conflito direto (0 vs 10).
+4. Cache de Verdicts: TTL de 5 minutos para queries similares.
 """
 
 from __future__ import annotations
@@ -17,6 +18,9 @@ import logging
 import random
 import re
 import statistics
+import time
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Sequence, Tuple, Optional
@@ -37,6 +41,73 @@ if not logger.handlers:
         level=logging.INFO,
         format="[%(asctime)s] [%(levelname)s] judges: %(message)s",
     )
+
+
+# ============================================================
+# 🚀 JUDGE VERDICT CACHE (Performance Optimization)
+# ============================================================
+VERDICT_CACHE_SIZE = 500
+VERDICT_CACHE_TTL_S = 300  # 5 minutos
+
+
+class VerdictCache:
+    """Cache LRU com TTL para verdicts de juízes."""
+
+    def __init__(self, maxsize: int = VERDICT_CACHE_SIZE, ttl_s: int = VERDICT_CACHE_TTL_S):
+        self.maxsize = maxsize
+        self.ttl_s = ttl_s
+        self._lock = threading.Lock()
+        self._data: "OrderedDict[str, Tuple[float, float]]" = OrderedDict()  # key -> (score, timestamp)
+        self._hits = 0
+        self._misses = 0
+
+    def _make_key(self, query: str, answer: str) -> str:
+        """Gera chave de cache baseada em hash(query + answer[:500])."""
+        payload = f"{query}|{answer[:500]}".encode("utf-8", errors="ignore")
+        return hashlib.sha256(payload).hexdigest()
+
+    def get(self, query: str, answer: str) -> Optional[float]:
+        key = self._make_key(query, answer)
+        now = time.time()
+        with self._lock:
+            if key not in self._data:
+                self._misses += 1
+                return None
+            score, ts = self._data[key]
+            if self.ttl_s > 0 and (now - ts) > self.ttl_s:
+                del self._data[key]
+                self._misses += 1
+                return None
+            self._data.move_to_end(key)
+            self._hits += 1
+            return score
+
+    def set(self, query: str, answer: str, score: float) -> None:
+        key = self._make_key(query, answer)
+        now = time.time()
+        with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
+            self._data[key] = (score, now)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+    def stats(self) -> Dict[str, Any]:
+        total = self._hits + self._misses
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": self._hits / total if total > 0 else 0.0,
+            "size": len(self._data),
+        }
+
+
+_verdict_cache = VerdictCache()
+
+
+def get_verdict_cache_stats() -> Dict[str, Any]:
+    """Retorna estatísticas do cache de verdicts."""
+    return _verdict_cache.stats()
 
 # ============================================================
 # ⚙️ Banco de dados
@@ -261,6 +332,33 @@ def heuristic_score(answer: str) -> float:
 # 🧮 Persistência (Métricas + Logs)
 # ============================================================
 
+# Judge calibration table DDL
+JUDGE_CALIBRATION_DDL = """
+CREATE TABLE IF NOT EXISTS judge_calibration (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    judge_model VARCHAR(255) NOT NULL,
+    query_hash VARCHAR(64) NOT NULL,
+    predicted_score FLOAT NOT NULL,
+    was_cached BOOLEAN DEFAULT FALSE,
+    cache_hit_count INT DEFAULT 0,
+    calibration_score FLOAT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_judge_model (judge_model),
+    INDEX idx_query_hash (query_hash),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+"""
+
+
+def _ensure_judge_calibration_table():
+    """Ensure judge_calibration table exists."""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(JUDGE_CALIBRATION_DDL))
+    except Exception as exc:
+        logger.warning("[Judges] Failed to create calibration table: %s", exc)
+
+
 def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitness):
     try:
         with engine.begin() as conn:
@@ -435,6 +533,12 @@ CORRECT ou INCORRECT
 
 
 async def _llm_pair_score(query, answer, use_rag, modality, image_b64, reference=None):
+    # Check verdict cache first (Performance optimization)
+    cached_score = _verdict_cache.get(query, answer)
+    if cached_score is not None:
+        logger.debug(f"[Judges] Cache HIT: score={cached_score}")
+        return cached_score
+
     ctx = await get_rag_context(query) if use_rag else ""
     img_desc = await _describe_image_if_needed(image_b64, modality)
 
@@ -526,30 +630,36 @@ CORRECT ou INCORRECT
             results.append((sj.model, 0.0, 0.0, {"latency": 5.0}))
 
     if not results:
+        _verdict_cache.set(query, answer, 0.0)
         return 0.0
 
     # --- LÓGICA DE DESEMPATE (META-JUIZ) ---
     if len(results) == 1:
-        return results[0][1] # score01
+        final_score = results[0][2]  # score01
+        _verdict_cache.set(query, answer, final_score)
+        return final_score
 
-    score_a = results[0][2] # score01
-    score_b = results[1][2] # score01
+    score_a = results[0][2]  # score01
+    score_b = results[1][2]  # score01
 
     # Se houver conflito (0 vs 1)
     if score_a != score_b:
         logger.info(f"[Judges] Conflito ({results[0][0]}={score_a} vs {results[1][0]}={score_b}). Chamando Meta-Juiz.")
-        
+
         conflicting_data = [
-            (results[0][0], results[0][1]), 
+            (results[0][0], results[0][1]),
             (results[1][0], results[1][1])
         ]
-        
+
         final_score_10 = await _meta_evaluate_binary(
             query, answer, conflicting_data, prompt, reference
         )
-        return final_score_10 / 10.0
+        final_score = final_score_10 / 10.0
+        _verdict_cache.set(query, answer, final_score)
+        return final_score
 
-    # Se concordaram
+    # Se concordaram (Early Exit - ambos concordam, não precisa meta-juiz)
+    _verdict_cache.set(query, answer, score_a)
     return score_a
 
 
@@ -601,3 +711,181 @@ async def judge_answer(
 
     valid = [r for r in results if "score" in r]
     return valid or [{"judge_id": "fallback", "score": 0.0}]
+
+
+# ============================================================
+# 🎯 Judge Calibration System (Phase 5 - Improvement 5)
+# ============================================================
+
+def record_judge_calibration(
+    judge_model: str,
+    query: str,
+    predicted_score: float,
+    was_cached: bool = False,
+) -> None:
+    """
+    Record a judge's prediction for calibration analysis.
+
+    Args:
+        judge_model: The model that made the judgment
+        query: The query text (will be hashed)
+        predicted_score: The score assigned (0-10)
+        was_cached: Whether this response was subsequently cached
+    """
+    if not settings.JUDGE_CALIBRATION_ENABLED:
+        return
+
+    try:
+        _ensure_judge_calibration_table()
+        query_hash = hashlib.sha256(query.encode()).hexdigest()[:64]
+
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO judge_calibration
+                    (judge_model, query_hash, predicted_score, was_cached)
+                    VALUES (:jm, :qh, :ps, :wc)
+                """),
+                {
+                    "jm": judge_model,
+                    "qh": query_hash,
+                    "ps": predicted_score,
+                    "wc": was_cached,
+                },
+            )
+    except Exception as exc:
+        logger.warning("[Judges] Calibration record fail: %s", exc)
+
+
+def update_calibration_cache_status(query: str) -> None:
+    """
+    Update calibration records when a response is cached.
+
+    Called from semantic_cache.store_cache() to track cache agreement.
+    """
+    if not settings.JUDGE_CALIBRATION_ENABLED:
+        return
+
+    try:
+        query_hash = hashlib.sha256(query.encode()).hexdigest()[:64]
+
+        with engine.begin() as conn:
+            # Update recent calibration records for this query
+            conn.execute(
+                text("""
+                    UPDATE judge_calibration
+                    SET was_cached = TRUE, cache_hit_count = cache_hit_count + 1
+                    WHERE query_hash = :qh
+                    AND created_at > NOW() - INTERVAL 1 HOUR
+                """),
+                {"qh": query_hash},
+            )
+    except Exception as exc:
+        logger.warning("[Judges] Calibration update fail: %s", exc)
+
+
+def get_judge_calibration_metrics() -> Dict[str, Dict[str, float]]:
+    """
+    Get calibration metrics for all judges.
+
+    Returns:
+        Dict mapping judge_model to metrics (cache_agreement, avg_score, etc.)
+    """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT
+                        judge_model,
+                        COUNT(*) as total_judgments,
+                        AVG(predicted_score) as avg_score,
+                        SUM(CASE WHEN was_cached THEN 1 ELSE 0 END) as cached_count,
+                        SUM(CASE WHEN predicted_score >= 7.0 THEN 1 ELSE 0 END) as high_score_count,
+                        SUM(CASE WHEN predicted_score >= 7.0 AND was_cached THEN 1 ELSE 0 END) as high_score_cached
+                    FROM judge_calibration
+                    WHERE created_at > NOW() - INTERVAL 24 HOUR
+                    GROUP BY judge_model
+                """)
+            ).fetchall()
+
+        result = {}
+        for row in rows:
+            judge_model = row[0]
+            total = int(row[1]) if row[1] else 0
+            avg_score = float(row[2]) if row[2] else 5.0
+            cached_count = int(row[3]) if row[3] else 0
+            high_score_count = int(row[4]) if row[4] else 0
+            high_score_cached = int(row[5]) if row[5] else 0
+
+            # Cache agreement: when judge gives high score, does it get cached?
+            cache_agreement = high_score_cached / high_score_count if high_score_count > 0 else 0.0
+
+            # Calibration score: correlation between high scores and caching
+            calibration_score = cache_agreement  # Simple approximation
+
+            result[judge_model] = {
+                "total_judgments": total,
+                "avg_score": avg_score,
+                "cached_rate": cached_count / total if total > 0 else 0.0,
+                "cache_agreement": cache_agreement,
+                "calibration_score": calibration_score,
+            }
+
+        # Update Prometheus metrics
+        try:
+            from .observability import JUDGE_CALIBRATION_SCORE, JUDGE_CACHE_AGREEMENT
+            for model, metrics in result.items():
+                JUDGE_CALIBRATION_SCORE.labels(judge_model=model).set(metrics["calibration_score"])
+                JUDGE_CACHE_AGREEMENT.labels(judge_model=model).set(metrics["cache_agreement"])
+        except Exception:
+            pass
+
+        return result
+
+    except Exception as exc:
+        logger.warning("[Judges] Failed to get calibration metrics: %s", exc)
+        return {}
+
+
+def calibrate_judges() -> Dict[str, Any]:
+    """
+    Analyze judge calibration and log insights.
+
+    Called periodically to assess judge performance and alignment.
+
+    Returns:
+        Dict with calibration analysis results
+    """
+    if not settings.JUDGE_CALIBRATION_ENABLED:
+        return {"status": "disabled"}
+
+    metrics = get_judge_calibration_metrics()
+
+    if not metrics:
+        return {"status": "no_data"}
+
+    target_agreement = settings.JUDGE_CACHE_AGREEMENT_TARGET
+    warnings = []
+
+    for model, data in metrics.items():
+        agreement = data.get("cache_agreement", 0.0)
+        if agreement < target_agreement and data.get("total_judgments", 0) > 50:
+            warnings.append(
+                f"{model}: cache_agreement={agreement:.2%} < target={target_agreement:.2%}"
+            )
+
+    if warnings:
+        logger.warning(f"[Judge-Calibration] Low agreement: {', '.join(warnings)}")
+
+    # Update metrics counter
+    try:
+        from .observability import JUDGE_CALIBRATION_UPDATES
+        JUDGE_CALIBRATION_UPDATES.inc()
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "metrics": metrics,
+        "warnings": warnings,
+    }

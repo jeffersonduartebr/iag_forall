@@ -195,8 +195,26 @@ BANDIT_REWARD = Histogram(
 )
 
 # ------------------------------------------------------------
-# 5. PROVEDORES (LLM Providers - Async)
-# (Estas eram as que estavam faltando!)
+# 5. L1 SEMANTIC CACHE
+# ------------------------------------------------------------
+L1_CACHE_HITS = Counter(
+    "l1_cache_hits_total",
+    "Total L1 (in-memory) cache hits",
+    registry=registry,
+)
+L1_CACHE_MISSES = Counter(
+    "l1_cache_misses_total",
+    "Total L1 (in-memory) cache misses",
+    registry=registry,
+)
+L1_CACHE_SIZE = Gauge(
+    "l1_cache_size_current",
+    "Current number of entries in L1 cache",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 6. PROVEDORES (LLM Providers - Async)
 # ------------------------------------------------------------
 PROV_REQ = Counter(
     "providers_model_requests_total",
@@ -235,6 +253,312 @@ PROV_LAST_TS = Gauge(
     registry=registry,
 )
 
+# ------------------------------------------------------------
+# 7. CIRCUIT BREAKERS
+# ------------------------------------------------------------
+CIRCUIT_BREAKER_STATE = Gauge(
+    "circuit_breaker_state",
+    "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+    ["model"],
+    registry=registry,
+)
+CIRCUIT_BREAKER_FAILURES = Counter(
+    "circuit_breaker_failures_total",
+    "Total failures recorded by circuit breakers",
+    ["model"],
+    registry=registry,
+)
+CIRCUIT_BREAKER_TRIPS = Counter(
+    "circuit_breaker_trips_total",
+    "Total times circuit breaker tripped (opened)",
+    ["model"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 8. RATE LIMITING
+# ------------------------------------------------------------
+RATE_LIMIT_EXCEEDED = Counter(
+    "rate_limit_exceeded_total",
+    "Total requests rejected due to rate limiting",
+    ["client_ip"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 9. REQUEST DEDUPLICATION
+# ------------------------------------------------------------
+REQUESTS_DEDUPLICATED = Counter(
+    "requests_deduplicated_total",
+    "Total requests deduplicated (avoided duplicate processing)",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 10. HEALTH CHECK METRICS
+# ------------------------------------------------------------
+HEALTH_CHECK_DURATION = Histogram(
+    "health_check_duration_seconds",
+    "Duration of health check execution",
+    ["component"],
+    registry=registry,
+)
+COMPONENT_HEALTH = Gauge(
+    "component_health_status",
+    "Health status of system component (1=healthy, 0=unhealthy)",
+    ["component"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 11. COST TRACKING (Detailed)
+# ------------------------------------------------------------
+TOTAL_COST_USD = Counter(
+    "total_cost_usd",
+    "Total cost incurred across all requests (USD)",
+    registry=registry,
+)
+COST_BY_PROVIDER = Counter(
+    "cost_by_provider_usd_total",
+    "Total cost by provider (USD)",
+    ["provider"],
+    registry=registry,
+)
+TOKENS_INPUT_TOTAL = Counter(
+    "tokens_input_total",
+    "Total input tokens processed",
+    ["model"],
+    registry=registry,
+)
+TOKENS_OUTPUT_TOTAL = Counter(
+    "tokens_output_total",
+    "Total output tokens generated",
+    ["model"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 12. NSGA-II CONVERGENCE MONITORING
+# ------------------------------------------------------------
+NSGA_CONVERGENCE_SCORE = Gauge(
+    "nsga_convergence_score",
+    "NSGA-II optimization convergence score (higher is better)",
+    ["modality"],
+    registry=registry,
+)
+NSGA_OPTIMIZATION_HEALTH = Gauge(
+    "nsga_optimization_health",
+    "NSGA-II optimization health (1=healthy, 0=degraded, -1=stuck)",
+    ["modality"],
+    registry=registry,
+)
+NSGA_EFFICIENCY_VARIANCE = Gauge(
+    "nsga_efficiency_variance",
+    "Variance in NSGA-II efficiency over recent runs",
+    ["modality"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 13. CASCADE FAILURE DETECTION
+# ------------------------------------------------------------
+CASCADE_SEVERITY_LEVEL = Gauge(
+    "cascade_severity_level",
+    "Cascade failure severity (0=normal, 1=warning, 2=critical, 3=emergency)",
+    registry=registry,
+)
+CASCADE_FAILED_MODEL_RATIO = Gauge(
+    "cascade_failed_model_ratio",
+    "Ratio of models with open circuit breakers",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 14. QUERY DRIFT DETECTION
+# ------------------------------------------------------------
+QUERY_DRIFT_SCORE = Gauge(
+    "query_drift_score",
+    "Cosine distance from baseline query distribution (higher = more drift)",
+    registry=registry,
+)
+QUERY_DRIFT_DETECTED = Counter(
+    "query_drift_detected_total",
+    "Number of times query drift was detected",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 15. USER FEEDBACK
+# ------------------------------------------------------------
+USER_FEEDBACK_RECEIVED = Counter(
+    "user_feedback_received_total",
+    "Total user feedback submissions",
+    ["feedback_type"],
+    registry=registry,
+)
+USER_FEEDBACK_QUALITY_AVG = Gauge(
+    "user_feedback_quality_avg",
+    "Average quality score from user feedback",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 16. A/B TESTING
+# ------------------------------------------------------------
+AB_EXPERIMENT_ASSIGNMENTS = Counter(
+    "ab_experiment_assignments_total",
+    "Total A/B experiment variant assignments",
+    ["experiment_id", "variant"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 17. RISK TUNING
+# ------------------------------------------------------------
+RISK_FACTOR_CURRENT = Gauge(
+    "risk_factor_current",
+    "Current adaptive risk factor value",
+    ["factor_type"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 18. PREDICTOR VALIDATION (Phase 5 - Autonomous Behavior)
+# ------------------------------------------------------------
+PREDICTOR_BRIER_SCORE = Gauge(
+    "predictor_brier_score",
+    "Brier score for online predictor calibration (lower is better, 0.25 = random)",
+    ["model"],
+    registry=registry,
+)
+PREDICTOR_ACCURACY = Gauge(
+    "predictor_accuracy",
+    "Binary classification accuracy of online predictor",
+    ["model"],
+    registry=registry,
+)
+PREDICTOR_PREDICTIONS_TOTAL = Counter(
+    "predictor_predictions_total",
+    "Total predictions made by online predictor",
+    ["model"],
+    registry=registry,
+)
+PREDICTOR_CALIBRATION_TEMP = Gauge(
+    "predictor_calibration_temp",
+    "Temperature scaling factor for predictor calibration",
+    ["model"],
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 19. ADAPTIVE CACHE THRESHOLD (Phase 5 - Autonomous Behavior)
+# ------------------------------------------------------------
+CACHE_THRESHOLD_CURRENT = Gauge(
+    "cache_threshold_current",
+    "Current semantic cache similarity threshold value",
+    registry=registry,
+)
+CACHE_HIT_RATE = Gauge(
+    "cache_hit_rate",
+    "Observed cache hit rate (hits / total)",
+    registry=registry,
+)
+CACHE_THRESHOLD_ADJUSTMENTS = Counter(
+    "cache_threshold_adjustments_total",
+    "Number of times cache threshold was adjusted",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 20. UQ CALIBRATION (Phase 5 - Autonomous Behavior)
+# ------------------------------------------------------------
+UQ_VS_ERROR_CORRELATION = Gauge(
+    "uq_vs_error_correlation",
+    "Correlation coefficient between uncertainty score and actual errors",
+    registry=registry,
+)
+UQ_HIGH_AVG_QUALITY = Gauge(
+    "uq_high_avg_quality",
+    "Average quality score for high-uncertainty queries",
+    registry=registry,
+)
+UQ_LOW_AVG_QUALITY = Gauge(
+    "uq_low_avg_quality",
+    "Average quality score for low-uncertainty queries",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 21. JUDGE CALIBRATION (Phase 5 - Autonomous Behavior)
+# ------------------------------------------------------------
+JUDGE_CALIBRATION_SCORE = Gauge(
+    "judge_calibration_score",
+    "Judge prediction accuracy (how well high scores correlate with caching)",
+    ["judge_model"],
+    registry=registry,
+)
+JUDGE_CACHE_AGREEMENT = Gauge(
+    "judge_cache_agreement",
+    "Rate at which high judge scores lead to successful caching",
+    ["judge_model"],
+    registry=registry,
+)
+JUDGE_CALIBRATION_UPDATES = Counter(
+    "judge_calibration_updates_total",
+    "Number of judge calibration updates",
+    registry=registry,
+)
+
+# ------------------------------------------------------------
+# 22. PERFORMANCE METRICS (Quick Wins Optimization)
+# ------------------------------------------------------------
+JUDGE_CACHE_HITS = Counter(
+    "judge_cache_hits_total",
+    "Total judge verdict cache hits",
+    registry=registry,
+)
+JUDGE_CACHE_MISSES = Counter(
+    "judge_cache_misses_total",
+    "Total judge verdict cache misses",
+    registry=registry,
+)
+JUDGE_CACHE_HIT_RATE = Gauge(
+    "judge_cache_hit_rate",
+    "Judge verdict cache hit rate",
+    registry=registry,
+)
+EMBEDDING_CACHE_HITS = Counter(
+    "embedding_cache_hits_total",
+    "Total embedding L1 cache hits",
+    registry=registry,
+)
+EMBEDDING_CACHE_MISSES = Counter(
+    "embedding_cache_misses_total",
+    "Total embedding L1 cache misses",
+    registry=registry,
+)
+EMBEDDING_CACHE_HIT_RATE = Gauge(
+    "embedding_cache_hit_rate",
+    "Embedding L1 cache hit rate",
+    registry=registry,
+)
+CENTROID_LOOKUP_DURATION = Histogram(
+    "centroid_lookup_duration_seconds",
+    "Duration of centroid lookup operations",
+    registry=registry,
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+EMA_HISTORY_SIZE = Gauge(
+    "ema_history_size",
+    "Current size of EMA history cache",
+    registry=registry,
+)
+EMA_HISTORY_EVICTIONS = Counter(
+    "ema_history_evictions_total",
+    "Total EMA history entries evicted due to TTL or LRU",
+    registry=registry,
+)
+
 
 # ============================================================
 # 🪵 Logging estruturado (Structlog + JSON)
@@ -252,6 +576,18 @@ class JsonUTF8Renderer:
             return json.dumps(event_dict, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"error": f"Falha ao serializar log: {e}", **event_dict})
+
+
+def _add_correlation_id(logger, method_name, event_dict):
+    """Add correlation ID to log events if available."""
+    try:
+        from .correlation import get_correlation_id
+        correlation_id = get_correlation_id()
+        if correlation_id:
+            event_dict["correlation_id"] = correlation_id
+    except Exception:
+        pass  # Don't break logging if correlation module has issues
+    return event_dict
 
 
 def setup_logging(level: int = logging.INFO):
@@ -277,6 +613,7 @@ def setup_logging(level: int = logging.INFO):
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            _add_correlation_id,  # Inject correlation ID into all logs
             JsonUTF8Renderer(),
         ]
     )

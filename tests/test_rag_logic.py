@@ -1,5 +1,5 @@
 import pytest
-from app.app.rag_local import reciprocal_rank_fusion
+from app.rag_local import reciprocal_rank_fusion
 
 def test_rrf_logic():
     """

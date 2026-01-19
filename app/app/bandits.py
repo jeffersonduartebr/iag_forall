@@ -100,11 +100,13 @@ def _unit(v: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(v)
     return v if n == 0 else v / n
 
+
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     denom = np.linalg.norm(a) * np.linalg.norm(b)
     if denom == 0:
         return 0.0
     return float(np.dot(a, b) / denom)
+
 
 def _ensure_dim(v: np.ndarray) -> np.ndarray:
     v = v.astype(np.float32).reshape(-1)
@@ -116,6 +118,56 @@ def _ensure_dim(v: np.ndarray) -> np.ndarray:
             pad = CENTROIDS_DIM - len(v)
             v = np.concatenate([v, np.zeros(pad, dtype=np.float32)])
     return _unit(v)
+
+
+# ============================================================
+# Pre-computed Centroid Matrix Cache (Performance Optimization)
+# ============================================================
+class CentroidMatrixCache:
+    """Cache para matriz de centróides pré-computada."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._matrix: Optional[np.ndarray] = None  # (K, D)
+        self._ids: List[int] = []
+        self._version: int = 0
+        self._last_update: float = 0.0
+
+    def update(self, cents: List[dict]) -> None:
+        """Atualiza a matriz cache com os centróides atuais."""
+        if not cents:
+            with self._lock:
+                self._matrix = None
+                self._ids = []
+                self._version += 1
+            return
+
+        with self._lock:
+            self._matrix = np.stack([c["vec"] for c in cents], axis=0).astype(np.float32)
+            self._ids = [c["id"] for c in cents]
+            self._version += 1
+            self._last_update = time.time()
+
+    def nearest(self, v: np.ndarray) -> Tuple[Optional[int], float, int]:
+        """
+        Busca o centróide mais próximo usando a matriz pré-computada.
+        Retorna: (índice no array original, similaridade, centroid_id)
+        """
+        with self._lock:
+            if self._matrix is None or len(self._ids) == 0:
+                return None, 0.0, -1
+
+            # Produto escalar vetorizado (unit vectors → cosine)
+            sims = self._matrix @ v
+            idx = int(np.argmax(sims))
+            return idx, float(sims[idx]), self._ids[idx]
+
+    def is_stale(self, max_age_s: float = 60.0) -> bool:
+        """Verifica se o cache está desatualizado."""
+        return time.time() - self._last_update > max_age_s
+
+
+_centroid_matrix_cache = CentroidMatrixCache()
 
 # ============================================================
 # Centróides semânticos (NumPy vetorizado) + clustering dinâmico
@@ -139,7 +191,7 @@ def _release_lock(key: str) -> None:
         pass
 
 
-def _load_centroids() -> List[dict]:
+def _load_centroids(update_matrix_cache: bool = True) -> List[dict]:
     """
     Carrega centróides de Redis:
     [
@@ -164,6 +216,11 @@ def _load_centroids() -> List[dict]:
             cnt = int(it.get("count", 0))
             last = int(it.get("last", int(time.time())))
             cents.append({"id": int(it["id"]), "vec": vec, "count": cnt, "last": last})
+
+        # Update the pre-computed matrix cache
+        if update_matrix_cache and cents:
+            _centroid_matrix_cache.update(cents)
+
         return cents
     except Exception as e:
         logger.warning(f"[centroids] Falha ao carregar: {e}")
@@ -177,6 +234,7 @@ def _save_centroids(cents: List[dict]) -> None:
     if not rds:
         return
     serial = []
+    normalized_cents = []
     now_ts = int(time.time())
 
     for it in cents:
@@ -198,6 +256,7 @@ def _save_centroids(cents: List[dict]) -> None:
                 "last": int(it.get("last", now_ts)),
             }
         )
+        normalized_cents.append({"id": int(it["id"]), "vec": vec, "count": cnt, "last": int(it.get("last", now_ts))})
 
     try:
         pipe = rds.pipeline()
@@ -212,6 +271,10 @@ def _save_centroids(cents: List[dict]) -> None:
             },
         )
         pipe.execute()
+
+        # Update the pre-computed matrix cache
+        _centroid_matrix_cache.update(normalized_cents)
+
     except Exception as e:
         logger.warning(f"[centroids] Falha ao salvar: {e}")
 
@@ -225,15 +288,24 @@ def _new_centroid_id(cents: List[dict]) -> int:
 
 
 def _nearest_centroid_vec(
-    v: np.ndarray, cents: List[dict]
+    v: np.ndarray, cents: List[dict], use_cache: bool = True
 ) -> Tuple[Optional[int], float]:
     """
     Versão vetorizada: empilha centróides e faz produto escalar.
     Assumimos vetores unitários.
+
+    Se use_cache=True e o cache da matriz está atualizado, usa o cache.
     """
     if not cents:
         return None, 0.0
 
+    # Try to use pre-computed matrix cache for faster lookup
+    if use_cache and not _centroid_matrix_cache.is_stale(max_age_s=120.0):
+        idx, sim, _ = _centroid_matrix_cache.nearest(v)
+        if idx is not None:
+            return idx, sim
+
+    # Fallback: compute on-the-fly
     C = np.stack([c["vec"] for c in cents], axis=0)  # (K, D)
     sims = C @ v  # produto escalar (unit vectors → cosine)
     idx = int(np.argmax(sims))

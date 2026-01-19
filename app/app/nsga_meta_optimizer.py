@@ -187,6 +187,126 @@ def build_objective(modality: str):
 
 
 # ============================================================
+# 🕐 Scheduled Meta-Optimization (Phase 2.3)
+# ============================================================
+
+import threading
+import time
+from datetime import datetime
+
+
+def run_scheduled_optimization(n_trials: int = None) -> Dict[str, Any]:
+    """
+    Run meta-optimization with optional reduced trials.
+
+    Args:
+        n_trials: Number of trials (defaults to META_OPT_SCHEDULED_TRIALS if scheduled)
+
+    Returns:
+        Dict with results for each modality
+    """
+    from app.settings_dynamic import settings
+
+    modal_list = ["text", "vision", "multimodal"]
+
+    if n_trials is None:
+        n_trials = settings.META_OPT_SCHEDULED_TRIALS
+
+    STORAGE = os.getenv("OPTUNA_STORAGE", "sqlite:///metaopt.db")
+
+    logger.info(f"[metaopt] Starting scheduled meta-optimization with {n_trials} trials...")
+
+    results = {}
+
+    for modality in modal_list:
+        STUDY_NAME = f"nsga_metaopt_{modality}"
+
+        logger.info(f"[metaopt] --- OPTIMIZING MODALITY: {modality} ---")
+
+        try:
+            study = optuna.create_study(
+                storage=STORAGE,
+                study_name=STUDY_NAME,
+                direction="maximize",
+                load_if_exists=True,
+                sampler=optuna.samplers.TPESampler(seed=42),
+            )
+
+            study.optimize(
+                build_objective(modality),
+                n_trials=n_trials,
+                n_jobs=1,
+            )
+
+            results[modality] = {
+                "best_trial": study.best_trial.number,
+                "best_efficiency": study.best_value,
+                "best_params": study.best_trial.params,
+            }
+
+            logger.info(
+                f"[metaopt] [{modality}] BEST trial={study.best_trial.number}, "
+                f"eff={study.best_value:.6f}"
+            )
+        except Exception as e:
+            logger.error(f"[metaopt] [{modality}] Optimization failed: {e}")
+            results[modality] = {"error": str(e)}
+
+    # Run final update script
+    script_path = os.getenv(
+        "NSGA_UPDATE_SCRIPT",
+        "/app/app/update_nsga_best_params.py"
+    )
+
+    try:
+        logger.info(f"[metaopt] Executando script final: {script_path}")
+        subprocess.check_call(["python", script_path])
+        logger.info("[metaopt] Publicação dos parâmetros MULTIMODAIS concluída.")
+    except Exception as e:
+        logger.warning(f"[metaopt] Falha ao executar update_nsga_best_params.py: {e}")
+
+    return results
+
+
+def _scheduled_optimizer_loop():
+    """Background loop that runs meta-optimization at scheduled hour."""
+    from app.settings_dynamic import settings
+
+    logger.info("[metaopt] Scheduled optimizer loop started")
+
+    while True:
+        try:
+            if not settings.META_OPT_ENABLED:
+                time.sleep(3600)  # Check every hour if disabled
+                continue
+
+            now = datetime.now()
+            target_hour = settings.META_OPT_SCHEDULE_HOUR
+
+            # Check if it's the target hour
+            if now.hour == target_hour and now.minute < 5:
+                logger.info(f"[metaopt] Scheduled run triggered at hour {target_hour}")
+                run_scheduled_optimization()
+                # Sleep until next day to avoid re-triggering
+                time.sleep(3600)
+            else:
+                # Sleep for 5 minutes and check again
+                time.sleep(300)
+
+        except Exception as e:
+            logger.error(f"[metaopt] Scheduled loop error: {e}")
+            time.sleep(600)  # Sleep 10 minutes on error
+
+
+def start_scheduled_optimizer():
+    """Start the scheduled optimizer background thread."""
+    t = threading.Thread(target=_scheduled_optimizer_loop, daemon=True)
+    t.start()
+    logger.info("[metaopt] Scheduled optimizer thread started")
+    return t
+
+
+# ============================================================
 # 🚀 Execução principal
 # ============================================================
 
