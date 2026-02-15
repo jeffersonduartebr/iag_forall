@@ -1,3 +1,5 @@
+"""Módulo `tests/test_reliability_core_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 
 import pybreaker
@@ -8,6 +10,7 @@ from app.error_handling import ErrorCategory
 
 
 def test_circuit_breaker_manager_config_status_reset(monkeypatch):
+    """Testa circuit breaker manager config status reset."""
     rel.ModelCircuitBreakerManager._instance = None
 
     cfg = SimpleNamespace(circuit_breaker_threshold=2, circuit_breaker_timeout=7)
@@ -27,6 +30,7 @@ def test_circuit_breaker_manager_config_status_reset(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_request_deduplicator_compute_cleanup_and_stats():
+    """Testa request deduplicator compute cleanup and stats."""
     rel.RequestDeduplicator._instance = None
     d = rel.get_request_deduplicator()
 
@@ -45,18 +49,25 @@ async def test_request_deduplicator_compute_cleanup_and_stats():
 
 @pytest.mark.asyncio
 async def test_execute_with_fallback_success_and_fail(monkeypatch):
+    """Testa execute with fallback success and fail."""
     class _Breaker:
+        """Classe `_Breaker`: concentra responsabilidades de test reliability core extra."""
         async def call_async(self, fn, model):
+            """Executa call async."""
             return await fn(model)
 
     class _Manager:
+        """Classe `_Manager`: concentra responsabilidades de test reliability core extra."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self.avail = {"primary/m": False, "fb/ok": True, "fb/fail": True}
 
         def is_available(self, model):
+            """Indica se available."""
             return self.avail.get(model, True)
 
         def get_breaker(self, model):
+            """Obtém breaker."""
             return _Breaker()
 
     monkeypatch.setattr(rel, "get_circuit_breaker_manager", lambda: _Manager())
@@ -67,6 +78,7 @@ async def test_execute_with_fallback_success_and_fail(monkeypatch):
     )
 
     async def _exec_ok(model):
+        """Executa exec ok."""
         return f"ok-{model}"
 
     r1 = await rel.execute_with_fallback("primary/m", _exec_ok, max_fallbacks=2)
@@ -86,6 +98,7 @@ async def test_execute_with_fallback_success_and_fail(monkeypatch):
     )
 
     async def _exec_fail(model):
+        """Executa exec fail."""
         raise RuntimeError("boom")
 
     r2 = await rel.execute_with_fallback("primary/m", _exec_fail, max_fallbacks=2)
@@ -95,6 +108,7 @@ async def test_execute_with_fallback_success_and_fail(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_model_health_helpers(monkeypatch):
+    """Testa model health helpers."""
     mgr = SimpleNamespace(
         get_status=lambda model: {"model": model, "state": "closed"},
         is_available=lambda model: model != "m2",
@@ -115,6 +129,7 @@ async def test_model_health_helpers(monkeypatch):
 
 
 def test_cascade_detector_status_and_warnings(monkeypatch):
+    """Testa cascade detector status and warnings."""
     rel.CascadeDetector._instance = None
 
     mgr = SimpleNamespace(

@@ -27,25 +27,11 @@ logger = logging.getLogger(__name__)
 SOTA_MARKERS = ["gpt-5", "opus", "sonnet", "gemini-3-pro"]
 
 def _is_sota(model_name: str) -> bool:
-    """Resumo do comportamento desta função.
-
-    Args:
-        model_name: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa is sota."""
     return any(m in model_name.lower() for m in SOTA_MARKERS)
 
 def _is_local(model_name: str) -> bool:
-    """Resumo do comportamento desta função.
-
-    Args:
-        model_name: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa is local."""
     return "ollama" in model_name.lower()
 
 def _get_circuit_breaker_penalty(model: str) -> float:
@@ -93,19 +79,7 @@ def choose_top2_models(
     # ==================================================================
     # 🚨 CASCADE DETECTION - Emergency routing check
     # ==================================================================
-    """Resumo do comportamento desta função.
-
-    Args:
-        candidates: Parâmetro de entrada.
-        weights: Parâmetro de entrada.
-        query_text: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-        uncertainty_score: Parâmetro de entrada.
-        min_quality: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa choose top2 models."""
     cascade_detector = get_cascade_detector()
     if cascade_detector.is_emergency_mode:
         emergency_model = cascade_detector.get_emergency_fallback()

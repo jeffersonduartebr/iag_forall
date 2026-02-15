@@ -1,3 +1,5 @@
+"""Módulo `tests/test_rag_router.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ from app.routers import rag_router as rr
 
 
 def test_chunk_text_basic():
+    """Testa chunk text basic."""
     txt = "a " * 1000
     chunks = rr.chunk_text(txt, chunk_size=100, overlap=10)
     assert len(chunks) > 1
@@ -15,6 +18,7 @@ def test_chunk_text_basic():
 
 
 def test_extract_text_from_pdf_error(monkeypatch):
+    """Testa extract text from pdf error."""
     monkeypatch.setattr(rr.fitz, "open", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("bad pdf")))
     with pytest.raises(HTTPException) as exc:
         rr.extract_text_from_pdf(b"%PDF-invalid")
@@ -23,7 +27,9 @@ def test_extract_text_from_pdf_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_summarize_text_success_and_fallback(monkeypatch):
+    """Testa summarize text success and fallback."""
     async def _ok(**kwargs):
+        """Executa ok."""
         return "TÍTULO: Manual\nRESUMO: Guia curto.", {}
 
     monkeypatch.setattr(rr, "call_model", _ok)
@@ -32,6 +38,7 @@ async def test_summarize_text_success_and_fallback(monkeypatch):
     assert "Guia curto" in summary
 
     async def _empty(**kwargs):
+        """Executa empty."""
         return "", {}
 
     monkeypatch.setattr(rr, "call_model", _empty)
@@ -42,12 +49,15 @@ async def test_summarize_text_success_and_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_add_doc_txt_success(monkeypatch):
+    """Testa add doc txt success."""
     async def _summary(_txt):
+        """Executa summary."""
         return "Meu título", "Meu resumo"
 
     inserted = []
 
     async def _add_document(**kwargs):
+        """Executa add document."""
         inserted.append(kwargs)
         return True
 
@@ -64,6 +74,7 @@ async def test_add_doc_txt_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_add_doc_validation_and_empty(monkeypatch):
+    """Testa add doc validation and empty."""
     bad = UploadFile(filename="x.csv", file=BytesIO(b"abc"))
     with pytest.raises(HTTPException) as exc1:
         await rr.add_doc(bad)
@@ -77,9 +88,11 @@ async def test_add_doc_validation_and_empty(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ingest_text_success_and_fail(monkeypatch):
+    """Testa ingest text success and fail."""
     req = rr.IngestRequest(text="abc", doc_id="d1", metadata={"a": 1}, collection_name="course_1")
 
     async def _ok(**kwargs):
+        """Executa ok."""
         return True
 
     monkeypatch.setattr(rr, "add_document", _ok)
@@ -88,6 +101,7 @@ async def test_ingest_text_success_and_fail(monkeypatch):
     assert req.metadata["target_collection"] == "course_1"
 
     async def _fail(**kwargs):
+        """Executa fail."""
         return False
 
     monkeypatch.setattr(rr, "add_document", _fail)

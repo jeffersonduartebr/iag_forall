@@ -1,5 +1,10 @@
 # Índice de Módulos do Core (`app/app`)
 
+Para referência detalhada de todos os métodos e arquivos (incluindo fora de `app/app`), consulte:
+1. `docs/FILE_CATALOG.md`
+2. `docs/METHOD_CATALOG.md`
+3. `docs/DOCSTRING_BACKLOG.md`
+
 ## Entrada e API
 | Módulo | Responsabilidade | Pontos de atenção |
 |---|---|---|

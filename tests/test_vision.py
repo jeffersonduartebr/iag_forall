@@ -1,3 +1,5 @@
+"""Módulo `tests/test_vision.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import requests
 import base64
 import os
@@ -98,6 +100,7 @@ def send_request(image_path):
 # ==============================================================================
 def main():
     # Busca extensões comuns (case insensitive para Windows/Linux)
+    """Executa main."""
     patterns = ['*.jpg', '*.jpeg', '*.png', '*.webp', '*.JPG', '*.PNG']
     files = []
     

@@ -6,7 +6,7 @@
 3. Configurações críticas devem ser explícitas em produção.
 
 ## Variáveis críticas (obrigatórias em produção)
-- `ADMIN_TOKEN`
+- `ADMIN_TOKEN` (quando `AUTH_JWT_ENABLED=0`)
 - `DB_PASS`
 - `MYSQL_ROOT_PASSWORD`
 - `REDIS_PASSWORD`
@@ -16,6 +16,15 @@
 - `REQUEST_TIMEOUT_SECONDS`
 - `MAX_CONCURRENT_REQUESTS`
 - `BACKPRESSURE_ENABLED`
+- `AUTH_JWT_ENABLED`
+- `AUTH_JWT_SECRET`
+- `AUTH_JWT_ALGORITHMS`
+- `AUTH_JWT_ISSUER`
+- `AUTH_JWT_AUDIENCE`
+- `AUTH_REQUIRE_SCOPES`
+- `PRIVACY_RETENTION_DAYS`
+- `PRIVACY_ANONYMIZE_IDS`
+- `ROADMAP_AUTO_DDL` (somente desenvolvimento)
 
 ## Banco e cache
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`
@@ -39,6 +48,7 @@
 - `CIRCUIT_BREAKER_LOCAL_FAIL_MAX`, `CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT`
 - `BACKPRESSURE_ENABLED`, `MAX_CONCURRENT_REQUESTS`
 - `ADAPTIVE_TIMEOUT_ENABLED`, `MIN_TIMEOUT`, `MAX_TIMEOUT`
+- `CELERY_TASK_SOFT_TIME_LIMIT`, `CELERY_TASK_TIME_LIMIT`, `CELERY_VISIBILITY_TIMEOUT`
 
 ## Cache e RAG
 - `CACHE_THRESHOLD`, `CACHE_TTL_DAYS`
@@ -68,6 +78,8 @@ Além de settings dinâmicos globais, o sistema agora suporta:
 5. Execução assíncrona de eval via Celery (`task_execute_eval_run`).
 6. Relatório de significância estatística por run de avaliação.
 7. Consulta de status e cancelamento de tasks de eval via endpoints administrativos.
+8. Quotas por usuário (`tenant_id + user_key`) com limites diário e horário.
+9. Rotina administrativa de retenção (`POST /admin/privacy/purge`).
 
 Observação:
 - A governança por tenant é aplicada quando `tenant_id` é enviado no `POST /query`.

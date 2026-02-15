@@ -23,13 +23,9 @@ DATA_DIR = settings.get("RAG_DATA_DIR", "/app/data")
 INDEX_PATH = os.path.join(DATA_DIR, "bm25_index.pkl")
 
 class SparseIndex:
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `SparseIndex`: organiza responsabilidades de sparse index."""
     def __init__(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self.documents: List[str] = []
         self.doc_ids: List[str] = []
         self.bm25 = None
@@ -110,11 +106,7 @@ class SparseIndex:
             return ""
 
     def _save(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa save."""
         try:
             os.makedirs(os.path.dirname(INDEX_PATH), exist_ok=True)
             with open(INDEX_PATH, "wb") as f:
@@ -127,11 +119,7 @@ class SparseIndex:
             logger.error(f"[SparseIndex] Erro ao salvar índice em disco: {e}")
 
     def _load(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa load."""
         if os.path.exists(INDEX_PATH):
             try:
                 with open(INDEX_PATH, "rb") as f:

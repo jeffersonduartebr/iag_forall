@@ -146,14 +146,7 @@ def build_objective(modality: str):
     """Cria uma função objetivo isolada para cada modalidade."""
 
     def objective(trial: optuna.trial.Trial) -> float:
-        """Resumo do comportamento desta função.
-
-        Args:
-            trial: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa objective."""
         N_pop = trial.suggest_int("N_pop", 8, 64, step=4)
         N_gen = trial.suggest_int("N_gen", 5, 40, step=5)
         cxpb = trial.suggest_float("cxpb", 0.60, 0.95)

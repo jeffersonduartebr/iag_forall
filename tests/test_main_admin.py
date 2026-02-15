@@ -1,3 +1,5 @@
+"""Módulo `tests/test_main_admin.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 
 import pytest
@@ -5,6 +7,7 @@ from fastapi import HTTPException
 
 
 def _set_admin_token(monkeypatch, value="secret-token"):
+    """Executa set admin token."""
     from app import main
 
     monkeypatch.setattr(
@@ -15,12 +18,14 @@ def _set_admin_token(monkeypatch, value="secret-token"):
 
 
 def _set_settings_map(monkeypatch, mapping):
+    """Executa set settings map."""
     from app import main
 
     monkeypatch.setattr(main.settings, "get", lambda key, fallback=None: mapping.get(key, fallback))
 
 
 def test_safe_parse_json_variants():
+    """Testa safe parse json variants."""
     from app.main import safe_parse_json
 
     assert safe_parse_json('{"a":1}') == {"a": 1}
@@ -29,6 +34,7 @@ def test_safe_parse_json_variants():
 
 
 def test_require_admin(monkeypatch):
+    """Testa require admin."""
     from app.main import _require_admin
 
     _set_admin_token(monkeypatch, "abc")
@@ -40,6 +46,7 @@ def test_require_admin(monkeypatch):
 
 
 def test_admin_settings_endpoints(monkeypatch):
+    """Testa admin settings endpoints."""
     from app import main
 
     _set_admin_token(monkeypatch, "abc")
@@ -48,6 +55,7 @@ def test_admin_settings_endpoints(monkeypatch):
     calls = []
 
     def _set(k, v, actor=None, source=None):
+        """Executa set."""
         calls.append((k, v, actor, source))
 
     monkeypatch.setattr(main.settings, "set", _set)
@@ -62,6 +70,7 @@ def test_admin_settings_endpoints(monkeypatch):
 
 
 def test_circuit_breaker_admin(monkeypatch):
+    """Testa circuit breaker admin."""
     from app import main
 
     _set_admin_token(monkeypatch, "abc")
@@ -84,6 +93,7 @@ def test_circuit_breaker_admin(monkeypatch):
 
 
 def test_cascade_status_admin(monkeypatch):
+    """Testa cascade status admin."""
     from app import main
 
     _set_admin_token(monkeypatch, "abc")
@@ -93,6 +103,7 @@ def test_cascade_status_admin(monkeypatch):
 
 
 def test_feedback_endpoints(monkeypatch):
+    """Testa feedback endpoints."""
     from app import main
 
     result = SimpleNamespace(user_quality=8.0, blended_quality=7.2, model="m1", reward=0.73)
@@ -113,6 +124,7 @@ def test_feedback_endpoints(monkeypatch):
 
 
 def test_experiment_admin_endpoints(monkeypatch):
+    """Testa experiment admin endpoints."""
     from app import main
 
     _set_settings_map(monkeypatch, {"ADMIN_TOKEN": "abc", "AB_TESTING_ENABLED": True})
@@ -159,6 +171,7 @@ def test_experiment_admin_endpoints(monkeypatch):
 
 
 def test_experiments_disabled_paths(monkeypatch):
+    """Testa experiments disabled paths."""
     from app import main
 
     _set_settings_map(monkeypatch, {"ADMIN_TOKEN": "abc", "AB_TESTING_ENABLED": False})

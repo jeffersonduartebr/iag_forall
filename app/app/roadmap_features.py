@@ -127,6 +127,7 @@ DDL_STATEMENTS = [
 
 @dataclass
 class BudgetCheck:
+    """Classe `BudgetCheck`: concentra responsabilidades de roadmap features."""
     allowed: bool
     reason: str
     daily_spent: float
@@ -137,6 +138,7 @@ class BudgetCheck:
 
 @dataclass
 class AccessDecision:
+    """Classe `AccessDecision`: concentra responsabilidades de roadmap features."""
     allowed: bool
     reason: str
     roles: List[str]
@@ -183,6 +185,7 @@ def get_tenant_budget(tenant_id: str) -> Dict[str, Any]:
 
 
 def _usage_snapshot(tenant_id: str) -> Dict[str, float]:
+    """Executa usage snapshot."""
     day_key = time.strftime("%Y-%m-%d")
     month_key = time.strftime("%Y-%m")
     with get_engine().connect() as conn:

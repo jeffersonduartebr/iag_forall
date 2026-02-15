@@ -1,3 +1,5 @@
+"""Módulo `tests/test_vectorstore_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import asyncio
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ from app import vectorstore as vs
 
 
 def test_vectorstore_helpers_and_collection_name(monkeypatch):
+    """Testa vectorstore helpers and collection name."""
     assert vs._sanitize_model_name("nomic-ai/nomic-embed-text-v1.5") == "nomic_ai_nomic_embed_text_v1_5"
     assert vs._sanitize_model_name("") == "default"
 
@@ -29,9 +32,11 @@ def test_vectorstore_helpers_and_collection_name(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_or_create_collection_async_with_versioning(monkeypatch):
+    """Testa get or create collection async with versioning."""
     called = []
 
     def _fake(name, metadata=None):
+        """Executa fake."""
         called.append((name, metadata))
         return {"name": name}
 
@@ -46,37 +51,51 @@ async def test_get_or_create_collection_async_with_versioning(monkeypatch):
 
 
 def test_insert_embedding_sync_and_query_sync_paths(monkeypatch):
+    """Testa insert embedding sync and query sync paths."""
     class _ColOK:
+        """Classe `_ColOK`: concentra responsabilidades de test vectorstore extra."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self.add_calls = 0
 
         def add(self, **kwargs):
+            """Executa add."""
             self.add_calls += 1
 
         def query(self, **kwargs):
+            """Executa query."""
             return {"ids": [["1"]], "documents": [["doc"]], "distances": [[0.1]]}
 
     class _ColDimFail(_ColOK):
+        """Classe `_ColDimFail`: concentra responsabilidades de test vectorstore extra."""
         def add(self, **kwargs):
+            """Executa add."""
             raise RuntimeError("dimension does not match")
 
     class _ColOtherFail(_ColOK):
+        """Classe `_ColOtherFail`: concentra responsabilidades de test vectorstore extra."""
         def add(self, **kwargs):
+            """Executa add."""
             raise RuntimeError("any other error")
 
     class _Client:
+        """Classe `_Client`: concentra responsabilidades de test vectorstore extra."""
         def __init__(self, col):
+            """Inicializa estado interno necessário para uso da classe."""
             self.col = col
             self.deleted = []
             self.created = []
 
         def get_or_create_collection(self, name, metadata=None):
+            """Obtém or create collection."""
             return self.col
 
         def delete_collection(self, name):
+            """Remove collection."""
             self.deleted.append(name)
 
         def create_collection(self, name):
+            """Cria collection."""
             self.created.append(name)
             return _ColOK()
 
@@ -96,7 +115,9 @@ def test_insert_embedding_sync_and_query_sync_paths(monkeypatch):
     vs._insert_embedding_sync("c3", "d3", "txt", [1, 2], {"a": 1})
 
     class _QDimFail(_ColOK):
+        """Classe `_QDimFail`: concentra responsabilidades de test vectorstore extra."""
         def query(self, **kwargs):
+            """Executa query."""
             raise RuntimeError("dimension does not match")
 
     qdim_client = _Client(_QDimFail())
@@ -105,7 +126,9 @@ def test_insert_embedding_sync_and_query_sync_paths(monkeypatch):
     assert qdim_client.deleted == ["cq"]
 
     class _QOtherFail(_ColOK):
+        """Classe `_QOtherFail`: concentra responsabilidades de test vectorstore extra."""
         def query(self, **kwargs):
+            """Executa query."""
             raise RuntimeError("boom")
 
     qother_client = _Client(_QOtherFail())
@@ -115,6 +138,7 @@ def test_insert_embedding_sync_and_query_sync_paths(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_add_query_reset_and_health(monkeypatch):
+    """Testa add query reset and health."""
     inserts = []
     queries = []
     sparse_added = []
@@ -141,10 +165,13 @@ async def test_add_query_reset_and_health(monkeypatch):
     assert res_custom["name"] == "knowledge_base"
 
     class _Client:
+        """Classe `_Client`: concentra responsabilidades de test vectorstore extra."""
         def reset(self):
+            """Executa reset."""
             return None
 
         def heartbeat(self):
+            """Executa heartbeat."""
             return "ok"
 
     monkeypatch.setattr(vs, "chroma_client", _Client())
@@ -152,10 +179,13 @@ async def test_add_query_reset_and_health(monkeypatch):
     assert await vs.health_async() is True
 
     class _BadClient:
+        """Classe `_BadClient`: concentra responsabilidades de test vectorstore extra."""
         def heartbeat(self):
+            """Executa heartbeat."""
             raise RuntimeError("down")
 
         def reset(self):
+            """Executa reset."""
             raise RuntimeError("nope")
 
     monkeypatch.setattr(vs, "chroma_client", _BadClient())

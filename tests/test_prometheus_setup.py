@@ -1,9 +1,12 @@
+"""Módulo `tests/test_prometheus_setup.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 
 from app import prometheus_setup as ps
 
 
 def test_setup_prometheus_and_registry(monkeypatch, tmp_path):
+    """Testa setup prometheus and registry."""
     pdir = tmp_path / "prom"
     pdir.mkdir()
     f1 = pdir / "a.db"
@@ -21,6 +24,7 @@ def test_setup_prometheus_and_registry(monkeypatch, tmp_path):
 
 
 def test_prometheus_metrics(monkeypatch):
+    """Testa prometheus metrics."""
     monkeypatch.setattr(ps, "prometheus_registry", lambda: SimpleNamespace())
     monkeypatch.setattr(ps, "generate_latest", lambda r: b"metrics")
     data, ctype = ps.prometheus_metrics()

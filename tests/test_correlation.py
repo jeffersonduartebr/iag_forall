@@ -143,6 +143,7 @@ class TestAsyncCorrelationPropagation:
         set_correlation_id("async-test-id")
 
         async def inner_coroutine():
+            """Executa inner coroutine."""
             return get_correlation_id()
 
         result = await inner_coroutine()
@@ -157,6 +158,7 @@ class TestAsyncCorrelationPropagation:
         """Each concurrent task should have isolated correlation ID."""
 
         async def task_with_id(task_id: str):
+            """Executa task with id."""
             set_correlation_id(task_id)
             await asyncio.sleep(0.01)  # Simulate async work
             return get_correlation_id()

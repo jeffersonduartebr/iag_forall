@@ -1,3 +1,5 @@
+"""Módulo `tests/test_providers.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from app.providers_async import call_model, heuristic_quality_estimate, _estimate_tokens

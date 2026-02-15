@@ -11,6 +11,12 @@ Endpoints administrativos exigem header:
 X-Admin-Token: <token>
 ```
 
+Quando `AUTH_JWT_ENABLED=1`, use:
+```text
+Authorization: Bearer <jwt>
+```
+Escopos aceitos (exemplos): `governance:read`, `governance:write`, `policy:read`, `policy:write`, `eval:read`, `eval:write`, `rbac:read`, `rbac:write`, `privacy:admin`, `admin:*`.
+
 Para endpoints de governança/política/eval, também é possível autorizar por RBAC:
 ```text
 X-User-Id: <id-do-usuario>
@@ -103,8 +109,11 @@ curl -N -X POST http://localhost:8000/query/stream \
 ## Governança, política e avaliação
 - `PUT /admin/budgets/{tenant_id}`
 - `GET /admin/budgets/{tenant_id}`
+- `PUT /admin/budgets/{tenant_id}/users/{user_key}`
+- `GET /admin/budgets/{tenant_id}/users/{user_key}`
 - `GET /admin/quotas/usage`
 - `GET /admin/audit/events`
+- `POST /admin/privacy/purge`
 - `POST /admin/policies`
 - `POST /admin/policies/{version}/activate`
 - `GET /admin/policies`
@@ -113,12 +122,19 @@ curl -N -X POST http://localhost:8000/query/stream \
 - `GET /admin/evals/runs/{run_id}`
 - `GET /admin/evals/runs`
 - `GET /admin/evals/runs/{run_id}/results`
+- `GET /admin/evals/runs/{run_id}/progress`
 - `GET /admin/evals/runs/{run_id}/significance`
 - `GET /admin/evals/tasks/{task_id}`
 - `POST /admin/evals/tasks/{task_id}/cancel`
 - `POST /admin/rbac/grants`
 - `POST /admin/rbac/revokes`
 - `GET /admin/rbac/roles`
+
+Campos extras em `POST /admin/evals/runs` para trilha acadêmica:
+- `seed` (int)
+- `dataset_version` (string)
+- `model_snapshot` (string)
+- retorno inclui `reproducibility_fingerprint`
 
 ## Feedback e A/B
 - `POST /feedback`

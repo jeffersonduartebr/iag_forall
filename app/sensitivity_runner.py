@@ -30,6 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("sensitivity")
 
 def run_benchmark_iteration(threshold):
+    """Executa benchmark iteration."""
     logger.info(f"\n⚙️  Testing UNCERTAINTY_THRESHOLD = {threshold}...")
     
     # 1. Limpeza Crítica: Remove checkpoint anterior
@@ -101,6 +102,7 @@ def run_benchmark_iteration(threshold):
     }
 
 def plot_sensitivity(results):
+    """Executa plot sensitivity."""
     if not results:
         logger.error("❌ No valid results to plot.")
         return

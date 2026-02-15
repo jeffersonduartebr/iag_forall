@@ -46,6 +46,7 @@ class TestCircuitBreaker:
         # Simulate failures
         @test_breaker
         def failing_func():
+            """Executa failing func."""
             raise Exception("Simulated failure")
 
         for _ in range(2):

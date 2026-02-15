@@ -53,6 +53,10 @@ curl -s http://localhost:8000/metrics | head -n 40
 3. `docs/ARCHITECTURE.md` (fluxos e componentes).
 4. `docs/API.md` (contratos de endpoint).
 5. `docs/CONFIGURATION.md` (variáveis e hot-reload).
+6. `docs/FILE_CATALOG.md` (responsabilidade de cada arquivo em `app/app`).
+7. `docs/METHOD_CATALOG.md` (inventário de funções/métodos com assinatura e localização).
+8. `docs/DOCSTRING_BACKLOG.md` (itens pendentes de docstring detalhada).
+9. `docs/DOCUMENTATION_WORKFLOW.md` (processo para manter documentação viva).
 6. Código core:
 - `app/app/main.py`
 - `app/app/router_core.py`
@@ -105,11 +109,29 @@ mypy app/app
 ## Segurança
 - Nunca comite segredos reais.
 - Use `.env` local e tokens rotacionáveis.
-- Endpoints administrativos exigem `X-Admin-Token`.
+- Endpoints administrativos aceitam `X-Admin-Token` (modo legado) ou `Authorization: Bearer <jwt>` quando `AUTH_JWT_ENABLED=1`.
+
+## Migrações de banco (produção)
+```bash
+alembic -c alembic.ini upgrade head
+```
+Notas:
+- `ROADMAP_AUTO_DDL=1` deve ser usado apenas em desenvolvimento.
+- Em produção, prefira schema gerenciado por Alembic.
 
 ## Convenções de documentação no código
 - Todas as funções/classes/módulos de `app/app` possuem docstring em PT-BR (Google style).
 - Ao alterar comportamento, atualize docstring e documento correspondente em `docs/` na mesma PR.
+
+## Atualização automática da documentação
+Sempre que adicionar/alterar métodos ou arquivos em `app/app`, rode:
+```bash
+python3 scripts/generate_docs_catalog.py
+```
+Esse comando atualiza:
+- `docs/FILE_CATALOG.md`
+- `docs/METHOD_CATALOG.md`
+- `docs/DOCSTRING_BACKLOG.md`
 
 ## Próximos documentos importantes
 - `docs/ONBOARDING.md`

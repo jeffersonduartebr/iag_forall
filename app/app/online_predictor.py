@@ -47,7 +47,7 @@ os.makedirs(STATE_DIR, exist_ok=True)
 DEFAULT_VALIDATION_WINDOW = 1000
 
 class OnlineErrorPredictor:
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `OnlineErrorPredictor`: organiza responsabilidades de online predictor."""
     def __init__(self, model_name: str):
         """
         Inicializa o preditor de erro online usando Regressão Logística.
@@ -346,14 +346,7 @@ _predictors: Dict[str, OnlineErrorPredictor] = {}
 
 
 def get_predictor(model_name: str) -> OnlineErrorPredictor:
-    """Resumo do comportamento desta função.
-
-    Args:
-        model_name: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Obtém predictor."""
     if model_name not in _predictors:
         _predictors[model_name] = OnlineErrorPredictor(model_name)
     return _predictors[model_name]

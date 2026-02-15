@@ -121,6 +121,7 @@ def _perform_ocr(path: Path) -> str:
 # 📄 CARREGADORES DE ARQUIVOS
 # ============================================================
 def load_text_file(path: Path) -> List[str]:
+    """Carrega text file."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             text = f.read().strip()
@@ -240,6 +241,7 @@ RESUMO: ...
 # 🚀 FLUXO PRINCIPAL
 # ============================================================
 async def populate_vectorstore():
+    """Executa populate vectorstore."""
     logger.info(f"🚀 Iniciando população da coleção '{COLLECTION_NAME}'...")
     
     # 1. Ler arquivos do disco

@@ -31,6 +31,7 @@ logger = logging.getLogger("analytics")
 INPUT_DIR = "thesis_results"
 
 def load_latest_data():
+    """Carrega latest data."""
     files = glob.glob(f"{INPUT_DIR}/raw_data_*.csv")
     if not files: return None
     latest_file = max(files, key=os.path.getctime)
@@ -41,6 +42,7 @@ def load_latest_data():
 # 1. REGRET ANALYSIS
 # ==============================================================================
 def analyze_regret(df):
+    """Executa analyze regret."""
     logger.info("📉 Calculating Cumulative Regret...")
     
     # Filtra apenas as linhas do Router
@@ -106,6 +108,7 @@ def analyze_regret(df):
 # 2. SHAP EXPLAINABILITY
 # ==============================================================================
 def analyze_shap(df):
+    """Executa analyze shap."""
     if not SHAP_AVAILABLE:
         logger.warning("⚠️ SHAP library not installed. Skipping explainability analysis.")
         return
@@ -161,6 +164,7 @@ def analyze_shap(df):
 # 3. DATA DECONTAMINATION (N-GRAM)
 # ==============================================================================
 def analyze_decontamination(df):
+    """Executa analyze decontamination."""
     logger.info("🔍 Running N-Gram Decontamination Check...")
     
     # Simula um corpus de treino (ex: Common Crawl sample)
@@ -168,6 +172,7 @@ def analyze_decontamination(df):
     dummy_training_corpus = "The capital of France is Paris. Photosynthesis is the process used by plants. " * 1000
     
     def get_ngrams(text, n=13):
+        """Obtém ngrams."""
         words = text.split()
         return set([" ".join(words[i:i+n]) for i in range(len(words)-n+1)])
     

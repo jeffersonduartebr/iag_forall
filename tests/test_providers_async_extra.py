@@ -1,3 +1,5 @@
+"""Módulo `tests/test_providers_async_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import asyncio
 from types import SimpleNamespace
 
@@ -9,6 +11,7 @@ from app import providers_async as pa
 
 
 def test_timeout_quality_tokens_and_factory(monkeypatch):
+    """Testa timeout quality tokens and factory."""
     monkeypatch.setattr(pa, "ADAPTIVE_TIMEOUT_ENABLED", True)
     monkeypatch.setattr(pa, "BASE_TIMEOUT", 10)
     monkeypatch.setattr(pa, "MAX_TIMEOUT", 1000)
@@ -41,8 +44,11 @@ def test_timeout_quality_tokens_and_factory(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_model_success_and_error_categories(monkeypatch):
+    """Testa call model success and error categories."""
     class _P:
+        """Classe `_P`: concentra responsabilidades de test providers async extra."""
         async def generate(self, **kwargs):
+            """Executa generate."""
             return pa.LLMResponse(
                 text="ok",
                 latency=0.1,
@@ -61,7 +67,9 @@ async def test_call_model_success_and_error_categories(monkeypatch):
     assert meta["prompt_tokens"] == 10
 
     class _PCircuit:
+        """Classe `_PCircuit`: concentra responsabilidades de test providers async extra."""
         async def generate(self, **kwargs):
+            """Executa generate."""
             raise pybreaker.CircuitBreakerError("open")
 
     monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda m: _PCircuit())
@@ -69,7 +77,9 @@ async def test_call_model_success_and_error_categories(monkeypatch):
         await pa.call_model("openai/gpt-4o", "x")
 
     class _PTimeout:
+        """Classe `_PTimeout`: concentra responsabilidades de test providers async extra."""
         async def generate(self, **kwargs):
+            """Executa generate."""
             raise asyncio.TimeoutError("timeout")
 
     monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda m: _PTimeout())
@@ -78,10 +88,13 @@ async def test_call_model_success_and_error_categories(monkeypatch):
     assert exc1.value.category == "provider_timeout"
 
     class RateLimitError(Exception):
+        """Classe `RateLimitError`: concentra responsabilidades de test providers async extra."""
         pass
 
     class _PRL:
+        """Classe `_PRL`: concentra responsabilidades de test providers async extra."""
         async def generate(self, **kwargs):
+            """Executa generate."""
             raise RateLimitError("rl")
 
     monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda m: _PRL())
@@ -92,44 +105,56 @@ async def test_call_model_success_and_error_categories(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ensure_ollama_model_async_paths(monkeypatch):
+    """Testa ensure ollama model async paths."""
     class _Resp:
+        """Classe `_Resp`: concentra responsabilidades de test providers async extra."""
         def __init__(self, code, payload=None):
+            """Inicializa estado interno necessário para uso da classe."""
             self.status_code = code
             self._payload = payload or {}
 
         def json(self):
+            """Executa json."""
             return self._payload
 
     class _Client:
+        """Classe `_Client`: concentra responsabilidades de test providers async extra."""
         def __init__(self, tags_resp, pull_resp):
+            """Inicializa estado interno necessário para uso da classe."""
             self.tags_resp = tags_resp
             self.pull_resp = pull_resp
 
         async def get(self, *a, **k):
+            """Executa get."""
             return self.tags_resp
 
         async def post(self, *a, **k):
+            """Executa post."""
             return self.pull_resp
 
     async def _c1():
+        """Executa c1."""
         return _Client(_Resp(200, {"models": [{"name": "phi4:latest"}]}), _Resp(200))
 
     monkeypatch.setattr(pa, "get_http_client", _c1)
     assert await pa._ensure_ollama_model_async("phi4:latest") is True
 
     async def _c2():
+        """Executa c2."""
         return _Client(_Resp(200, {"models": []}), _Resp(200))
 
     monkeypatch.setattr(pa, "get_http_client", _c2)
     assert await pa._ensure_ollama_model_async("phi4:latest") is True
 
     async def _c3():
+        """Executa c3."""
         return _Client(_Resp(500, {}), _Resp(500))
 
     monkeypatch.setattr(pa, "get_http_client", _c3)
     assert await pa._ensure_ollama_model_async("phi4:latest") is False
 
     async def _boom():
+        """Executa boom."""
         raise httpx.ConnectError("x")
 
     monkeypatch.setattr(pa, "get_http_client", _boom)

@@ -1,3 +1,5 @@
+"""Módulo `tests/test_router_core_internal.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -5,6 +7,7 @@ import pytest
 
 
 def _mock_settings():
+    """Executa mock settings."""
     return SimpleNamespace(
         MAX_TOKENS_DEFAULT=128,
         TEMPERATURE_DEFAULT=0.3,
@@ -16,6 +19,7 @@ def _mock_settings():
 
 @pytest.mark.asyncio
 async def test_internal_cache_hit(monkeypatch):
+    """Testa internal cache hit."""
     from app import router_core
 
     monkeypatch.setattr(router_core, "settings", _mock_settings())
@@ -29,6 +33,7 @@ async def test_internal_cache_hit(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_internal_full_flow_with_pricing_fallback(monkeypatch):
+    """Testa internal full flow with pricing fallback."""
     from app import router_core
 
     monkeypatch.setattr(router_core, "settings", _mock_settings())
@@ -66,6 +71,7 @@ async def test_internal_full_flow_with_pricing_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_internal_rag_fallback_when_augmented_prompt_fails(monkeypatch):
+    """Testa internal rag fallback when augmented prompt fails."""
     from app import router_core
 
     monkeypatch.setattr(router_core, "settings", _mock_settings())
@@ -92,6 +98,7 @@ async def test_internal_rag_fallback_when_augmented_prompt_fails(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_internal_handles_non_dict_metadata(monkeypatch):
+    """Testa internal handles non dict metadata."""
     from app import router_core
 
     monkeypatch.setattr(router_core, "settings", _mock_settings())
@@ -110,6 +117,7 @@ async def test_internal_handles_non_dict_metadata(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_internal_fallback_when_all_candidates_blocked(monkeypatch):
+    """Testa internal fallback when all candidates blocked."""
     from app import router_core
 
     settings = _mock_settings()

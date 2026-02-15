@@ -1,3 +1,5 @@
+"""Módulo `tests/test_semantic_cache.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 import time
 from unittest.mock import patch, AsyncMock

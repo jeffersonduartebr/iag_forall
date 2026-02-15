@@ -1,3 +1,5 @@
+"""Módulo `tests/test_main_provider_errors.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import os
 import sys
 
@@ -11,6 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 
 def _stabilize_settings_get(monkeypatch):
+    """Executa stabilize settings get."""
     from app import settings_dynamic
 
     monkeypatch.setattr(settings_dynamic.settings, "get", lambda _key, fallback=None: fallback)
@@ -18,12 +21,14 @@ def _stabilize_settings_get(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_route_query_maps_provider_timeout_to_504(monkeypatch):
+    """Testa route query maps provider timeout to 504."""
     _stabilize_settings_get(monkeypatch)
     from app.main import route_query
     from app.schemas import QueryRequest
     from app.providers_async import ProviderCallError
 
     async def _raise_timeout(**kwargs):
+        """Executa raise timeout."""
         raise ProviderCallError(model="openai/gpt-4o", message="timeout", category="provider_timeout")
 
     monkeypatch.setattr("app.main.route_and_answer", _raise_timeout)
@@ -37,12 +42,14 @@ async def test_route_query_maps_provider_timeout_to_504(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_route_query_maps_provider_rate_limit_to_429(monkeypatch):
+    """Testa route query maps provider rate limit to 429."""
     _stabilize_settings_get(monkeypatch)
     from app.main import route_query
     from app.schemas import QueryRequest
     from app.providers_async import ProviderCallError
 
     async def _raise_rate_limit(**kwargs):
+        """Executa raise rate limit."""
         raise ProviderCallError(model="openai/gpt-4o", message="rate limited", category="provider_rate_limit")
 
     monkeypatch.setattr("app.main.route_and_answer", _raise_rate_limit)
@@ -56,12 +63,14 @@ async def test_route_query_maps_provider_rate_limit_to_429(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_route_query_maps_provider_unavailable_to_502(monkeypatch):
+    """Testa route query maps provider unavailable to 502."""
     _stabilize_settings_get(monkeypatch)
     from app.main import route_query
     from app.schemas import QueryRequest
     from app.providers_async import ProviderCallError
 
     async def _raise_unavailable(**kwargs):
+        """Executa raise unavailable."""
         raise ProviderCallError(model="openai/gpt-4o", message="down", category="provider_unavailable")
 
     monkeypatch.setattr("app.main.route_and_answer", _raise_unavailable)
@@ -75,12 +84,14 @@ async def test_route_query_maps_provider_unavailable_to_502(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_route_query_maps_circuit_open_to_503(monkeypatch):
+    """Testa route query maps circuit open to 503."""
     _stabilize_settings_get(monkeypatch)
     from app.main import route_query
     from app.schemas import QueryRequest
     from app.providers_async import ProviderCircuitOpenError
 
     async def _raise_circuit(**kwargs):
+        """Executa raise circuit."""
         raise ProviderCircuitOpenError(model="openai/gpt-4o", message="open")
 
     monkeypatch.setattr("app.main.route_and_answer", _raise_circuit)
@@ -94,10 +105,12 @@ async def test_route_query_maps_circuit_open_to_503(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_startup_rejects_empty_admin_token(monkeypatch):
+    """Testa startup rejects empty admin token."""
     _stabilize_settings_get(monkeypatch)
     from app import main
 
     def _fake_get(key, fallback=None):
+        """Executa fake get."""
         if key == "ADMIN_TOKEN":
             return ""
         return fallback

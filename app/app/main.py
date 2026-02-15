@@ -136,14 +136,7 @@ setup_prometheus()
 # ==============================================================================
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Resumo do comportamento desta função.
-
-    Args:
-        _app: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa lifespan."""
     await startup_event()
     try:
         yield
@@ -178,15 +171,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Get correlation ID from header or generate new one
-        """Resumo do comportamento desta função.
-
-        Args:
-            request: Parâmetro de entrada.
-            call_next: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa dispatch."""
         correlation_id = request.headers.get(CORRELATION_ID_HEADER)
         set_correlation_id(correlation_id)
 
@@ -208,14 +193,7 @@ app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_SIZE)
 
 # --- HELPER DE CONVERSÃO ---
 def safe_parse_json(payload: Any) -> Any:
-    """Resumo do comportamento desta função.
-
-    Args:
-        payload: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa safe parse json."""
     if isinstance(payload, str):
         try:
             return json.loads(payload)
@@ -316,21 +294,13 @@ app.include_router(rag_router.router)
 
 @app.get("/metrics")
 def metrics():
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa metrics."""
     data, ctype = render_metrics_response()
     return Response(content=data, media_type=ctype)
 
 
 async def startup_event():
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa startup event."""
     admin_token = (settings.ADMIN_TOKEN or "").strip()
     if not admin_token or admin_token == "changeme-please":
         raise RuntimeError("ADMIN_TOKEN must be configured with a non-default value")
@@ -358,11 +328,7 @@ async def startup_event():
     asyncio.create_task(rate_limit_cleanup())
 
     async def _bg():
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa bg."""
         try:
             logger.info("[warmup] Iniciando serviços...")
             r = get_redis()
@@ -578,14 +544,7 @@ async def _process_query_request(req: QueryRequest) -> Dict[str, Any]:
 
 @app.post("/query", response_model=QueryResponse)
 async def route_query(req: QueryRequest):
-    """Resumo do comportamento desta função.
-
-    Args:
-        req: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa route query."""
     start = time.time()
     API_REQUESTS.inc()
 
@@ -703,14 +662,7 @@ async def route_query_stream(req: QueryRequest):
 
 
 def _require_admin(token: Optional[str]):
-    """Resumo do comportamento desta função.
-
-    Args:
-        token: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa require admin."""
     configured = (settings.ADMIN_TOKEN or "").strip()
     previous = (settings.ADMIN_TOKEN_PREVIOUS or "").strip()
 
@@ -761,29 +713,14 @@ def _require_admin_or_role(
 
 @app.get("/admin/settings", tags=["Admin"])
 def get_settings(x_admin_token: Optional[str] = Header(None)):
-    """Resumo do comportamento desta função.
-
-    Args:
-        x_admin_token: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Obtém settings."""
     _require_admin(x_admin_token)
     return settings.snapshot()
 
 
 @app.put("/admin/settings", tags=["Admin"])
 def update_settings(payload: Dict[str, Any], x_admin_token: Optional[str] = Header(None)):
-    """Resumo do comportamento desta função.
-
-    Args:
-        payload: Parâmetro de entrada.
-        x_admin_token: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa update settings."""
     _require_admin(x_admin_token)
     for k, v in payload.items():
         val = json.dumps(v) if isinstance(v, (list, dict)) else str(v)

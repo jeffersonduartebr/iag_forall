@@ -1,3 +1,5 @@
+"""Módulo `tests/test_providers_async_core_reliability.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import asyncio
 from types import SimpleNamespace
 
@@ -9,19 +11,24 @@ from app import providers_async as pa
 
 
 def _close_breakers():
+    """Executa close breakers."""
     pa.cloud_breaker._state = pybreaker.CircuitClosedState(pa.cloud_breaker)
     pa.local_breaker._state = pybreaker.CircuitClosedState(pa.local_breaker)
 
 
 @pytest.mark.asyncio
 async def test_openai_provider_generate_success_with_reasoning_model(monkeypatch):
+    """Testa openai provider generate success with reasoning model."""
     _close_breakers()
 
     class _Create:
+        """Classe `_Create`: concentra responsabilidades de test providers async core reliability."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self.calls = []
 
         async def create(self, **kwargs):
+            """Executa create."""
             self.calls.append(kwargs)
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content="ok-openai"))],
@@ -48,10 +55,13 @@ async def test_openai_provider_generate_success_with_reasoning_model(monkeypatch
 
 @pytest.mark.asyncio
 async def test_anthropic_provider_generate_success(monkeypatch):
+    """Testa anthropic provider generate success."""
     _close_breakers()
 
     class _Messages:
+        """Classe `_Messages`: concentra responsabilidades de test providers async core reliability."""
         async def create(self, **kwargs):
+            """Executa create."""
             return SimpleNamespace(
                 content=[SimpleNamespace(text="ok-anthropic")],
                 usage=SimpleNamespace(input_tokens=7, output_tokens=9),
@@ -71,13 +81,17 @@ async def test_anthropic_provider_generate_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gemini_provider_generate_success(monkeypatch):
+    """Testa gemini provider generate success."""
     _close_breakers()
 
     class _GModel:
+        """Classe `_GModel`: concentra responsabilidades de test providers async core reliability."""
         def __init__(self, name):
+            """Inicializa estado interno necessário para uso da classe."""
             self.name = name
 
         def generate_content(self, parts, generation_config=None):
+            """Executa generate content."""
             return SimpleNamespace(text="ok-gemini")
 
     monkeypatch.setattr(pa, "genai", SimpleNamespace(GenerativeModel=_GModel))
@@ -95,12 +109,16 @@ async def test_gemini_provider_generate_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_close_http_client_and_render_metrics(monkeypatch):
+    """Testa close http client and render metrics."""
     class _Client:
+        """Classe `_Client`: concentra responsabilidades de test providers async core reliability."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self.is_closed = False
             self.closed = False
 
         async def close(self):
+            """Executa close."""
             self.closed = True
             self.is_closed = True
 
@@ -114,15 +132,20 @@ async def test_close_http_client_and_render_metrics(monkeypatch):
 
 
 def test_ensure_ollama_model_sync_paths(monkeypatch):
+    """Testa ensure ollama model sync paths."""
     class _Resp:
+        """Classe `_Resp`: concentra responsabilidades de test providers async core reliability."""
         def __init__(self, code=200, payload=None):
+            """Inicializa estado interno necessário para uso da classe."""
             self.status_code = code
             self._payload = payload or {}
 
         def json(self):
+            """Executa json."""
             return self._payload
 
         def iter_lines(self):
+            """Executa iter lines."""
             yield b"line"
 
     # already installed
@@ -151,8 +174,11 @@ def test_ensure_ollama_model_sync_paths(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_model_error_categories_timeout_and_unavailable(monkeypatch):
+    """Testa call model error categories timeout and unavailable."""
     class _PTimeout:
+        """Classe `_PTimeout`: concentra responsabilidades de test providers async core reliability."""
         async def generate(self, **kwargs):
+            """Executa generate."""
             raise asyncio.TimeoutError("timeout")
 
     monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda model: _PTimeout())
@@ -161,7 +187,9 @@ async def test_call_model_error_categories_timeout_and_unavailable(monkeypatch):
     assert exc1.value.category == "provider_timeout"
 
     class _PUnavailable:
+        """Classe `_PUnavailable`: concentra responsabilidades de test providers async core reliability."""
         async def generate(self, **kwargs):
+            """Executa generate."""
             raise RuntimeError("down")
 
     monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda model: _PUnavailable())

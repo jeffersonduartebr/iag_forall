@@ -1,3 +1,5 @@
+"""Módulo `tests/test_coverage_boosters.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -7,6 +9,7 @@ import pytest
 
 
 def test_uncertainty_helpers_and_paths(monkeypatch):
+    """Testa uncertainty helpers and paths."""
     from app.utils import uncertainty as uq
 
     assert uq._cosine_similarity(np.array([1.0, 0.0]), np.array([1.0, 0.0])) == pytest.approx(1.0)
@@ -18,14 +21,18 @@ def test_uncertainty_helpers_and_paths(monkeypatch):
     assert uq.get_uncertainty_score("hello", modality="text") == 1.0
 
     class _R:
+        """Classe `_R`: concentra responsabilidades de test coverage boosters."""
         def get(self, _):
+            """Executa get."""
             return None
 
     monkeypatch.setattr(uq, "get_redis", lambda: _R())
     assert uq.get_uncertainty_score("hello", modality="text") == 1.0
 
     class _R2:
+        """Classe `_R2`: concentra responsabilidades de test coverage boosters."""
         def get(self, _):
+            """Executa get."""
             return '[{"vec":[1.0,0.0,0.0]}]'
 
     monkeypatch.setattr(uq, "get_redis", lambda: _R2())
@@ -38,6 +45,7 @@ def test_uncertainty_helpers_and_paths(monkeypatch):
 
 
 def test_query_service_helpers_and_insert(monkeypatch):
+    """Testa query service helpers and insert."""
     from app import query_service as qs
 
     assert qs._to_blob([1.0, 2.0]) is not None
@@ -45,21 +53,28 @@ def test_query_service_helpers_and_insert(monkeypatch):
     assert qs._safe_json({"a": 1}) == '{"a": 1}'
 
     class _Conn:
+        """Classe `_Conn`: concentra responsabilidades de test coverage boosters."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self.executed = []
 
         def execute(self, stmt, params=None):
+            """Executa execute."""
             self.executed.append((str(stmt), params))
             return SimpleNamespace(rowcount=1)
 
     class _Ctx:
+        """Classe `_Ctx`: concentra responsabilidades de test coverage boosters."""
         def __init__(self, conn):
+            """Inicializa estado interno necessário para uso da classe."""
             self.conn = conn
 
         def __enter__(self):
+            """Executa enter."""
             return self.conn
 
         def __exit__(self, exc_type, exc, tb):
+            """Executa exit."""
             return False
 
     conn = _Conn()
@@ -88,6 +103,7 @@ def test_query_service_helpers_and_insert(monkeypatch):
 
 
 def test_sparse_index_core(monkeypatch):
+    """Testa sparse index core."""
     from app import sparse_index as si
 
     # Avoid touching real disk paths.
@@ -114,6 +130,7 @@ def test_sparse_index_core(monkeypatch):
 
 
 def test_tasks_event_loop_and_task(monkeypatch):
+    """Testa tasks event loop and task."""
     from app import tasks
 
     tasks._worker_loop = None
@@ -131,6 +148,7 @@ def test_tasks_event_loop_and_task(monkeypatch):
 
 
 def test_online_predictor_metrics_and_calibration(monkeypatch, tmp_path):
+    """Testa online predictor metrics and calibration."""
     from app import online_predictor as op
 
     if not op.RIVER_AVAILABLE:

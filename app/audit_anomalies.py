@@ -16,6 +16,7 @@ SCORE_THRESHOLD = 8.0
 DISPLAY_LIMIT = 20
 
 def load_latest_data():
+    """Carrega latest data."""
     files = glob.glob(f"{INPUT_DIR}/*data_*.csv")
     if not files:
         print(f"❌ No CSV files found.")
@@ -45,6 +46,7 @@ def debug_parser(dataset_name, model_output):
     return "N/A"
 
 def main():
+    """Executa main."""
     df = load_latest_data()
     
     if 'is_correct' not in df.columns:

@@ -1,3 +1,5 @@
+"""Módulo `tests/locustfile.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from locust import HttpUser, task, between
 import random
 

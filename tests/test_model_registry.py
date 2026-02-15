@@ -1,12 +1,16 @@
+"""Módulo `tests/test_model_registry.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from app import model_registry as mr
 
 
 def _fresh_registry():
+    """Executa fresh registry."""
     mr.ModelRegistry._instance = None
     return mr.ModelRegistry()
 
 
 def test_model_config_properties_and_cost():
+    """Testa model config properties and cost."""
     cfg = mr.ModelConfig(
         name="my-model",
         provider=mr.Provider.OPENAI,
@@ -24,6 +28,7 @@ def test_model_config_properties_and_cost():
 
 
 def test_registry_get_list_and_filters():
+    """Testa registry get list and filters."""
     registry = _fresh_registry()
 
     by_short = registry.get("gpt-4o")
@@ -45,6 +50,7 @@ def test_registry_get_list_and_filters():
 
 
 def test_registry_get_or_default_and_fallback_chain():
+    """Testa registry get or default and fallback chain."""
     registry = _fresh_registry()
 
     known = registry.get_or_default("openai/gpt-4o")
@@ -79,6 +85,7 @@ def test_registry_get_or_default_and_fallback_chain():
 
 
 def test_registry_cheapest_and_convenience_helpers():
+    """Testa registry cheapest and convenience helpers."""
     registry = _fresh_registry()
 
     cheapest_text = registry.get_cheapest_model(capability=mr.Capability.TEXT)

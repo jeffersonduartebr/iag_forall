@@ -1,7 +1,10 @@
+"""Módulo `tests/test_runtime_state.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from app import runtime_state as rs
 
 
 def test_reset_runtime_state_calls_all(monkeypatch):
+    """Testa reset runtime state calls all."""
     calls = []
     monkeypatch.setattr(rs, "reset_provider_runtime_state", lambda: calls.append("provider"))
     monkeypatch.setattr(rs, "reset_reliability_runtime_state", lambda: calls.append("reliability"))

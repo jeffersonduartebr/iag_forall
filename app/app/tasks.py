@@ -163,6 +163,7 @@ def task_execute_eval_run(
     cost_scores = []
 
     async def _execute():
+        """Executa execute."""
         for prompt in prompts:
             try:
                 resp = await route_and_answer(

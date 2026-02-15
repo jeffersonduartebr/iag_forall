@@ -1,3 +1,5 @@
+"""Módulo `tests/test_judges_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +8,7 @@ from app import judges
 
 
 def test_verdict_cache_and_helpers():
+    """Testa verdict cache and helpers."""
     c = judges.VerdictCache(maxsize=2, ttl_s=1)
     c.set("q1", "a1", 0.7)
     assert c.get("q1", "a1") == 0.7
@@ -22,6 +25,7 @@ def test_verdict_cache_and_helpers():
 
 
 def test_choose_two_and_extract_verdict(monkeypatch):
+    """Testa choose two and extract verdict."""
     models = ["m1", "m2", "m3"]
     stats = {"m1": judges.JudgeStats("m1", fitness=0.9), "m2": judges.JudgeStats("m2", fitness=0.8)}
 
@@ -42,9 +46,11 @@ def test_choose_two_and_extract_verdict(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_rag_context_describe_and_meta(monkeypatch):
+    """Testa get rag context describe and meta."""
     monkeypatch.setattr(judges, "embed_text", lambda q: [0.1])
 
     async def _query_embedding(coll, vec, n_results=5):
+        """Executa query embedding."""
         return {"documents": [["doc1", "doc2"]]}
 
     monkeypatch.setattr(judges, "query_embedding", _query_embedding)
@@ -53,6 +59,7 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
     assert isinstance(ctx, str)
 
     async def _call_model(**kwargs):
+        """Executa call model."""
         return "descrição curta", {}
 
     monkeypatch.setattr(judges, "call_model", _call_model)
@@ -63,6 +70,7 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
     assert desc == "descrição curta"
 
     async def _meta(**kwargs):
+        """Executa meta."""
         return "<verdict>CORRECT</verdict>", {}
 
     monkeypatch.setattr(judges, "call_model", _meta)
@@ -72,6 +80,7 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
+    """Testa llm pair score and judge answer modes."""
     judges._verdict_cache = judges.VerdictCache()
     monkeypatch.setattr(judges, "_load_judge_stats", lambda w: {})
     monkeypatch.setattr(judges, "_choose_two", lambda models, stats: [judges.SelectedJudge("j1", 1.0), judges.SelectedJudge("j2", 1.0)])
@@ -80,6 +89,7 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
     calls = {"n": 0}
 
     async def _judge_call(**kwargs):
+        """Executa judge call."""
         calls["n"] += 1
         if kwargs["model"] == "j1":
             return "<verdict>CORRECT</verdict>", {"latency": 1.0, "cost_per_1k": 0.01}
@@ -89,12 +99,15 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
     monkeypatch.setattr(judges, "_persist_judge_metrics", lambda **k: None)
     monkeypatch.setattr(judges, "_persist_judge_log", lambda **k: None)
     async def _get_rag_context(q):
+        """Executa get rag context."""
         return ""
 
     async def _describe(*args, **kwargs):
+        """Executa describe."""
         return ""
 
     async def _meta(*args, **kwargs):
+        """Executa meta."""
         return 10.0
 
     monkeypatch.setattr(judges, "get_rag_context", _get_rag_context)
@@ -108,6 +121,7 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
     assert calls["n"] == 2
 
     async def _llm_score(**kwargs):
+        """Executa llm score."""
         return 0.8
 
     monkeypatch.setattr(judges, "llm_based_score", _llm_score)
@@ -121,30 +135,45 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
 
 
 def test_judge_calibration_functions(monkeypatch):
+    """Testa judge calibration functions."""
     class _Conn:
+        """Classe `_Conn`: concentra responsabilidades de test judges extra."""
         def execute(self, *_a, **_k):
+            """Executa execute."""
             return None
 
     class _Ctx:
+        """Classe `_Ctx`: concentra responsabilidades de test judges extra."""
         def __enter__(self):
+            """Executa enter."""
             return _Conn()
 
         def __exit__(self, exc_type, exc, tb):
+            """Executa exit."""
             return False
 
     class _Engine:
+        """Classe `_Engine`: concentra responsabilidades de test judges extra."""
         def begin(self):
+            """Executa begin."""
             return _Ctx()
 
         def connect(self):
+            """Executa connect."""
             class _C(_Ctx):
+                """Classe `_C`: concentra responsabilidades de test judges extra."""
                 def __enter__(self):
+                    """Executa enter."""
                     class _Result:
+                        """Classe `_Result`: concentra responsabilidades de test judges extra."""
                         def fetchall(self):
+                            """Executa fetchall."""
                             return [("j1", 10, 8.0, 4, 6, 5)]
 
                     class _Conn2:
+                        """Classe `_Conn2`: concentra responsabilidades de test judges extra."""
                         def execute(self, *_a, **_k):
+                            """Executa execute."""
                             return _Result()
 
                     return _Conn2()

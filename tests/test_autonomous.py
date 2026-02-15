@@ -238,6 +238,7 @@ class TestJudgeCalibration:
         # Mock settings.get to return "0" for JUDGE_CALIBRATION_ENABLED
         original_get = DynamicSettings.get
         def mock_get(self, key, fallback=None):
+            """Executa mock get."""
             if key == "JUDGE_CALIBRATION_ENABLED":
                 return "0"
             return original_get(self, key, fallback)

@@ -61,11 +61,7 @@ class RateLimitStore:
     REDIS_TTL = 3600  # 1 hour TTL for Redis keys
 
     def __init__(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self._memory_store: Dict[str, List[float]] = {}
         self._lock = asyncio.Lock()
         self._use_redis: Optional[bool] = None
@@ -230,15 +226,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Skip rate limiting for health checks and metrics
-        """Resumo do comportamento desta função.
-
-        Args:
-            request: Parâmetro de entrada.
-            call_next: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa dispatch."""
         if request.url.path in self.EXEMPT_PATHS:
             return await call_next(request)
 

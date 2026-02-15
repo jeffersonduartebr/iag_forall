@@ -66,37 +66,17 @@ class CorrelationIdContext:
     """
 
     def __init__(self, correlation_id: Optional[str] = None):
-        """Resumo do comportamento desta função.
-
-        Args:
-            correlation_id: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self.correlation_id = correlation_id or generate_correlation_id()
         self._token: Optional[contextvars.Token] = None
 
     def __enter__(self) -> str:
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa enter."""
         self._token = _correlation_id.set(self.correlation_id)
         return self.correlation_id
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Resumo do comportamento desta função.
-
-        Args:
-            exc_type: Parâmetro de entrada.
-            exc_val: Parâmetro de entrada.
-            exc_tb: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa exit."""
         if self._token is not None:
             _correlation_id.reset(self._token)
         return None

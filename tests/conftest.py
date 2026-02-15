@@ -1,3 +1,5 @@
+"""Módulo `tests/conftest.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import os
 import sys
 from unittest.mock import MagicMock

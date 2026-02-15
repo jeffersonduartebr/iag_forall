@@ -1,3 +1,5 @@
+"""Módulo `tests/test_rag_logic.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 from app.rag_local import reciprocal_rank_fusion
 

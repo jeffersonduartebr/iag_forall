@@ -348,6 +348,7 @@ class TestThreadSafety:
         errors = []
 
         def writer(thread_id):
+            """Executa writer."""
             try:
                 for i in range(100):
                     cache.set(("text", f"model_{thread_id}_{i}"), {"value": i})
@@ -355,6 +356,7 @@ class TestThreadSafety:
                 errors.append(e)
 
         def reader(thread_id):
+            """Executa reader."""
             try:
                 for i in range(100):
                     cache.get(("text", f"model_{thread_id}_{i}"))
@@ -382,6 +384,7 @@ class TestThreadSafety:
         errors = []
 
         def worker(thread_id):
+            """Executa worker."""
             try:
                 for i in range(100):
                     key = f"key_{thread_id}_{i}"

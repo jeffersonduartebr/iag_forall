@@ -1,3 +1,5 @@
+"""Módulo `tests/test_bandits.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 from app.bandits import compute_reward, _dynamic_epsilon
 

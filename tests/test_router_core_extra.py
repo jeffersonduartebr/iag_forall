@@ -1,3 +1,5 @@
+"""Módulo `tests/test_router_core_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,6 +9,7 @@ from app import router_core as rc
 
 
 def test_ema_history_cache_and_batch_queue(monkeypatch):
+    """Testa ema history cache and batch queue."""
     h = rc.EMAHistoryCache(maxsize=2, ttl_s=1)
     h.set(("m", "a"), {"ema_latency": 1})
     assert ("m", "a") in h
@@ -34,25 +37,35 @@ def test_ema_history_cache_and_batch_queue(monkeypatch):
 
 
 def test_load_ema_from_db_and_start_stop_services(monkeypatch):
+    """Testa load ema from db and start stop services."""
     class _Rows:
+        """Classe `_Rows`: concentra responsabilidades de test router core extra."""
         def mappings(self):
+            """Executa mappings."""
             return self
 
         def all(self):
+            """Executa all."""
             return [{"modality": "text", "model": "m", "ema_latency": 1, "ema_quality": 2, "ema_cost": 3, "ema_alignment": 1}]
 
     class _Conn:
+        """Classe `_Conn`: concentra responsabilidades de test router core extra."""
         def __enter__(self):
+            """Executa enter."""
             return self
 
         def __exit__(self, exc_type, exc, tb):
+            """Executa exit."""
             return False
 
         def execute(self, *_a, **_k):
+            """Executa execute."""
             return _Rows()
 
     class _Engine:
+        """Classe `_Engine`: concentra responsabilidades de test router core extra."""
         def connect(self):
+            """Executa connect."""
             return _Conn()
 
     monkeypatch.setattr(rc, "_get_db_engine", lambda: _Engine())
@@ -63,13 +76,17 @@ def test_load_ema_from_db_and_start_stop_services(monkeypatch):
     started = []
 
     class _T:
+        """Classe `_T`: concentra responsabilidades de test router core extra."""
         def __init__(self, target=None, daemon=None, name=None):
+            """Inicializa estado interno necessário para uso da classe."""
             self._name = name
 
         def start(self):
+            """Executa start."""
             started.append(self._name)
 
         def join(self, timeout=None):
+            """Executa join."""
             return None
 
     monkeypatch.setattr(rc.threading, "Thread", _T)
@@ -85,11 +102,14 @@ def test_load_ema_from_db_and_start_stop_services(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_route_and_answer_dedup_and_timeout(monkeypatch):
+    """Testa route and answer dedup and timeout."""
     monkeypatch.setattr(rc, "_route_and_answer_internal", AsyncMock(return_value={"ok": True}))
     monkeypatch.setattr(rc, "settings", SimpleNamespace(get=lambda k, d=None: "1" if k == "REQUEST_DEDUP_ENABLED" else 1))
 
     class _Dedup:
+        """Classe `_Dedup`: concentra responsabilidades de test router core extra."""
         async def deduplicate(self, **kwargs):
+            """Executa deduplicate."""
             return await kwargs["execute_fn"]()
 
     monkeypatch.setattr(rc, "get_request_deduplicator", lambda: _Dedup())
@@ -105,6 +125,7 @@ async def test_route_and_answer_dedup_and_timeout(monkeypatch):
     assert out2["ok"] is True
 
     async def _slow(*args, **kwargs):
+        """Executa slow."""
         await rc.asyncio.sleep(0.05)
         return {"ok": False}
 
@@ -115,20 +136,26 @@ async def test_route_and_answer_dedup_and_timeout(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_background_feedback_branches(monkeypatch):
+    """Testa process background feedback branches."""
     monkeypatch.setattr(rc, "_get_ctx_stats", lambda _k: {"m1": {"count": 10, "mean": 0.8}})
     monkeypatch.setattr(rc, "embed_text", lambda q: [0.1, 0.2])
 
     class _Pred:
+        """Classe `_Pred`: concentra responsabilidades de test router core extra."""
         def predict_error_probability(self, emb):
+            """Executa predict error probability."""
             return 0.9
 
         def learn(self, emb, is_correct):
+            """Executa learn."""
             return None
 
         def record_outcome(self, p, e):
+            """Executa record outcome."""
             return None
 
         def save(self):
+            """Executa save."""
             return None
 
     monkeypatch.setattr(rc, "get_predictor", lambda model: _Pred())

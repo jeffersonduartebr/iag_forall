@@ -1,3 +1,5 @@
+"""Módulo `tests/test_rag_local_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 
 from app import rag_local as rl
@@ -5,6 +7,7 @@ from app import rag_local as rl
 
 @pytest.mark.asyncio
 async def test_rag_local_helpers_and_visual_query_cache(monkeypatch):
+    """Testa rag local helpers and visual query cache."""
     assert len(rl._hash_image("abc")) == 32
     assert rl._auto_modality("text", "img") == "vision"
     assert rl._auto_modality("multimodal", "img") == "multimodal"
@@ -12,19 +15,24 @@ async def test_rag_local_helpers_and_visual_query_cache(monkeypatch):
     assert rl._auto_modality("text", None) == "text"
 
     class _Redis:
+        """Classe `_Redis`: concentra responsabilidades de test rag local extra."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self.store = {}
 
         def get(self, key):
+            """Executa get."""
             return self.store.get(key)
 
         def setex(self, key, _ttl, val):
+            """Executa setex."""
             self.store[key] = val
 
     rds = _Redis()
     monkeypatch.setattr(rl, "_rds", rds)
 
     async def _call_model(**kwargs):
+        """Executa call model."""
         return "ferrugem no parafuso", {"ok": 1}
 
     monkeypatch.setattr(rl, "call_model", _call_model)
@@ -37,9 +45,11 @@ async def test_rag_local_helpers_and_visual_query_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_compute_embedding_and_fusion_paths(monkeypatch):
+    """Testa compute embedding and fusion paths."""
     monkeypatch.setattr(rl, "embed_text", lambda txt: [len(txt)])
     monkeypatch.setattr(rl, "embed_multimodal", lambda q, img: {"multimodal": [9.0], "text": [8.0]})
     async def _vq(_img):
+        """Executa vq."""
         return "descrição visual"
 
     monkeypatch.setattr(rl, "_generate_visual_search_query", _vq)
@@ -63,10 +73,13 @@ async def test_compute_embedding_and_fusion_paths(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_prompt_add_document_and_health(monkeypatch):
+    """Testa build prompt add document and health."""
     async def _emb(*a, **k):
+        """Executa emb."""
         return [0.1, 0.2]
 
     async def _query(**kwargs):
+        """Executa query."""
         return {"ids": [["d1", "d2"]], "documents": [["doc1", "doc2"]]}
 
     monkeypatch.setattr(rl, "_compute_embedding", _emb)
@@ -85,6 +98,7 @@ async def test_build_prompt_add_document_and_health(monkeypatch):
     assert "doc1" in prompt or "doc2" in prompt
 
     async def _emb_none(*a, **k):
+        """Executa emb none."""
         return None
 
     monkeypatch.setattr(rl, "_compute_embedding", _emb_none)
@@ -94,6 +108,7 @@ async def test_build_prompt_add_document_and_health(monkeypatch):
     assert await rl.build_augmented_prompt("", modality="text", image_b64=None) == ""
 
     async def _add_ok(**kwargs):
+        """Executa add ok."""
         return True
 
     monkeypatch.setattr(rl, "add_document", _add_ok)
@@ -101,15 +116,18 @@ async def test_build_prompt_add_document_and_health(monkeypatch):
     assert ok is True
 
     async def _add_fail(**kwargs):
+        """Executa add fail."""
         raise RuntimeError("x")
 
     monkeypatch.setattr(rl, "add_document", _add_fail)
     assert await rl.add_document_local("d2", text="abc") is False
 
     async def _health_ok():
+        """Executa health ok."""
         return True
 
     async def _health_fail():
+        """Executa health fail."""
         raise RuntimeError("x")
 
     monkeypatch.setattr(rl, "health_async", _health_ok)

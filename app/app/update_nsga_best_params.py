@@ -106,11 +106,7 @@ CREATE TABLE IF NOT EXISTS nsga_meta_results (
 
 
 def init_tables():
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa init tables."""
     try:
         with engine.begin() as conn:
             conn.execute(text(DDL_PARAMS))
@@ -129,14 +125,7 @@ init_tables()
 # ============================================================
 
 def load_best_trial(modality: str) -> Optional[Dict[str, Any]]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        modality: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa load best trial."""
     try:
         with engine.connect() as conn:
             row = conn.execute(
@@ -172,15 +161,7 @@ def load_best_trial(modality: str) -> Optional[Dict[str, Any]]:
 # ============================================================
 
 def update_best_params(modality: str, row: Dict[str, Any]) -> None:
-    """Resumo do comportamento desta função.
-
-    Args:
-        modality: Parâmetro de entrada.
-        row: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa update best params."""
     try:
         modal_id = {"text": 1, "vision": 2, "multimodal": 3}[modality]
 
@@ -225,14 +206,7 @@ def update_best_params(modality: str, row: Dict[str, Any]) -> None:
 # ============================================================
 
 def compute_model_weights(modality: str) -> Dict[str, float]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        modality: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa compute model weights."""
     try:
         with engine.connect() as conn:
             rows = conn.execute(
@@ -271,15 +245,7 @@ def compute_model_weights(modality: str) -> Dict[str, float]:
 # ============================================================
 
 def persist_weights(modality: str, weights: Dict[str, float]) -> None:
-    """Resumo do comportamento desta função.
-
-    Args:
-        modality: Parâmetro de entrada.
-        weights: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa persist weights."""
     if not weights:
         logger.warning(f"[update_nsga] Nenhum peso para persistir modality={modality}.")
         return

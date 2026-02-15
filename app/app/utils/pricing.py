@@ -26,11 +26,7 @@ REDIS_PRICING_TTL = 3600  # 1 hour for Redis cache
 
 def _get_rds():
     # Non-blocking on hot path; opportunistic reconnect.
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa get rds."""
     return get_redis_async_safe() or ensure_redis_connected(max_wait_s=0.0, min_retry_interval_s=2.0)
 
 # Metrics imports (safe import to avoid circular deps)

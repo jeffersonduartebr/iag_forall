@@ -7,16 +7,7 @@ from . import heuristic
 from . import llm as llm_judge
 
 async def judge_answer(query: str, answer: str, use_rag: bool = True) -> List[Dict[str, Any]]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        answer: Parâmetro de entrada.
-        use_rag: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa judge answer."""
     mode = settings.JUDGES_MODE.lower()
     tasks = []
     if mode in ("heuristic","hybrid"):
@@ -39,16 +30,6 @@ async def judge_answer(query: str, answer: str, use_rag: bool = True) -> List[Di
     return results
 
 async def _heuristic_task(judge_id: str, fn, q: str, a: str) -> Dict[str, Any]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        judge_id: Parâmetro de entrada.
-        fn: Parâmetro de entrada.
-        q: Parâmetro de entrada.
-        a: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa heuristic task."""
     s = fn(q,a)
     return {"judge_id": judge_id, "score": s, "rationale": "heuristic"}

@@ -1,3 +1,5 @@
+"""Módulo `tests/test_settings.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 from unittest.mock import patch, MagicMock
 from app.settings_dynamic import LRUCache, DynamicSettings

@@ -94,17 +94,7 @@ class ProviderCallError(Exception):
         category: str = "provider_unavailable",
         retryable: bool = True,
     ):
-        """Resumo do comportamento desta função.
-
-        Args:
-            model: Parâmetro de entrada.
-            message: Parâmetro de entrada.
-            category: Parâmetro de entrada.
-            retryable: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         super().__init__(message)
         self.model = model
         self.category = category
@@ -115,15 +105,7 @@ class ProviderCircuitOpenError(ProviderCallError):
     """Raised when a provider circuit breaker is open."""
 
     def __init__(self, model: str, message: str):
-        """Resumo do comportamento desta função.
-
-        Args:
-            model: Parâmetro de entrada.
-            message: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         super().__init__(
             model=model,
             message=message,
@@ -352,14 +334,7 @@ def _get_adaptive_timeout(model: str) -> float:
     return min(timeout, max_timeout)
 
 def heuristic_quality_estimate(text: str) -> float:
-    """Resumo do comportamento desta função.
-
-    Args:
-        text: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa heuristic quality estimate."""
     if not text or not text.strip():
         return 0.0
     length = len(text)
@@ -369,23 +344,12 @@ def heuristic_quality_estimate(text: str) -> float:
     return max(0.0, min(10.0, round(score, 2)))
 
 def _estimate_tokens(text: str) -> int:
-    """Resumo do comportamento desta função.
-
-    Args:
-        text: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa estimate tokens."""
     if not text: return 0
     return max(1, len(text) // 4)
 
 def render_metrics_response():
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa render metrics response."""
     return generate_latest(registry), CONTENT_TYPE_LATEST
 
 # ==============================================================================
@@ -393,7 +357,7 @@ def render_metrics_response():
 # ==============================================================================
 
 class LLMResponse(BaseModel):
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `LLMResponse`: organiza responsabilidades de providers async."""
     text: str
     latency: float
     load_time: float = 0.0
@@ -409,47 +373,20 @@ class LLMResponse(BaseModel):
 # ==============================================================================
 
 class BaseProvider(ABC):
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `BaseProvider`: organiza responsabilidades de providers async."""
     def __init__(self, name: str, concurrency_limit: int):
-        """Resumo do comportamento desta função.
-
-        Args:
-            name: Parâmetro de entrada.
-            concurrency_limit: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self.name = name
         self._concurrency_limit = max(1, int(concurrency_limit))
         self.semaphore = asyncio.Semaphore(self._concurrency_limit)
 
     @abstractmethod
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Resumo do comportamento desta função.
-
-        Args:
-            prompt: Parâmetro de entrada.
-            image_b64: Parâmetro de entrada.
-            **kwargs: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa generate."""
         pass
 
     def _record_metrics(self, model: str, latency: float, cost: float, success: bool):
-        """Resumo do comportamento desta função.
-
-        Args:
-            model: Parâmetro de entrada.
-            latency: Parâmetro de entrada.
-            cost: Parâmetro de entrada.
-            success: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa record metrics."""
         PROV_REQ.labels(model=model).inc()
         if success:
             PROV_OK.labels(model=model).inc()
@@ -463,13 +400,9 @@ class BaseProvider(ABC):
 # ==============================================================================
 
 class OpenAIProvider(BaseProvider):
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `OpenAIProvider`: organiza responsabilidades de providers async."""
     def __init__(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         if not AsyncOpenAI: raise ImportError("OpenAI SDK not installed")
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         super().__init__("openai", concurrency_limit=100)
@@ -477,16 +410,7 @@ class OpenAIProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Resumo do comportamento desta função.
-
-        Args:
-            prompt: Parâmetro de entrada.
-            image_b64: Parâmetro de entrada.
-            **kwargs: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa generate."""
         model = kwargs.get("model", "gpt-4o")
         temperature = kwargs.get("temperature", 0.5)
         max_tokens = kwargs.get("max_tokens", 512)
@@ -544,13 +468,9 @@ class OpenAIProvider(BaseProvider):
 # ==============================================================================
 
 class AnthropicProvider(BaseProvider):
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `AnthropicProvider`: organiza responsabilidades de providers async."""
     def __init__(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         if not AsyncAnthropic: raise ImportError("Anthropic SDK not installed")
         self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
         super().__init__("anthropic", concurrency_limit=50)
@@ -558,16 +478,7 @@ class AnthropicProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Resumo do comportamento desta função.
-
-        Args:
-            prompt: Parâmetro de entrada.
-            image_b64: Parâmetro de entrada.
-            **kwargs: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa generate."""
         model = kwargs.get("model", "claude-3-5-sonnet-latest")
         start = time.time()
 
@@ -611,7 +522,7 @@ class AnthropicProvider(BaseProvider):
 # ==============================================================================
 
 class GeminiProvider(BaseProvider):
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `GeminiProvider`: organiza responsabilidades de providers async."""
     class GeminiAdapter:
         """Adapter layer to isolate SDK calls and simplify migration to google.genai."""
 
@@ -624,18 +535,7 @@ class GeminiProvider(BaseProvider):
             max_tokens: int,
         ):
             # Prefer google.genai (new SDK), fallback to google.generativeai.
-            """Resumo do comportamento desta função.
-
-            Args:
-                model_name: Parâmetro de entrada.
-                prompt: Parâmetro de entrada.
-                image_b64: Parâmetro de entrada.
-                temperature: Parâmetro de entrada.
-                max_tokens: Parâmetro de entrada.
-
-            Returns:
-                Valor retornado pela função.
-            """
+            """Executa generate."""
             if google_genai is not None:
                 client = google_genai.Client(api_key=GEMINI_API_KEY or None)
                 parts = [{"text": prompt}]
@@ -675,11 +575,7 @@ class GeminiProvider(BaseProvider):
             )
 
     def __init__(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         if not genai: raise ImportError("Google GenAI SDK not installed")
         super().__init__("gemini", concurrency_limit=60)
         self._adapter = self.GeminiAdapter()
@@ -687,26 +583,17 @@ class GeminiProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Resumo do comportamento desta função.
-
-        Args:
-            prompt: Parâmetro de entrada.
-            image_b64: Parâmetro de entrada.
-            **kwargs: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa generate."""
         model_name = kwargs.get("model", "gemini-1.5-flash")
         start = time.time()
 
         async with self.semaphore:
             try:
                 def _call():
-                    """Resumo do comportamento desta função.
+                    """Executa a responsabilidade descrita por este método.
 
                     Returns:
-                        Valor retornado pela função.
+                        Valor produzido pela execução.
                     """
                     return self._adapter.generate(
                         model_name=model_name,
@@ -741,23 +628,15 @@ class GeminiProvider(BaseProvider):
 # ==============================================================================
 
 class OllamaProvider(BaseProvider):
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `OllamaProvider`: organiza responsabilidades de providers async."""
     def __init__(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self.host = OLLAMA_HOST
         cfg = _runtime_provider_settings()
         super().__init__("ollama", concurrency_limit=int(cfg["ollama_concurrency_limit"]))
 
     def _refresh_concurrency_limit(self) -> None:
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa refresh concurrency limit."""
         cfg = _runtime_provider_settings()
         new_limit = int(cfg["ollama_concurrency_limit"])
         if new_limit != self._concurrency_limit:
@@ -768,16 +647,7 @@ class OllamaProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @local_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Resumo do comportamento desta função.
-
-        Args:
-            prompt: Parâmetro de entrada.
-            image_b64: Parâmetro de entrada.
-            **kwargs: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa generate."""
         model = kwargs.get("model", "phi4:latest")
         start = time.time()
         self._refresh_concurrency_limit()
@@ -885,19 +755,12 @@ class OllamaProvider(BaseProvider):
 # ==============================================================================
 
 class ProviderFactory:
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `ProviderFactory`: organiza responsabilidades de providers async."""
     _instances = {}
 
     @classmethod
     def get_provider(cls, model_name: str) -> BaseProvider:
-        """Resumo do comportamento desta função.
-
-        Args:
-            model_name: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Obtém provider."""
         prefix = model_name.split("/")[0] if "/" in model_name else "ollama"
         
         if prefix not in cls._instances:

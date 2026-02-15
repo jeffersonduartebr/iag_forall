@@ -8,15 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 
 
 def normalize_modality(modality: str, image_b64: Optional[str]) -> str:
-    """Resumo do comportamento desta função.
-
-    Args:
-        modality: Parâmetro de entrada.
-        image_b64: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa normalize modality."""
     m = modality or "text"
     if bool(image_b64) and m == "text":
         return "vision"
@@ -29,17 +21,7 @@ def build_final_prompt(
     use_rag: bool,
     rag_text: Optional[str],
 ) -> str:
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        system_prompt: Parâmetro de entrada.
-        use_rag: Parâmetro de entrada.
-        rag_text: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa build final prompt."""
     if use_rag:
         if rag_text is None:
             rag_text = query
@@ -57,16 +39,7 @@ def parse_meta_cost(
     chosen_model: str,
     cost_lookup,
 ) -> Tuple[int, int, float, float, Dict[str, Any]]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        meta: Parâmetro de entrada.
-        chosen_model: Parâmetro de entrada.
-        cost_lookup: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa parse meta cost."""
     p_tok = 0
     c_tok = 0
     total_cost = 0.0
@@ -90,15 +63,7 @@ def parse_meta_cost(
 
 
 def should_enable_dedup(settings_get, requested: bool) -> bool:
-    """Resumo do comportamento desta função.
-
-    Args:
-        settings_get: Parâmetro de entrada.
-        requested: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa should enable dedup."""
     return requested and str(settings_get("REQUEST_DEDUP_ENABLED", "0")).strip() in ("1", "true", "True")
 
 
@@ -108,17 +73,7 @@ def compute_judge_probability(
     chosen_model: str,
     min_sample_rate: float,
 ) -> float:
-    """Resumo do comportamento desta função.
-
-    Args:
-        n_samples: Parâmetro de entrada.
-        predicted_error_prob: Parâmetro de entrada.
-        chosen_model: Parâmetro de entrada.
-        min_sample_rate: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa compute judge probability."""
     if n_samples < 5:
         base_prob = 1.0
     else:

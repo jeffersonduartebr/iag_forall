@@ -26,11 +26,13 @@ Checklist:
 
 ## Dia 2 - API e contratos
 1. Leia `docs/API.md`.
+2. Leia `docs/FILE_CATALOG.md` e `docs/METHOD_CATALOG.md` para mapear arquivos e métodos.
 2. Abra `app/app/main.py` e localize:
 - Endpoint `/query`.
 - Endpoints de health.
 - Endpoints administrativos.
 3. Entenda os schemas em `app/app/schemas.py`.
+4. Consulte `docs/DOCSTRING_BACKLOG.md` para identificar pontos de melhoria de documentação.
 
 Exercício:
 - Adicione uma consulta com imagem base64 e entenda mudança de modalidade.
@@ -65,6 +67,7 @@ Exercício final:
 1. Mudou comportamento? Atualize docstring + `docs/*.md`.
 2. Toda mudança deve ter evidência mínima (teste, log, ou reprodução).
 3. PR pequena e focada.
+4. Após alterar arquivos em `app/app`, execute `python3 scripts/generate_docs_catalog.py`.
 
 ## Dicionário rápido
 - Bandit: política online de escolha entre modelos candidatos.

@@ -32,6 +32,7 @@ _PHONE_RE = re.compile(r"(\+?\d[\d\s\-()]{7,}\d)")
 
 @dataclass
 class GuardrailDecision:
+    """Classe `GuardrailDecision`: concentra responsabilidades de guardrails."""
     allowed: bool
     reasons: List[str]
 

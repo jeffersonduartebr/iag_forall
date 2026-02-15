@@ -381,12 +381,15 @@ class TestEnsureOllamaModelAsync:
         mock_response.json.return_value = {"models": [{"name": "async-model:tag"}]}
 
         async def mock_get(*args, **kwargs):
+            """Executa mock get."""
             return mock_response
 
         async def mock_aenter(self):
+            """Executa mock aenter."""
             return self
 
         async def mock_aexit(self, *args):
+            """Executa mock aexit."""
             pass
 
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -413,15 +416,19 @@ class TestEnsureOllamaModelAsync:
         mock_pull_response.status_code = 200
 
         async def mock_get(*args, **kwargs):
+            """Executa mock get."""
             return mock_tags_response
 
         async def mock_post(*args, **kwargs):
+            """Executa mock post."""
             return mock_pull_response
 
         async def mock_aenter(self):
+            """Executa mock aenter."""
             return self
 
         async def mock_aexit(self, *args):
+            """Executa mock aexit."""
             pass
 
         with patch("httpx.AsyncClient") as mock_client_class:

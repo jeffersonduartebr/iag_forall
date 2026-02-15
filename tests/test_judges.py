@@ -1,3 +1,5 @@
+"""Módulo `tests/test_judges.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 import asyncio
 from app import judges
@@ -29,6 +31,7 @@ async def test_judge_answer_empty_response():
 async def test_llm_based_score_mock(monkeypatch):
     """Substitui o modelo real por mock e verifica conversão do score."""
     async def fake_call_model(*args, **kwargs):
+        """Executa fake call model."""
         return "Nota 9", {}
 
     monkeypatch.setattr(judges, "call_model", fake_call_model)

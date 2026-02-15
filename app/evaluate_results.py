@@ -93,6 +93,7 @@ async def get_judge_score(query, answer, reference):
 
 async def process_batch():
     # 1. Carrega o CSV mais recente
+    """Executa process batch."""
     files = glob.glob(f"{INPUT_DIR}/raw_data_*.csv")
     if not files:
         logger.error("No CSV found.")
@@ -127,6 +128,7 @@ async def process_batch():
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
     
     async def evaluate_row(index, row):
+        """Executa evaluate row."""
         async with sem:
             # Se a resposta for vazia (erro na inferência), nota é 0
             if pd.isna(row['answer']) or str(row['answer']).strip() == "":

@@ -1,27 +1,37 @@
+"""Módulo `tests/test_bandits_more.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import numpy as np
 import pytest
 
 
 class _DummyMetric:
+    """Classe `_DummyMetric`: concentra responsabilidades de test bandits more."""
     def labels(self, **_kwargs):
+        """Executa labels."""
         return self
 
     def inc(self, *_args, **_kwargs):
+        """Executa inc."""
         return None
 
     def observe(self, *_args, **_kwargs):
+        """Executa observe."""
         return None
 
 
 class _FakeRedis:
+    """Classe `_FakeRedis`: concentra responsabilidades de test bandits more."""
     def __init__(self, value=None):
+        """Inicializa estado interno necessário para uso da classe."""
         self._value = value
 
     def get(self, _key):
+        """Executa get."""
         return self._value
 
 
 def test_numpy_helpers():
+    """Testa numpy helpers."""
     from app import bandits
 
     v = np.array([3.0, 4.0], dtype=np.float32)
@@ -37,6 +47,7 @@ def test_numpy_helpers():
 
 
 def test_centroid_matrix_cache_basic():
+    """Testa centroid matrix cache basic."""
     from app.bandits import CentroidMatrixCache
 
     cache = CentroidMatrixCache()
@@ -56,6 +67,7 @@ def test_centroid_matrix_cache_basic():
 
 
 def test_new_centroid_id_and_nearest(monkeypatch):
+    """Testa new centroid id and nearest."""
     from app import bandits
 
     assert bandits._new_centroid_id([{"id": 0}, {"id": 2}]) == 1
@@ -78,6 +90,7 @@ def test_new_centroid_id_and_nearest(monkeypatch):
 
 
 def test_dynamic_epsilon_and_choosers(monkeypatch):
+    """Testa dynamic epsilon and choosers."""
     from app import bandits
 
     eps_empty = bandits._dynamic_epsilon({})
@@ -104,6 +117,7 @@ def test_dynamic_epsilon_and_choosers(monkeypatch):
 
 
 def test_meta_strategy_and_combine(monkeypatch):
+    """Testa meta strategy and combine."""
     from app import bandits
 
     monkeypatch.setattr(bandits, "rds", _FakeRedis(b"thompson"))
@@ -128,6 +142,7 @@ def test_meta_strategy_and_combine(monkeypatch):
 
 
 def test_select_model_and_snapshot(monkeypatch):
+    """Testa select model and snapshot."""
     from app import bandits
 
     monkeypatch.setattr(bandits, "BANDIT_SELECT", _DummyMetric())
@@ -153,6 +168,7 @@ def test_select_model_and_snapshot(monkeypatch):
 
 
 def test_bandit_update_and_reward(monkeypatch):
+    """Testa bandit update and reward."""
     from app import bandits
 
     monkeypatch.setattr(bandits, "BANDIT_UPDATE", _DummyMetric())
@@ -164,6 +180,7 @@ def test_bandit_update_and_reward(monkeypatch):
     captured = {}
 
     def _set_ctx(ctx, stats):
+        """Executa set ctx."""
         captured[ctx] = stats
 
     monkeypatch.setattr(bandits, "_set_ctx_stats", _set_ctx)
@@ -188,6 +205,7 @@ def test_bandit_update_and_reward(monkeypatch):
     assert 0.0 <= r <= 1.0
 
     def _boom():
+        """Executa boom."""
         raise RuntimeError("x")
 
     monkeypatch.setattr(bandits, "_load_nsga_weights", _boom)
@@ -195,6 +213,7 @@ def test_bandit_update_and_reward(monkeypatch):
 
 
 def test_centroids_online_update_and_label(monkeypatch):
+    """Testa centroids online update and label."""
     from app import bandits
 
     monkeypatch.setattr(bandits, "_acquire_lock", lambda *args, **kwargs: True)
@@ -205,6 +224,7 @@ def test_centroids_online_update_and_label(monkeypatch):
     saved = {}
 
     def _save(c):
+        """Executa save."""
         saved["cents"] = c
 
     monkeypatch.setattr(bandits, "_save_centroids", _save)

@@ -27,6 +27,7 @@ def upgrade() -> None:
     conn = op.get_bind()
 
     def _table_exists(table_name: str) -> bool:
+        """Executa table exists."""
         query = sa.text(
             """
             SELECT 1
@@ -38,6 +39,7 @@ def upgrade() -> None:
         return conn.execute(query, {"table_name": table_name}).scalar() is not None
 
     def _index_exists(table_name: str, index_name: str) -> bool:
+        """Executa index exists."""
         query = sa.text(
             """
             SELECT 1
@@ -51,6 +53,7 @@ def upgrade() -> None:
         return conn.execute(query, {"table_name": table_name, "index_name": index_name}).scalar() is not None
 
     def _create_index_if_needed(table_name: str, index_name: str, columns: str) -> None:
+        """Executa create index if needed."""
         if _table_exists(table_name) and not _index_exists(table_name, index_name):
             op.execute(sa.text(f"CREATE INDEX {index_name} ON {table_name} ({columns})"))
 
@@ -67,6 +70,7 @@ def downgrade() -> None:
     conn = op.get_bind()
 
     def _table_exists(table_name: str) -> bool:
+        """Executa table exists."""
         query = sa.text(
             """
             SELECT 1
@@ -78,6 +82,7 @@ def downgrade() -> None:
         return conn.execute(query, {"table_name": table_name}).scalar() is not None
 
     def _index_exists(table_name: str, index_name: str) -> bool:
+        """Executa index exists."""
         query = sa.text(
             """
             SELECT 1
@@ -91,6 +96,7 @@ def downgrade() -> None:
         return conn.execute(query, {"table_name": table_name, "index_name": index_name}).scalar() is not None
 
     def _drop_index_if_needed(table_name: str, index_name: str) -> None:
+        """Executa drop index if needed."""
         if _table_exists(table_name) and _index_exists(table_name, index_name):
             op.execute(sa.text(f"DROP INDEX {index_name} ON {table_name}"))
 

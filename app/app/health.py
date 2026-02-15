@@ -33,14 +33,7 @@ class HealthCache:
     """Thread-safe cache for health check results."""
 
     def __init__(self, ttl_s: int = HEALTH_CACHE_TTL_S):
-        """Resumo do comportamento desta função.
-
-        Args:
-            ttl_s: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
         self._cache: Optional[Dict[str, Any]] = None
@@ -73,7 +66,7 @@ _health_cache = HealthCache()
 
 
 class HealthStatus(str, Enum):
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `HealthStatus`: organiza responsabilidades de health."""
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -81,7 +74,7 @@ class HealthStatus(str, Enum):
 
 @dataclass
 class ComponentHealth:
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `ComponentHealth`: organiza responsabilidades de health."""
     name: str
     healthy: bool
     latency_ms: Optional[float] = None
@@ -89,11 +82,7 @@ class ComponentHealth:
     details: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa to dict."""
         result = {"name": self.name, "healthy": self.healthy}
         if self.latency_ms is not None:
             result["latency_ms"] = round(self.latency_ms, 2)

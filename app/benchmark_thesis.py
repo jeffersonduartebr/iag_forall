@@ -66,13 +66,16 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # 🚦 RATE LIMITER
 # ==============================================================================
 class RateLimiter:
+    """Controla taxa de chamadas assíncronas por janela de tempo."""
     def __init__(self, max_calls_per_minute):
+        """Inicializa limite de chamadas por minuto."""
         self.max_calls = max_calls_per_minute
         self.period = 60.0
         self.timestamps = []
         self._lock = asyncio.Lock()
 
     async def wait(self):
+        """Aguarda até que nova chamada possa ser executada com segurança."""
         async with self._lock:
             now = time.time()
             self.timestamps = [t for t in self.timestamps if now - t < self.period]
@@ -91,6 +94,7 @@ limiter_sota = RateLimiter(RPM_OPENAI)
 # ==============================================================================
 @contextmanager
 def temporary_setting(key, value):
+    """Aplica uma configuração temporária durante execução de contexto."""
     original_value = settings.get(key)
     try:
         settings.set(key, str(value), actor="benchmark_ablation")
@@ -103,6 +107,7 @@ def temporary_setting(key, value):
 # 🧠 OLLAMA MEMORY MANAGER
 # ==============================================================================
 async def force_switch_ollama_model(target_model_name: str):
+    """Força troca de modelo ativo no Ollama e realiza warmup."""
     clean_target = target_model_name.replace("ollama/", "").split(":")[0]
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
@@ -134,6 +139,7 @@ async def force_switch_ollama_model(target_model_name: str):
 # 📏 GROUND TRUTH CHECKER
 # ==============================================================================
 def check_correctness(dataset_name, model_output, reference):
+    """Compara saída do modelo com referência usando regra por dataset."""
     pred = str(model_output).lower().strip()
     ref = str(reference).lower().strip()
     
@@ -156,23 +162,35 @@ def check_correctness(dataset_name, model_output, reference):
 # 📚 DATASET LOADERS
 # ==============================================================================
 def format_mmlu(example):
+    """Formata item do MMLU para prompt de múltipla escolha."""
     options = ["A", "B", "C", "D"]
     choices_str = "\n".join([f"{opt}) {choice}" for opt, choice in zip(options, example['choices'])])
     return f"Question: {example['question']}\nOptions:\n{choices_str}\nAnswer with the correct letter only."
-def format_gsm8k(example): return f"Question: {example['question']}\nLet's think step by step."
+def format_gsm8k(example):
+    """Formata item do GSM8K para raciocínio passo a passo."""
+    return f"Question: {example['question']}\nLet's think step by step."
 def format_hellaswag(example):
+    """Formata item do HellaSwag para seleção de continuação."""
     options = "\n".join([f"{i+1}) {end}" for i, end in enumerate(example['endings'])])
     return f"Context: {example['ctx']}\nWhich ending makes the most sense?\n{options}\nAnswer with the number only."
-def format_humaneval(example): return f"Complete the following Python code:\n\n{example['prompt']}\n    # TODO: implementation"
-def format_truthfulqa(example): return f"Question: {example['question']}\nAnswer truthfully and concisely."
+def format_humaneval(example):
+    """Formata item do HumanEval para tarefa de completude de código."""
+    return f"Complete the following Python code:\n\n{example['prompt']}\n    # TODO: implementation"
+def format_truthfulqa(example):
+    """Formata item do TruthfulQA para resposta factual concisa."""
+    return f"Question: {example['question']}\nAnswer truthfully and concisely."
 def format_arc(example):
+    """Formata item do ARC-Challenge para múltipla escolha."""
     choices = example['choices']['text']
     labels = example['choices']['label']
     choices_str = "\n".join([f"{lbl}) {txt}" for lbl, txt in zip(labels, choices)])
     return f"Question: {example['question']}\nOptions:\n{choices_str}\nAnswer with the correct letter only."
-def format_bbh(example): return f"Q: {example['input']}\nA: Let's think step by step."
+def format_bbh(example):
+    """Formata item do BBH para cadeia de raciocínio."""
+    return f"Q: {example['input']}\nA: Let's think step by step."
 
 def load_datasets():
+    """Carrega e amostra datasets usados no benchmark de tese."""
     logger.info("📥 Downloading datasets...")
     tasks = []
     global_id = 1
@@ -201,6 +219,7 @@ def load_datasets():
 # 🌊 FRUGAL GPT
 # ==============================================================================
 async def run_frugal_cascade(query: str):
+    """Executa cascata local->SOTA com heurística frugal de escalonamento."""
     start_t = time.time()
     local_model = list(LOCAL_BASELINES.values())[0]
     
@@ -234,11 +253,13 @@ async def run_frugal_cascade(query: str):
 # ==============================================================================
 
 def estimate_fallback_cost(query: str, answer: str) -> float:
+    """Estima custo de fallback SOTA com aproximação por tokens."""
     in_tokens = len(query) / 4
     out_tokens = len(answer) / 4
     return (in_tokens / 1000 * PRICE_SOTA_INPUT) + (out_tokens / 1000 * PRICE_SOTA_OUTPUT)
 
 async def evaluate_interaction(mode_label: str, task: dict, run_id: int):
+    """Avalia uma interação de benchmark em um modo específico."""
     query = task["query"]
     reference = task["reference"]
     dataset = task["dataset"]
@@ -344,6 +365,7 @@ async def evaluate_interaction(mode_label: str, task: dict, run_id: int):
         }
 
 async def run_benchmark_suite():
+    """Executa benchmark completo e persiste progresso em checkpoint."""
     tasks_data = load_datasets()
     if not tasks_data: return pd.DataFrame()
 

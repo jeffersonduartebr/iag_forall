@@ -54,15 +54,7 @@ class VerdictCache:
     """Cache LRU com TTL para verdicts de juízes."""
 
     def __init__(self, maxsize: int = VERDICT_CACHE_SIZE, ttl_s: int = VERDICT_CACHE_TTL_S):
-        """Resumo do comportamento desta função.
-
-        Args:
-            maxsize: Parâmetro de entrada.
-            ttl_s: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
@@ -76,15 +68,7 @@ class VerdictCache:
         return hashlib.sha256(payload).hexdigest()
 
     def get(self, query: str, answer: str) -> Optional[float]:
-        """Resumo do comportamento desta função.
-
-        Args:
-            query: Parâmetro de entrada.
-            answer: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa get."""
         key = self._make_key(query, answer)
         now = time.time()
         with self._lock:
@@ -101,16 +85,7 @@ class VerdictCache:
             return score
 
     def set(self, query: str, answer: str, score: float) -> None:
-        """Resumo do comportamento desta função.
-
-        Args:
-            query: Parâmetro de entrada.
-            answer: Parâmetro de entrada.
-            score: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa set."""
         key = self._make_key(query, answer)
         now = time.time()
         with self._lock:
@@ -121,11 +96,7 @@ class VerdictCache:
                 self._data.popitem(last=False)
 
     def stats(self) -> Dict[str, Any]:
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa stats."""
         total = self._hits + self._misses
         return {
             "hits": self._hits,
@@ -160,15 +131,7 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 # ============================================================
 
 def _safe_setting_float(key: str, default: float) -> float:
-    """Resumo do comportamento desta função.
-
-    Args:
-        key: Parâmetro de entrada.
-        default: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa safe setting float."""
     try:
         return float(settings.get(key, default))
     except Exception:
@@ -176,15 +139,7 @@ def _safe_setting_float(key: str, default: float) -> float:
 
 
 def _safe_setting_int(key: str, default: int) -> int:
-    """Resumo do comportamento desta função.
-
-    Args:
-        key: Parâmetro de entrada.
-        default: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa safe setting int."""
     try:
         return int(settings.get(key, default))
     except Exception:
@@ -222,7 +177,7 @@ MULTIMODAL_VLM_CANDIDATES: List[str] = list(
 
 @dataclass
 class JudgeStats:
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `JudgeStats`: organiza responsabilidades de judges."""
     model: str
     avg_score: float = 0.7
     avg_latency: float = 2.0
@@ -233,7 +188,7 @@ class JudgeStats:
 
 @dataclass
 class SelectedJudge:
-    """Representa a responsabilidade principal desta classe."""
+    """Classe `SelectedJudge`: organiza responsabilidades de judges."""
     model: str
     weight: float
 
@@ -243,15 +198,7 @@ class SelectedJudge:
 # ============================================================
 
 def _adaptive_threshold(values: Sequence[float], base: float) -> float:
-    """Resumo do comportamento desta função.
-
-    Args:
-        values: Parâmetro de entrada.
-        base: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa adaptive threshold."""
     if not values:
         return base
     median_val = statistics.median(values)
@@ -259,14 +206,7 @@ def _adaptive_threshold(values: Sequence[float], base: float) -> float:
 
 
 def _image_hash_from_b64(image_b64: Optional[str]) -> Optional[str]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        image_b64: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa image hash from b64."""
     if not image_b64:
         return None
     try:
@@ -283,11 +223,7 @@ def _image_hash_from_b64(image_b64: Optional[str]) -> Optional[str]:
 
 def _ensure_judge_logs_table() -> None:
     # Assume-se que o db_manager.py ou alembic já criou as tabelas
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa ensure judge logs table."""
     pass 
 
 
@@ -296,14 +232,7 @@ def _ensure_judge_logs_table() -> None:
 # ============================================================
 
 def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        window_minutes: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa load judge stats."""
     since = datetime.utcnow() - timedelta(minutes=window_minutes)
     stats: Dict[str, JudgeStats] = {}
 
@@ -348,29 +277,14 @@ def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
 # ============================================================
 
 def _score_candidate(s: JudgeStats) -> float:
-    """Resumo do comportamento desta função.
-
-    Args:
-        s: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa score candidate."""
     qc = s.avg_score / max(s.avg_cost, 1e-6)
     qc_norm = min(10.0, 1.0 + qc ** 0.25)
     return max(0.0, W_FIT * s.fitness + W_QC * (qc_norm / 10.0))
 
 
 def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[SelectedJudge]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        models: Parâmetro de entrada.
-        stats: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa choose two."""
     fitness_vals = [stats.get(m, JudgeStats(m)).fitness for m in models]
     thr = _adaptive_threshold(fitness_vals, MIN_FITNESS)
     valid = [m for m in models if stats.get(m, JudgeStats(m)).fitness >= thr]
@@ -388,14 +302,7 @@ def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[Selecte
     weights = [(m, w / total) for m, w in scored]
 
     def pick(wlist):
-        """Resumo do comportamento desta função.
-
-        Args:
-            wlist: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa pick."""
         r = random.random()
         acc = 0.0
         for name, w in wlist:
@@ -416,16 +323,7 @@ def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[Selecte
 # ============================================================
 
 async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500) -> str:
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        n_results: Parâmetro de entrada.
-        max_chars: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Obtém rag context."""
     try:
         vec = await asyncio.to_thread(embed_text, query)
         coll = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
@@ -448,14 +346,7 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
 # ============================================================
 
 def heuristic_score(answer: str) -> float:
-    """Resumo do comportamento desta função.
-
-    Args:
-        answer: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa heuristic score."""
     try:
         s = len(answer.strip())
         if s == 0:
@@ -500,19 +391,7 @@ def _ensure_judge_calibration_table():
 
 
 def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitness):
-    """Resumo do comportamento desta função.
-
-    Args:
-        judge_model: Parâmetro de entrada.
-        score: Parâmetro de entrada.
-        latency: Parâmetro de entrada.
-        cost: Parâmetro de entrada.
-        consistency: Parâmetro de entrada.
-        fitness: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa persist judge metrics."""
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -534,19 +413,7 @@ def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitne
         logger.warning("[Judges] persist metrics fail: %s", exc)
 
 def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=None):
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        answer: Parâmetro de entrada.
-        judge_model: Parâmetro de entrada.
-        score: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-        image_hash: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa persist judge log."""
     try:
         q_short = query[:2000] if query else ""
         a_short = answer[:4000] if answer else ""
@@ -579,15 +446,7 @@ def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=N
 # ============================================================
 
 async def _describe_image_if_needed(image_b64: Optional[str], modality: str) -> str:
-    """Resumo do comportamento desta função.
-
-    Args:
-        image_b64: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa describe image if needed."""
     if not image_b64:
         return ""
 
@@ -709,19 +568,7 @@ CORRECT ou INCORRECT
 
 async def _llm_pair_score(query, answer, use_rag, modality, image_b64, reference=None):
     # Check verdict cache first (Performance optimization)
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        answer: Parâmetro de entrada.
-        use_rag: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-        image_b64: Parâmetro de entrada.
-        reference: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa llm pair score."""
     cached_score = _verdict_cache.get(query, answer)
     if cached_score is not None:
         logger.debug(f"[Judges] Cache HIT: score={cached_score}")
@@ -861,19 +708,7 @@ CORRECT ou INCORRECT
 # ============================================================
 
 async def llm_based_score(query, answer, use_rag, modality, image_b64, reference=None):
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        answer: Parâmetro de entrada.
-        use_rag: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-        image_b64: Parâmetro de entrada.
-        reference: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa llm based score."""
     return await _llm_pair_score(
         query=query,
         answer=answer,
@@ -893,19 +728,7 @@ async def judge_answer(
     reference: Optional[str] = None
 ) -> List[Dict[str, Any]]:
 
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        answer: Parâmetro de entrada.
-        use_rag: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-        image_b64: Parâmetro de entrada.
-        reference: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa judge answer."""
     if not answer or not isinstance(answer, str):
         return [{"judge_id": "heuristic", "score": 0.0}]
 

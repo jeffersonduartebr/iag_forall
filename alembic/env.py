@@ -1,3 +1,5 @@
+"""Módulo `alembic/env.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import sys
 import os
 from logging.config import fileConfig
@@ -31,6 +33,7 @@ target_metadata = None   # Não usamos autogenerate baseado em models.py
 # Modo offline
 # -----------------------------------------------------------
 def run_migrations_offline():
+    """Executa migrations offline."""
     context.configure(
         url=DB_URL,
         literal_binds=True,
@@ -44,6 +47,7 @@ def run_migrations_offline():
 # Modo online
 # -----------------------------------------------------------
 def run_migrations_online():
+    """Executa migrations online."""
     engine = create_engine(DB_URL, poolclass=pool.NullPool)
 
     with engine.connect() as connection:

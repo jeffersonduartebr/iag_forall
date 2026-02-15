@@ -1,3 +1,5 @@
+"""Módulo `tests/test_router_strategy.py`: descreve responsabilidades e integrações deste arquivo."""
+
 import pytest
 from unittest.mock import patch
 from app.router_strategy import choose_top2_models
@@ -18,6 +20,7 @@ MOCK_SAMPLED_QS = {
 
 @pytest.fixture
 def mock_bandit_data():
+    """Executa mock bandit data."""
     with patch("app.router_strategy.get_snapshot", return_value=MOCK_SNAPSHOT), \
          patch("app.router_strategy.sample_metrics_from_snapshot", return_value=MOCK_SAMPLED_QS):
         yield

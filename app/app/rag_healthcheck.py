@@ -41,11 +41,7 @@ QUERY_TEXT = "Verificação do pipeline RAG e conectividade com a base vetorial.
 
 
 async def rag_healthcheck() -> Dict[str, Any]:
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa rag healthcheck."""
     report: Dict[str, Any] = {
         "ok": False,
         "steps": {},
@@ -171,25 +167,13 @@ def rag_healthcheck_sync(timeout_s: int = 10) -> Dict[str, Any]:
     Wrapper síncrono — útil para scripts, CLIs e contexts não-async.
     """
     async def _runner():
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa runner."""
         return await rag_healthcheck()
 
     return asyncio.run(asyncio.wait_for(_runner(), timeout=timeout_s))
 
 
 def _finalize(report: Dict[str, Any], t0: float) -> Dict[str, Any]:
-    """Resumo do comportamento desta função.
-
-    Args:
-        report: Parâmetro de entrada.
-        t0: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa finalize."""
     report["latency_total_s"] = round(time.time() - t0, 3)
     return report

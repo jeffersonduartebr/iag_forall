@@ -85,11 +85,7 @@ def _make_db_engine() -> Any:
     )
 
 def _connect_redis() -> redis.Redis | None:
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa connect redis."""
     try:
         r = redis.Redis(
             host=REDIS_HOST,
@@ -340,11 +336,7 @@ def persist_correlations(corr_data: Dict[str, Dict[str, Any]]) -> None:
 # 🚀 Loop principal
 # -----------------------------------------------------------------------------
 def main() -> None:
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa main."""
     logger.info(f"🚀 Servidor de correlações ativo (porta {PROM_PORT})")
     # Sobe o endpoint de métricas
     start_http_server(PROM_PORT)

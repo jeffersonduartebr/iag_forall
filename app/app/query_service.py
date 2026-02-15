@@ -61,31 +61,15 @@ class _EngineProxy:
     """Proxy to centralized engine for backward compatibility."""
 
     def begin(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa begin."""
         return get_engine().begin()
 
     def connect(self):
-        """Resumo do comportamento desta função.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa connect."""
         return get_engine().connect()
 
     def execute(self, *args, **kwargs):
-        """Resumo do comportamento desta função.
-
-        Args:
-            *args: Parâmetro de entrada.
-            **kwargs: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa execute."""
         return get_engine().execute(*args, **kwargs)
 
 
@@ -119,14 +103,7 @@ def _safe_json(obj: dict | list | str | None) -> str:
     }
 
     def _redact(value):
-        """Resumo do comportamento desta função.
-
-        Args:
-            value: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa redact."""
         if isinstance(value, dict):
             out = {}
             for k, v in value.items():
@@ -227,27 +204,7 @@ def insert_query_log(
     answer_embedding: Optional[List[float]] = None,
 ) -> None:
 
-    """Resumo do comportamento desta função.
-
-    Args:
-        query_text: Parâmetro de entrada.
-        model: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-        image_provided: Parâmetro de entrada.
-        answer: Parâmetro de entrada.
-        image_output_b64: Parâmetro de entrada.
-        latency_s: Parâmetro de entrada.
-        cost_per_1k: Parâmetro de entrada.
-        quality: Parâmetro de entrada.
-        reward: Parâmetro de entrada.
-        context_label: Parâmetro de entrada.
-        raw_payload: Parâmetro de entrada.
-        query_embedding: Parâmetro de entrada.
-        answer_embedding: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa insert query log."""
     ensure_query_log()
 
     try:

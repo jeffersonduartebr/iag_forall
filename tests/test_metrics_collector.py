@@ -1,29 +1,39 @@
+"""Módulo `tests/test_metrics_collector.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 
 from app import metrics_collector as mc
 
 
 class _Conn:
+    """Classe `_Conn`: concentra responsabilidades de test metrics collector."""
     def __init__(self):
+        """Inicializa estado interno necessário para uso da classe."""
         self.calls = []
 
     def execute(self, stmt, params=None):
+        """Executa execute."""
         self.calls.append((str(stmt), params))
         return SimpleNamespace(rowcount=1)
 
 
 class _Ctx:
+    """Classe `_Ctx`: concentra responsabilidades de test metrics collector."""
     def __init__(self, conn):
+        """Inicializa estado interno necessário para uso da classe."""
         self.conn = conn
 
     def __enter__(self):
+        """Executa enter."""
         return self.conn
 
     def __exit__(self, exc_type, exc, tb):
+        """Executa exit."""
         return False
 
 
 def test_ensure_table_and_persist_sample_success(monkeypatch):
+    """Testa ensure table and persist sample success."""
     conn = _Conn()
     monkeypatch.setattr(mc, "engine", SimpleNamespace(begin=lambda: _Ctx(conn)))
 
@@ -52,7 +62,9 @@ def test_ensure_table_and_persist_sample_success(monkeypatch):
 
 
 def test_persist_sample_swallows_exceptions(monkeypatch):
+    """Testa persist sample swallows exceptions."""
     def _boom():
+        """Executa boom."""
         raise RuntimeError("db down")
 
     monkeypatch.setattr(mc, "_ensure_model_metrics_table", _boom)
@@ -60,6 +72,7 @@ def test_persist_sample_swallows_exceptions(monkeypatch):
 
 
 def test_update_model_metrics_ema_and_snapshot_copy(monkeypatch):
+    """Testa update model metrics ema and snapshot copy."""
     mc._MODEL_METRICS.clear()
     persisted = []
     monkeypatch.setattr(mc, "_persist_sample", lambda **kw: persisted.append(kw))

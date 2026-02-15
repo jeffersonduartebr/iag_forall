@@ -35,6 +35,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # 1. DATA LOADING & PREP
 # ==============================================================================
 def load_data():
+    """Carrega data."""
     print("📂 Loading benchmark data...")
     files = glob.glob(f"{INPUT_DIR}/*data_*.csv")
     if not files:
@@ -68,6 +69,7 @@ def load_data():
 # 2. MODEL DEFINITIONS
 # ==============================================================================
 def get_model(name):
+    """Obtém model."""
     if name == "Logistic Regression":
         model = linear_model.LogisticRegression(optimizer=optim.SGD(lr=0.01))
     elif name == "Adaptive Random Forest":
@@ -88,6 +90,7 @@ def get_model(name):
 # 3. WORKER FUNCTION
 # ==============================================================================
 def run_kfold_for_model(model_name, X, y, k_folds):
+    """Executa kfold for model."""
     print(f"   🚀 Worker started for: {model_name}")
     
     ensemble = [get_model(model_name) for _ in range(k_folds)]
@@ -196,6 +199,7 @@ def analyze_statistics(final_results):
 # 5. MAIN EXECUTION & PLOTTING
 # ==============================================================================
 def main():
+    """Executa main."""
     X, y, datasets = load_data()
     models = ["Logistic Regression", "Adaptive Random Forest", "Online MLP"]
     

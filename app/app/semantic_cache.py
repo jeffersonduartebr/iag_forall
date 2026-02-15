@@ -39,26 +39,12 @@ def get_cache_threshold() -> float:
 
 
 def _compute_sha256(text: str) -> str:
-    """Resumo do comportamento desta função.
-
-    Args:
-        text: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa compute sha256."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _normalize_modality(mod: str) -> str:
-    """Resumo do comportamento desta função.
-
-    Args:
-        mod: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa normalize modality."""
     mod = mod.lower().strip()
     if mod in ("vision", "image"):
         return "vision"
@@ -81,15 +67,7 @@ class L1Cache:
     """
 
     def __init__(self, maxsize: int = 1024, ttl_seconds: int = 300):
-        """Resumo do comportamento desta função.
-
-        Args:
-            maxsize: Parâmetro de entrada.
-            ttl_seconds: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Inicializa estado interno necessário para uso da classe."""
         self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self._lock = threading.Lock()
         self._maxsize = maxsize
@@ -159,16 +137,7 @@ _l1_cache = L1Cache(maxsize=20000, ttl_seconds=600)
 
 async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
     # Reutiliza lógica de embeddings
-    """Resumo do comportamento desta função.
-
-    Args:
-        query: Parâmetro de entrada.
-        modality: Parâmetro de entrada.
-        image_b64: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Executa make embedding."""
     try:
         if modality == "text":
             return await asyncio.to_thread(embed_text, query)

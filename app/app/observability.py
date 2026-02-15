@@ -681,16 +681,7 @@ class JsonUTF8Renderer:
     """Renderizador JSON que mantém acentuação legível."""
 
     def __call__(self, logger, name, event_dict):
-        """Resumo do comportamento desta função.
-
-        Args:
-            logger: Parâmetro de entrada.
-            name: Parâmetro de entrada.
-            event_dict: Parâmetro de entrada.
-
-        Returns:
-            Valor retornado pela função.
-        """
+        """Executa call."""
         try:
             return json.dumps(event_dict, ensure_ascii=False)
         except Exception as e:

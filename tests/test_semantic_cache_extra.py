@@ -1,3 +1,5 @@
+"""Módulo `tests/test_semantic_cache_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+
 from types import SimpleNamespace
 import threading
 
@@ -8,6 +10,7 @@ from app import semantic_cache as sc
 
 @pytest.mark.asyncio
 async def test_make_embedding_and_normalize_paths(monkeypatch):
+    """Testa make embedding and normalize paths."""
     monkeypatch.setattr(sc, "embed_text", lambda q: [len(q)])
     monkeypatch.setattr(sc, "embed_image", lambda b64: [len(b64)])
     monkeypatch.setattr(sc, "embed_multimodal", lambda q, b: {"multimodal": [9], "text": [8]})
@@ -27,25 +30,32 @@ async def test_make_embedding_and_normalize_paths(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_check_cache_branches(monkeypatch):
+    """Testa check cache branches."""
     class _L1:
+        """Classe `_L1`: concentra responsabilidades de test semantic cache extra."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self.saved = []
 
         def get(self, key):
+            """Executa get."""
             return None
 
         def store(self, key, value):
+            """Executa store."""
             self.saved.append((key, value))
 
     l1 = _L1()
     monkeypatch.setattr(sc, "_l1_cache", l1)
     async def _emb(*args, **kwargs):
+        """Executa emb."""
         return [0.1, 0.2]
 
     monkeypatch.setattr(sc, "_make_embedding", _emb)
 
     # no docs
     async def _nodoc(**kwargs):
+        """Executa nodoc."""
         return {"documents": []}
 
     monkeypatch.setattr(sc, "query_embedding", _nodoc)
@@ -56,6 +66,7 @@ async def test_check_cache_branches(monkeypatch):
     monkeypatch.setattr(sc, "settings", fake_settings)
 
     async def _low(**kwargs):
+        """Executa low."""
         return {"documents": [["q"]], "distances": [[0.4]], "metadatas": [[{"answer_payload": "a"}]]}
 
     monkeypatch.setattr(sc, "query_embedding", _low)
@@ -63,6 +74,7 @@ async def test_check_cache_branches(monkeypatch):
 
     # no answer payload
     async def _nopayload(**kwargs):
+        """Executa nopayload."""
         return {"documents": [["q"]], "distances": [[0.01]], "metadatas": [[{"model_used": "m"}]]}
 
     monkeypatch.setattr(sc, "query_embedding", _nopayload)
@@ -70,6 +82,7 @@ async def test_check_cache_branches(monkeypatch):
 
     # success
     async def _ok(**kwargs):
+        """Executa ok."""
         return {
             "documents": [["q"]],
             "distances": [[0.01]],
@@ -85,24 +98,30 @@ async def test_check_cache_branches(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_store_cache_and_hit_rate_tuning(monkeypatch):
+    """Testa store cache and hit rate tuning."""
     stored = []
 
     class _L1:
+        """Classe `_L1`: concentra responsabilidades de test semantic cache extra."""
         def __init__(self):
+            """Inicializa estado interno necessário para uso da classe."""
             self._hits = 0
             self._misses = 0
             self._lock = threading.Lock()
 
         def store(self, key, value):
+            """Executa store."""
             stored.append((key, value))
 
         def stats(self):
+            """Executa stats."""
             return {"hits": self._hits, "misses": self._misses, "size": 0, "maxsize": 10}
 
     l1 = _L1()
     monkeypatch.setattr(sc, "_l1_cache", l1)
 
     async def _add_document(**kwargs):
+        """Executa add document."""
         return True
 
     monkeypatch.setattr(sc, "add_document", _add_document)

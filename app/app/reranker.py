@@ -28,11 +28,7 @@ _RERANKER_INSTANCE = None
 DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 def get_reranker_model():
-    """Resumo do comportamento desta função.
-
-    Returns:
-        Valor retornado pela função.
-    """
+    """Obtém reranker model."""
     global _RERANKER_INSTANCE
     if _RERANKER_INSTANCE is None and CE_AVAILABLE:
         model_name = settings.get("RERANK_MODEL", DEFAULT_RERANK_MODEL)

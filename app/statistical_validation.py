@@ -38,6 +38,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("stats")
 
 def load_latest_data():
+    """Carrega latest data."""
     files = glob.glob(f"{INPUT_DIR}/*data_*.csv")
     if not files:
         logger.error(f"❌ No CSV files found in {INPUT_DIR}/.")
@@ -65,6 +66,7 @@ def load_latest_data():
     return df_grouped
 
 def calculate_cohens_d(x, y):
+    """Executa calculate cohens d."""
     nx = len(x)
     ny = len(y)
     dof = nx + ny - 2
@@ -73,10 +75,12 @@ def calculate_cohens_d(x, y):
     return (np.mean(x) - np.mean(y)) / pool_std
 
 def format_p_value(p):
+    """Executa format p value."""
     if p < 0.001: return "< 0.001"
     return f"= {p:.4f}"
 
 def analyze_metric(df, metric_col, metric_name_en):
+    """Executa analyze metric."""
     if metric_col not in df.columns: return None
 
     pivot = df.pivot(index="id", columns="mode_clean", values=metric_col).dropna()
@@ -133,6 +137,7 @@ def analyze_metric(df, metric_col, metric_name_en):
     }
 
 def generate_latex_text(results):
+    """Executa generate latex text."""
     if not results: return ""
     
     m = results["metric_name"]
@@ -151,6 +156,7 @@ Post-hoc Wilcoxon results:
     
     # Ordenação Lógica para Tabela: Local -> Frugal -> SOTA -> Ablações
     def sort_key(name):
+        """Executa sort key."""
         if "Gemma" in name or "Qwen" in name: return 0
         if "Frugal" in name: return 1
         if "GPT" in name or "SOTA" in name: return 2
@@ -199,6 +205,7 @@ Post-hoc Wilcoxon results:
     return text
 
 def main():
+    """Executa main."""
     print("="*80)
     print("🚀 THESIS STATISTICAL GENERATOR (Final Sync)")
     print("="*80)
