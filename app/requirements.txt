@@ -1,0 +1,68 @@
+# Core API
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+httpx[http2]==0.27.2
+python-multipart==0.0.9
+aiofiles==24.1.0
+structlog==24.4.0
+prometheus-client==0.21.0
+
+# Config / Validation
+pydantic>=2.6,<3
+pydantic-settings>=2.2,<3
+python-dotenv==1.0.1
+typing-extensions>=4.12,<5
+
+# LLM Routing / Providers
+litellm==1.43.6
+openai>=1.52.0
+anthropic
+google-generativeai
+google-cloud-aiplatform==1.66.0
+tenacity==9.0.0
+pybreaker==1.0.1
+tiktoken==0.7.0
+sentence-transformers>=2.2.2
+river
+einops
+
+# OCR / Document processing
+pytesseract
+pdf2image
+PyMuPDF==1.24.10
+
+# Database / Cache / Queue
+sqlalchemy==2.0.32
+pymysql==1.1.1
+redis==5.0.7
+celery[redis]==5.4.0
+alembic
+
+# ML / Optimization / Analytics
+deap==1.4.1
+scikit-learn==1.5.2
+numpy==1.26.4
+pandas==2.2.3
+matplotlib==3.9.2
+seaborn
+scipy
+shap>=0.42.0
+
+# Retrieval / RAG
+chromadb==0.5.5
+rank_bm25
+
+# Evaluation / datasets
+datasets
+tqdm
+tabulate
+
+# Dev / QA
+pytest==8.3.3
+pytest-asyncio==0.23.8
+pytest-cov
+ruff
+mypy
+pre-commit==3.8.0
+types-requests
+types-redis

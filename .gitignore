@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime/data
+state/
+chromadb-data/
+ollama_data/
+tmp_prom/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

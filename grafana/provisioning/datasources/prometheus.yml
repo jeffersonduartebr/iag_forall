@@ -1,0 +1,30 @@
+# ============================================================
+# ⚙️ Grafana Datasource Provisioning — Prometheus
+# Jefferson Duarte — IFRN / IAG ForAll
+# ============================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus - LLM Router Stack
+    type: prometheus
+    uid: prometheus_llm_router
+    access: proxy
+    url: http://prometheus:9090
+    editable: true
+    isDefault: true
+
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      timeInterval: 60s
+      exemplarTraceIdDestinations:
+        - datasourceUid: prometheus_llm_router
+          name: traceID
+
+    secureJsonData:
+      basicAuthPassword: ""
+      basicAuthUser: ""
+
+    version: 1
+    orgId: 1

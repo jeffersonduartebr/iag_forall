@@ -1,0 +1,468 @@
+
+
+services:
+
+  # =========================================================
+  # 🗄️ Banco de dados MariaDB
+  # =========================================================
+  mariadb:
+    image: mariadb:11
+    container_name: mariadb_router
+    restart: always
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD required}
+      MYSQL_DATABASE: ${DB_NAME:-routerdb}
+      MYSQL_USER: ${DB_USER:-router_user}
+      MYSQL_PASSWORD: ${DB_PASS:?DB_PASS required}
+
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+    ports:
+      - "127.0.0.1:3307:3306"
+
+    command: >
+      --max_connections=300
+      --innodb_buffer_pool_size=8G
+      --innodb_log_file_size=512M
+      --innodb_flush_log_at_trx_commit=2
+
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "--silent"]
+      interval: 10s
+      timeout: 10s
+      retries: 50
+      start_period: 60s
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 🔧 Inicialização do banco (Alembic + db_manager)
+  # =========================================================
+  db_init:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: db_init_router
+    restart: "no"
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-router_user}
+      - DB_PASS=${DB_PASS:?DB_PASS required}
+      - DB_NAME=${DB_NAME:-routerdb}
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=UTF-8
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+
+    command: >
+      bash -c "
+        echo '⏳ Executando Alembic migrations...';
+        alembic upgrade head;
+
+        echo '⏳ Executando db_manager.py...';
+        python -m app.db_manager;
+
+        echo '✅ Banco pronto!';
+      "
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 🌐 API principal (Router Multimodal)
+  # =========================================================
+  api:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: llm_router_api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      prometheus:
+        condition: service_started
+      db_init:
+        condition: service_completed_successfully
+
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-router_user}
+      - DB_PASS=${DB_PASS:?DB_PASS required}
+      - DB_NAME=${DB_NAME:-routerdb}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - OLLAMA_HOST=http://ollama:11434
+      - CHROMA_TELEMETRY_ENABLED=false
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=UTF-8
+
+    volumes:
+      - ./state:/app/state
+      - ./data:/app/data
+      - ./chromadb-data:/data/chroma
+      - prometheus_data:/tmp/prom
+
+    ports:
+      - "8000:8000"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    command: >
+      bash -c "
+        echo '🧩 Aguardando serviços dependentes...';
+        sleep 3;
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --limit-concurrency 400 --limit-max-requests 10000
+      "
+
+    networks:
+      - ai_net
+      - ai_backbone
+
+
+  # =========================================================
+  # 🧠 NSGA-II updater
+  # =========================================================
+  nsga_updater:
+    build:
+      context: .
+      dockerfile: app/Dockerfile.nsga
+    container_name: nsga_weights_updater
+    restart: unless-stopped
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db_init:
+        condition: service_completed_successfully
+
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-router_user}
+      - DB_PASS=${DB_PASS:?DB_PASS required}
+      - DB_NAME=${DB_NAME:-routerdb}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+
+    volumes:
+      - ./app/app:/app/app
+      - prometheus_data:/tmp/prom
+
+    ports:
+      - "9999:9999"
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 🧠 Meta-Optimizer (Bayes)
+  # =========================================================
+  meta_optimizer:
+    build:
+      context: .
+      dockerfile: app/Dockerfile.metaopt
+    container_name: meta_optimizer
+    restart: unless-stopped
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db_init:
+        condition: service_completed_successfully
+
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-router_user}
+      - DB_PASS=${DB_PASS:?DB_PASS required}
+      - DB_NAME=${DB_NAME:-routerdb}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+
+    volumes:
+      - ./app/app:/app/app
+      - prometheus_data:/tmp/prom
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 🧩 Servidor Ollama
+  # =========================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_KEEP_ALIVE=30m
+      - OLLAMA_NUM_PARALLEL=16
+      - OLLAMA_METRICS=true
+      - OLLAMA_FLASH_ATTENTION=1   # Aceleração massiva para placas RTX
+      - OLLAMA_KV_CACHE_TYPE=q8_0  # Comprime o contexto (cache) para caber mais
+      - OLLAMA_CONTEXT_LENGTH=2048
+      - OLLAMA_MAX_LOADED_MODELS=3
+      - OLLAMA_NUM_THREADS=8
+
+    ports:
+      - "11434:11434"
+
+    volumes:
+      - ./ollama_data:/root/.ollama
+      - ./app/data/vertex_api.json:/app/keys/vertex_api.json:ro
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 📈 Prometheus
+  # =========================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+
+    ports:
+      - "9090:9090"
+
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/tmp/prom
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 📊 Grafana
+  # =========================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+
+    depends_on:
+      prometheus:
+        condition: service_started
+
+    ports:
+      - "3001:3000"
+
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 🪵 Loki / Promtail
+  # =========================================================
+  loki:
+    image: grafana/loki:2.9.2
+    container_name: loki
+    restart: unless-stopped
+
+    ports:
+      - "3100:3100"
+
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/config.yml
+
+    networks:
+      - ai_net
+
+  promtail:
+    image: grafana/promtail:2.9.2
+    container_name: promtail
+
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml
+      - /var/log:/var/log
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 🧪 Locust (Stress tests)
+  # =========================================================
+  locust:
+    image: locustio/locust:latest
+    container_name: locust
+    restart: unless-stopped
+
+    depends_on:
+      api:
+        condition: service_started
+
+    environment:
+      - LOCUST_MODE=standalone
+
+    volumes:
+      - ./tests:/mnt/locust
+
+    working_dir: /mnt/locust
+    command: -f /mnt/locust/locustfile.py --web-host 0.0.0.0
+
+    ports:
+      - "8089:8089"
+
+    networks:
+      - ai_net
+
+
+  # =========================================================
+  # 🧩 Redis
+  # =========================================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD required}"]
+
+    volumes:
+      - redis-data:/data
+
+    ports:
+      - "127.0.0.1:6378:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD required}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+    networks:
+      - ai_net
+
+# =========================================================
+  # 👷 Celery Worker (Processamento de Feedback em Background)
+  # =========================================================
+  celery_worker:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: celery_worker
+    restart: unless-stopped
+    
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started # Espera a API para garantir que o código base está ok
+
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-router_user}
+      - DB_PASS=${DB_PASS:?DB_PASS required}
+      - DB_NAME=${DB_NAME:-routerdb}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - C_FORCE_ROOT=true # Necessário se rodar como root no container
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1      
+    # Comando para iniciar o worker ouvindo a fila padrão e a de feedback
+    command: celery -A app.celery_app worker --loglevel=info --queues=celery,feedback_queue --concurrency=12 --prefetch-multiplier=4 --max-tasks-per-child=1000 --time-limit=3600
+
+    volumes:
+      - ./state:/app/state
+      - ./data:/app/data
+      
+    networks:
+      - ai_net
+
+# =========================================================
+# Volumes
+# =========================================================
+volumes:
+  prometheus_data:
+  ollama_data:
+  chromadb_data:
+  bandit_state:
+  redis-data:
+  mariadb_data:
+
+
+# =========================================================
+# Redes
+# =========================================================
+networks:
+  ai_net:
+    driver: bridge
+  ai_backbone:
+    external: true

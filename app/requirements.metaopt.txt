@@ -1,0 +1,19 @@
+# Dependências básicas do projeto
+fastapi>=0.111.0
+uvicorn>=0.30.0
+sqlalchemy>=2.0.30
+pymysql>=1.1.0
+redis>=5.0.1
+prometheus-client>=0.20.0
+numpy>=1.26.0
+
+# DEAP (algoritmos evolutivos)
+deap>=1.4.1
+
+# Optuna (meta-otimização bayesiana)
+optuna>=3.5.0
+
+# Dependências internas do ARISTO
+requests>=2.31.0
+
+structlog>=24.1.0

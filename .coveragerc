@@ -1,0 +1,22 @@
+[run]
+source =
+    app/app
+omit =
+    app/app/00providers.py
+    app/app/00rag.py
+    app/app/correlation_metrics.py
+    app/app/nsga_meta_optimizer.py
+    app/app/nsga_weights_updater.py
+    app/app/dash_control_panel.py
+    app/app/update_nsga_best_params.py
+    app/app/adaptive_timeout.py
+    app/app/umrag.py
+    app/app/rag_healthcheck.py
+    app/app/db_manager.py
+    app/app/rag_context_provider.py
+    app/app/reset_chroma_collections.py
+
+[report]
+show_missing = True
+skip_empty = True
+

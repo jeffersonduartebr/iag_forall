@@ -1,0 +1,86 @@
+# ============================================================
+
+# 🧠 Dockerfile.correlation
+
+# Serviço: correlation_metrics (NSGA-II multiobjetivo)
+
+# Autor: Jefferson Duarte — IFRN / IAG ForAll
+
+# ============================================================
+
+# ------------------------------------------------------------
+
+# 🏗️ Imagem base
+
+# ------------------------------------------------------------
+
+FROM python:3.11-slim
+
+# ------------------------------------------------------------
+
+# 🧰 Dependências de sistema
+
+# ------------------------------------------------------------
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libmariadb-dev pkg-config curl netcat-traditional && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+
+# ------------------------------------------------------------
+
+# 📁 Estrutura do app
+
+# ------------------------------------------------------------
+
+WORKDIR /app
+COPY ./app /app/app
+COPY ./app/requirements.correlation.txt /app/requirements.correlation.txt
+
+# ------------------------------------------------------------
+
+# 📦 Instala dependências Python
+
+# ------------------------------------------------------------
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel  
+RUN pip install -r /app/requirements.correlation.txt  
+RUN pip install --no-cache-dir prometheus_client pandas numpy redis sqlalchemy pymysql
+
+# ------------------------------------------------------------
+
+# ⚙️ Variáveis de ambiente padrão
+
+# ------------------------------------------------------------
+
+ENV PYTHONUNBUFFERED=1 
+ENV DB_HOST=mariadb 
+ENV DB_USER=router_user 
+ENV DB_PASS=router_pass 
+ENV DB_NAME=routerdb 
+ENV REDIS_HOST=redis
+ENV REDIS_PORT=6379
+ENV REDIS_PASS=SenhaForte
+ENV REDIS_PASSWORD=SenhaForte
+ENV CORR_PROM_PORT=9105 
+ENV CORR_INTERVAL=60
+
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
+    PYTHONUNBUFFERED=1 \
+    CHROMA_TELEMETRY_ENABLED=false
+
+# Cria diretório compartilhado de métricas
+RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
+# ------------------------------------------------------------
+
+# 🩺 Healthcheck (verifica se a porta Prometheus está ativa)
+
+# ------------------------------------------------------------
+
+HEALTHCHECK --interval=60s --timeout=10s --retries=5 CMD nc -z localhost ${CORR_PROM_PORT} || exit 1
+
+# ------------------------------------------------------------
+
+# 🚀 Entrypoint
+
+# ------------------------------------------------------------
+
+CMD ["python", "-u", "app/correlation_metrics.py"]

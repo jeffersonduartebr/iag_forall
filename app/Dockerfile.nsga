@@ -1,0 +1,86 @@
+# =========================================================
+# 🧠 Dockerfile.nsga — Serviço de otimização multiobjetivo (NSGA-II)
+# =========================================================
+FROM python:3.11-slim
+
+LABEL maintainer="Jefferson Duarte <jefferson.igorbr@gmail.com>"
+LABEL description="NSGA-II Optimizer for LLM Router (Prometheus + Redis + MariaDB)"
+
+# ---------------------------------------------------------
+# 🧰 Dependências de sistema
+# ---------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libmariadb-dev \
+    pkg-config \
+    curl \
+    netcat-traditional \
+    mariadb-client \
+    redis-tools \
+    ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------
+# 📁 Estrutura do app
+# ---------------------------------------------------------
+WORKDIR /app
+
+COPY ./app /app/app
+COPY ./app/requirements.nsga.txt /app/requirements.nsga.txt
+
+# ---------------------------------------------------------
+# 📦 Instala dependências Python
+# ---------------------------------------------------------
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install -r /app/requirements.nsga.txt
+RUN pip install --no-cache-dir prometheus_client redis sqlalchemy pymysql deap fastapi uvicorn python-dotenv
+
+# ---------------------------------------------------------
+# ⚙️ Variáveis de ambiente padrão
+# ---------------------------------------------------------
+ENV PYTHONUNBUFFERED=1
+ENV DB_HOST=mariadb
+ENV DB_USER=router_user
+ENV DB_PASS=router_pass
+ENV DB_NAME=routerdb
+ENV REDIS_HOST=redis
+ENV REDIS_PORT=6379
+ENV REDIS_PASS=SenhaForte
+ENV REDIS_PASSWORD=SenhaForte
+ENV NSGA_UPDATE_INTERVAL_S=300
+ENV NSGA_LOOKBACK_MINUTES=180
+ENV NSGA_LOOKBACK_MAXROWS=2000
+
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
+    PYTHONUNBUFFERED=1 \
+    CHROMA_TELEMETRY_ENABLED=false
+
+# ---------------------------------------------------------
+# 📊 Diretório Prometheus
+# ---------------------------------------------------------
+RUN mkdir -p /tmp/prom && chmod -R 777 /tmp/prom
+
+# ---------------------------------------------------------
+# 🩺 Healthcheck (verifica se o endpoint /metrics está ativo)
+# ---------------------------------------------------------
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 CMD curl -sf http://localhost:9999/metrics || exit 1
+
+# ---------------------------------------------------------
+# 🚀 Diagnóstico e execução do prestart
+# ---------------------------------------------------------
+# Copia o script de inicialização
+COPY ./app/prestart_nsga.sh /app/prestart_nsga.sh
+
+
+# Diagnóstico: imprime confirmação visual durante o build
+RUN echo "🔍 Verificando presença do prestart_nsga.sh..." && \
+    ls -l /app | grep prestart_nsga.sh || (echo "❌ ERRO: prestart_nsga.sh não encontrado!" && exit 1) && \
+    echo "✅ prestart_nsga.sh encontrado com sucesso!" && \
+    sed -i 's/\r$//' /app/prestart_nsga.sh && \
+    chmod +x /app/prestart_nsga.sh && \
+    head -n 5 /app/prestart_nsga.sh || echo "⚠️ Não foi possível exibir preview"
+
+# Define o entrypoint para executar o prestart
+ENTRYPOINT ["/app/prestart_nsga.sh"]
+CMD ["python", "-m", "app.nsga_weights_updater"]
