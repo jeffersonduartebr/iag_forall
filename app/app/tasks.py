@@ -7,6 +7,7 @@ Optimized to reuse event loop instead of creating new one per task.
 import asyncio
 import logging
 import threading
+import time
 from typing import Optional, Any
 
 from celery.signals import worker_process_init, worker_process_shutdown
@@ -16,6 +17,12 @@ from .celery_app import celery_app
 # Importamos a lógica do core aqui dentro para evitar ciclos de importação no topo
 # se o router_core importar tasks.py
 from .router_core import process_background_feedback
+from .roadmap_features import (
+    get_eval_run,
+    update_eval_run_status,
+    add_eval_result,
+)
+from .router_core import route_and_answer
 
 logger = logging.getLogger("celery_tasks")
 
@@ -127,4 +134,83 @@ def task_process_feedback(
     except Exception as e:
         logger.error(f"[Celery] Falha ao processar feedback: {e}")
         # Re-lança para o Celery tentar novamente (retry) com backoff exponencial
+        raise self.retry(exc=e)
+
+
+@celery_app.task(bind=True, queue="feedback_queue", max_retries=1, retry_backoff=True)
+def task_execute_eval_run(
+    self,
+    run_id: str,
+    modality: str = "text",
+    use_cache: bool = False,
+    max_tokens: int = 512,
+    temperature: float = 0.5,
+):
+    """
+    Execute an eval run asynchronously and persist per-prompt metrics.
+    """
+    logger.info("[Celery] Running eval run_id=%s", run_id)
+    run = get_eval_run(run_id)
+    if not run:
+        logger.error("[Celery] Eval run not found: %s", run_id)
+        return {"status": "not_found", "run_id": run_id}
+
+    prompts = run.get("prompts") or []
+    update_eval_run_status(run_id, "running", {"started_at": time.time(), "n_prompts": len(prompts)})
+
+    quality_scores = []
+    latency_scores = []
+    cost_scores = []
+
+    async def _execute():
+        for prompt in prompts:
+            try:
+                resp = await route_and_answer(
+                    query=str(prompt),
+                    modality=modality,
+                    use_cache=use_cache,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                meta = resp.get("metadata", {})
+                q = float(meta.get("quality", 0.0) or 0.0)
+                l = float(resp.get("latency_s", 0.0) or 0.0)
+                c = float(resp.get("cost_per_1k", 0.0) or 0.0)
+                add_eval_result(
+                    run_id=run_id,
+                    prompt_text=str(prompt),
+                    model=str(resp.get("model") or "unknown"),
+                    quality=q,
+                    latency_s=l,
+                    cost_usd=c,
+                    metadata={"policy_version": run.get("policy_version")},
+                )
+                quality_scores.append(q)
+                latency_scores.append(l)
+                cost_scores.append(c)
+            except Exception as e:
+                add_eval_result(
+                    run_id=run_id,
+                    prompt_text=str(prompt),
+                    model="error",
+                    quality=0.0,
+                    latency_s=0.0,
+                    cost_usd=0.0,
+                    metadata={"error": str(e)},
+                )
+
+    try:
+        run_async(_execute())
+        summary = {
+            "finished_at": time.time(),
+            "n": len(prompts),
+            "quality_mean": (sum(quality_scores) / len(quality_scores)) if quality_scores else 0.0,
+            "latency_mean": (sum(latency_scores) / len(latency_scores)) if latency_scores else 0.0,
+            "cost_mean": (sum(cost_scores) / len(cost_scores)) if cost_scores else 0.0,
+        }
+        update_eval_run_status(run_id, "completed", summary)
+        return {"status": "completed", "run_id": run_id, "summary": summary}
+    except Exception as e:
+        update_eval_run_status(run_id, "failed", {"error": str(e), "failed_at": time.time()})
+        logger.error("[Celery] Eval run failed %s: %s", run_id, e)
         raise self.retry(exc=e)

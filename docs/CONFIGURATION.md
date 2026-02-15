@@ -11,6 +11,12 @@
 - `MYSQL_ROOT_PASSWORD`
 - `REDIS_PASSWORD`
 
+## Variáveis recomendadas para governança (novas)
+- `AB_TESTING_ENABLED`
+- `REQUEST_TIMEOUT_SECONDS`
+- `MAX_CONCURRENT_REQUESTS`
+- `BACKPRESSURE_ENABLED`
+
 ## Banco e cache
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD`
@@ -52,6 +58,18 @@ curl -X PUT http://localhost:8000/admin/settings \
   -H "Content-Type: application/json" \
   -d '{"BANDIT_EPSILON":"0.10"}'
 ```
+
+## Governança e cota por tenant (MVP)
+Além de settings dinâmicos globais, o sistema agora suporta:
+1. Limite diário e mensal por `tenant_id`.
+2. Acúmulo de uso mensal (`requests`, `tokens`, `cost_usd`).
+3. Bloqueio de requisição quando limite é excedido.
+4. RBAC simples por usuário (`rbac_user_roles`) para governança, política e eval.
+5. Execução assíncrona de eval via Celery (`task_execute_eval_run`).
+6. Relatório de significância estatística por run de avaliação.
+
+Observação:
+- A governança por tenant é aplicada quando `tenant_id` é enviado no `POST /query`.
 
 ## Perfis sugeridos
 ### Perfil mais barato

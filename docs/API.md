@@ -11,6 +11,12 @@ Endpoints administrativos exigem header:
 X-Admin-Token: <token>
 ```
 
+Para endpoints de governança/política/eval, também é possível autorizar por RBAC:
+```text
+X-User-Id: <id-do-usuario>
+X-User-Roles: role_a,role_b
+```
+
 ## Endpoints principais
 
 ## `POST /query`
@@ -37,6 +43,11 @@ Roteia uma consulta para o melhor modelo disponível.
 - `rag_modality` (`text|vision|multimodal`)
 - `use_cache` (bool)
 - `timeout_seconds` (int)
+- `tenant_id` (string): escopo de governança e cotas.
+- `policy_version` (string): versão de política solicitada.
+- `experiment_id` (string): experimento A/B para assignment de variante.
+- `user_key` (string): chave estável para assignment consistente.
+- `stream` (bool): usado com endpoint de streaming.
 
 ### Resposta (estrutura)
 - `answer`: texto final
@@ -66,6 +77,21 @@ Readiness check (dependências críticas).
 ## `GET /metrics`
 Métricas Prometheus.
 
+## Streaming
+
+## `POST /query/stream`
+Retorna eventos SSE (`text/event-stream`) com:
+- `event: meta`
+- `event: token`
+- `event: done`
+
+Uso:
+```bash
+curl -N -X POST http://localhost:8000/query/stream \
+  -H "Content-Type: application/json" \
+  -d '{"query":"Explique NSGA-II em tópicos.","modality":"text","stream":true}'
+```
+
 ## Endpoints administrativos
 - `GET /admin/settings`
 - `PUT /admin/settings`
@@ -73,6 +99,24 @@ Métricas Prometheus.
 - `POST /admin/circuit-breakers/{model_name}/reset`
 - `GET /admin/cascade-status`
 - `POST /admin/runtime/reset`
+
+## Governança, política e avaliação
+- `PUT /admin/budgets/{tenant_id}`
+- `GET /admin/budgets/{tenant_id}`
+- `GET /admin/quotas/usage`
+- `GET /admin/audit/events`
+- `POST /admin/policies`
+- `POST /admin/policies/{version}/activate`
+- `GET /admin/policies`
+- `POST /admin/evals/runs`
+- `POST /admin/evals/runs/{run_id}/execute` (assíncrono, retorna `task_id`)
+- `GET /admin/evals/runs/{run_id}`
+- `GET /admin/evals/runs`
+- `GET /admin/evals/runs/{run_id}/results`
+- `GET /admin/evals/runs/{run_id}/significance`
+- `POST /admin/rbac/grants`
+- `POST /admin/rbac/revokes`
+- `GET /admin/rbac/roles`
 
 ## Feedback e A/B
 - `POST /feedback`

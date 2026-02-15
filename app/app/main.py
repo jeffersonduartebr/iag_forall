@@ -26,13 +26,14 @@ import logging
 import gzip
 import concurrent.futures
 import secrets
+import uuid
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 from io import BytesIO
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Body, Response, Request, APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -76,7 +77,7 @@ from .utils.redis_client import get_redis, close_redis
 from .db import close_engine
 from .routers import rag_router
 from .vectorstore import init_vectorstore, add_document as vs_add_document
-from .tasks import task_process_feedback
+from .tasks import task_execute_eval_run, task_process_feedback
 from .health import (
     get_full_health_check,
     get_liveness_check,
@@ -91,6 +92,30 @@ from .ab_testing import (
     get_ab_test_manager,
     ExperimentCreateRequest,
     ExperimentStatus,
+)
+from .guardrails import check_input_guardrails, sanitize_output_guardrails
+from .roadmap_features import (
+    ensure_roadmap_tables,
+    check_tenant_budget,
+    record_tenant_usage,
+    set_tenant_budget,
+    get_tenant_budget,
+    get_usage_summary,
+    log_audit_event,
+    list_audit_events,
+    create_policy_version,
+    activate_policy_version,
+    get_active_policy,
+    list_policy_versions,
+    create_eval_run,
+    get_eval_run,
+    list_eval_run_results,
+    list_eval_runs,
+    eval_significance_report,
+    grant_role,
+    revoke_role,
+    list_roles,
+    check_access,
 )
 
 # Configuração de Logging
@@ -311,6 +336,11 @@ async def startup_event():
     if config_errors:
         raise RuntimeError("Invalid critical settings: " + "; ".join(config_errors))
 
+    try:
+        ensure_roadmap_tables()
+    except Exception as e:
+        logger.warning(f"[startup] Failed to ensure roadmap tables: {e}")
+
     # Configure ThreadPoolExecutor for better CPU-bound task handling
     # Optimized for high-capacity environment (8+ CPU cores, 64GB RAM)
     cpu_count = os.cpu_count() or 4
@@ -419,31 +449,74 @@ async def shutdown_event():
     logger.info("[shutdown] Shutdown completo.")
 
 
-@app.post("/query", response_model=QueryResponse)
-async def route_query(req: QueryRequest):
-    """Resumo do comportamento desta função.
-
-    Args:
-        req: Parâmetro de entrada.
-
-    Returns:
-        Valor retornado pela função.
-    """
-    start = time.time()
-    API_REQUESTS.inc()
-
+async def _process_query_request(req: QueryRequest) -> Dict[str, Any]:
+    """Process one query request with governance, guardrails and experimentation hooks."""
     if not req or not req.query.strip():
         raise HTTPException(status_code=400, detail="Query obrigatória.")
 
-    logger.info(f"[query] '{req.query[:60]}...' (mod={req.modality})")
+    input_decision = check_input_guardrails(req.query)
+    if not input_decision.allowed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": True,
+                "category": "guardrail_block",
+                "message": "Conteúdo bloqueado por política de segurança.",
+                "reasons": input_decision.reasons,
+            },
+        )
+
+    pre_budget = check_tenant_budget(req.tenant_id)
+    if not pre_budget.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": True,
+                "category": "tenant_budget_exceeded",
+                "reason": pre_budget.reason,
+                "daily_spent": pre_budget.daily_spent,
+                "monthly_spent": pre_budget.monthly_spent,
+                "daily_limit": pre_budget.daily_limit,
+                "monthly_limit": pre_budget.monthly_limit,
+            },
+        )
 
     modality = (req.modality or "text").lower()
     image_input = req.image_b64
     if not image_input and req.images and len(req.images) > 0:
         image_input = req.images[0]
-    
     if image_input and modality == "text":
         modality = "vision"
+
+    selected_policy = req.policy_version
+    active_policy = get_active_policy()
+    if not selected_policy and active_policy:
+        selected_policy = active_policy.get("version")
+
+    assigned_variant = None
+    if req.experiment_id and settings.AB_TESTING_ENABLED:
+        try:
+            manager = get_ab_test_manager()
+            assignment = manager.get_assignment(
+                req.experiment_id,
+                req.user_key or req.tenant_id or f"anon:{hash(req.query)}",
+            )
+            if assignment:
+                variant_name, variant_cfg = assignment
+                assigned_variant = {"name": variant_name, "config": variant_cfg}
+                # Variant may override policy version.
+                selected_policy = variant_cfg.get("policy_version", selected_policy)
+        except Exception as e:
+            logger.warning(f"[query] Failed experiment assignment: {e}")
+
+    logger.info(
+        "[query] '%s...' (mod=%s, tenant=%s, policy=%s, exp=%s)",
+        req.query[:60],
+        modality,
+        req.tenant_id or "-",
+        selected_policy or "-",
+        req.experiment_id or "-",
+    )
 
     try:
         result = await route_and_answer(
@@ -463,16 +536,10 @@ async def route_query(req: QueryRequest):
             asyncio.TimeoutError("Request timed out"),
             category=ErrorCategory.PROVIDER_TIMEOUT,
         )
-        raise HTTPException(
-            status_code=504,
-            detail=create_error_response(error_info),
-        )
+        raise HTTPException(status_code=504, detail=create_error_response(error_info))
     except ProviderCircuitOpenError as e:
         error_info = log_error(e, category=ErrorCategory.CIRCUIT_OPEN, model=e.model)
-        raise HTTPException(
-            status_code=503,
-            detail=create_error_response(error_info),
-        )
+        raise HTTPException(status_code=503, detail=create_error_response(error_info))
     except ProviderCallError as e:
         category_map = {
             "provider_timeout": ErrorCategory.PROVIDER_TIMEOUT,
@@ -480,24 +547,48 @@ async def route_query(req: QueryRequest):
             "provider_unavailable": ErrorCategory.PROVIDER_UNAVAILABLE,
         }
         category = category_map.get(e.category, ErrorCategory.PROVIDER_UNAVAILABLE)
-        if category == ErrorCategory.PROVIDER_TIMEOUT:
-            status_code = 504
-        elif category == ErrorCategory.PROVIDER_RATE_LIMIT:
-            status_code = 429
-        else:
-            status_code = 502
+        status_code = 504 if category == ErrorCategory.PROVIDER_TIMEOUT else (429 if category == ErrorCategory.PROVIDER_RATE_LIMIT else 502)
         error_info = log_error(e, category=category, model=e.model)
-        raise HTTPException(
-            status_code=status_code,
-            detail=create_error_response(error_info),
-        )
+        raise HTTPException(status_code=status_code, detail=create_error_response(error_info))
     except Exception as e:
         error_info = log_error(e)
         logger.exception(f"[router] Erro: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=create_error_response(error_info),
-        )
+        raise HTTPException(status_code=500, detail=create_error_response(error_info))
+
+    answer_clean, output_guardrail_tags = sanitize_output_guardrails(result.get("answer", ""))
+    result["answer"] = answer_clean
+    metadata = result.setdefault("metadata", {})
+    metadata["guardrail_output_tags"] = output_guardrail_tags
+    metadata["policy_version"] = selected_policy
+    metadata["experiment_id"] = req.experiment_id
+    metadata["experiment_variant"] = assigned_variant
+    metadata["tenant_id"] = req.tenant_id
+
+    return {
+        "result": result,
+        "image_input": image_input,
+        "selected_policy": selected_policy,
+        "assigned_variant": assigned_variant,
+        "modality": modality,
+    }
+
+
+@app.post("/query", response_model=QueryResponse)
+async def route_query(req: QueryRequest):
+    """Resumo do comportamento desta função.
+
+    Args:
+        req: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
+    start = time.time()
+    API_REQUESTS.inc()
+
+    processed = await _process_query_request(req)
+    result = processed["result"]
+    image_input = processed["image_input"]
 
     duration = time.time() - start
     API_LATENCY.observe(duration)
@@ -548,6 +639,28 @@ async def route_query(req: QueryRequest):
     except Exception as e:
         logger.error(f"[main] Falha ao despachar tarefa Celery: {e}")
 
+    try:
+        record_tenant_usage(
+            req.tenant_id,
+            cost_usd=float(cost_usd),
+            tokens_in=int(prompt_tokens or 0),
+            tokens_out=int(completion_tokens or 0),
+            requests=1,
+        )
+    except Exception as e:
+        logger.warning(f"[query] Failed to record tenant usage: {e}")
+
+    if req.experiment_id and settings.AB_TESTING_ENABLED:
+        try:
+            manager = get_ab_test_manager()
+            variant = (metadata.get("experiment_variant") or {}).get("name")
+            if variant:
+                manager.record_result(req.experiment_id, variant, "quality", float(metadata.get("quality", 0.0) or 0.0))
+                manager.record_result(req.experiment_id, variant, "latency", float(result.get("latency_s", 0.0)))
+                manager.record_result(req.experiment_id, variant, "cost", float(cost_usd))
+        except Exception as e:
+            logger.warning(f"[query] Failed to record experiment metrics: {e}")
+
     parsed_payload = safe_parse_json(raw_payload_str)
     route_raw = result.get("route", {})
     candidates_raw = result.get("candidates", [])
@@ -562,6 +675,28 @@ async def route_query(req: QueryRequest):
         candidates=[CandidateResult(**c) for c in candidates_raw],
         payload=parsed_payload
     )
+
+
+@app.post("/query/stream", tags=["Query"])
+async def route_query_stream(req: QueryRequest):
+    """SSE streaming wrapper for query processing."""
+    processed = await _process_query_request(req)
+    result = processed["result"]
+    answer = result.get("answer", "")
+    payload = {
+        "model": result.get("model"),
+        "modality": result.get("modality"),
+        "metadata": result.get("metadata", {}),
+    }
+
+    async def _event_gen():
+        yield "event: meta\\ndata: " + json.dumps(payload, ensure_ascii=False) + "\\n\\n"
+        for token in answer.split():
+            yield "event: token\\ndata: " + json.dumps({"text": token + " "}, ensure_ascii=False) + "\\n\\n"
+            await asyncio.sleep(0)
+        yield "event: done\\ndata: " + json.dumps({"status": "completed"}, ensure_ascii=False) + "\\n\\n"
+
+    return StreamingResponse(_event_gen(), media_type="text/event-stream")
 
 
 def _require_admin(token: Optional[str]):
@@ -584,6 +719,37 @@ def _require_admin(token: Optional[str]):
 
     if not ok:
         raise HTTPException(status_code=401, detail="Token inválido.")
+
+
+def _parse_header_roles(x_user_roles: Optional[str]) -> List[str]:
+    """Parse comma-separated roles from header."""
+    if not x_user_roles:
+        return []
+    return [r.strip() for r in str(x_user_roles).split(",") if r.strip()]
+
+
+def _require_admin_or_role(
+    *,
+    admin_token: Optional[str],
+    user_id: Optional[str],
+    user_roles_header: Optional[str],
+    required_roles: List[str],
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Authorize request by admin token or RBAC role."""
+    try:
+        _require_admin(admin_token)
+        return {"authorized_by": "admin_token", "roles": ["admin"]}
+    except HTTPException:
+        decision = check_access(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            required_roles=required_roles,
+            header_roles=_parse_header_roles(user_roles_header),
+        )
+        if decision.allowed:
+            return {"authorized_by": "rbac", "roles": decision.roles}
+    raise HTTPException(status_code=403, detail={"error": True, "message": "Acesso negado.", "required_roles": required_roles})
 
 
 # ==============================================================================
@@ -835,6 +1001,365 @@ def delete_experiment(
         raise HTTPException(status_code=404, detail=f"Experiment not found: {experiment_id}")
 
     return {"status": "deleted", "experiment_id": experiment_id}
+
+
+# ==============================================================================
+# Governance / Policy / Eval Endpoints (Roadmap MVP)
+# ==============================================================================
+
+@app.put("/admin/budgets/{tenant_id}", tags=["Governance"])
+def upsert_tenant_budget(
+    tenant_id: str,
+    payload: Dict[str, Any],
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Create or update tenant budget limits."""
+    auth = _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["governance_admin", "platform_admin"],
+        tenant_id=tenant_id,
+    )
+    daily = float(payload.get("daily_usd_limit", 0.0) or 0.0)
+    monthly = float(payload.get("monthly_usd_limit", 0.0) or 0.0)
+    enabled = bool(payload.get("enabled", True))
+    set_tenant_budget(tenant_id=tenant_id, daily_usd_limit=daily, monthly_usd_limit=monthly, enabled=enabled)
+    log_audit_event(
+        actor=x_user_id or auth["authorized_by"],
+        action="budget_upsert",
+        resource="tenant_budgets",
+        tenant_id=tenant_id,
+        metadata={"daily_usd_limit": daily, "monthly_usd_limit": monthly, "enabled": enabled, "roles": auth["roles"]},
+    )
+    return {"status": "updated", "budget": get_tenant_budget(tenant_id)}
+
+
+@app.get("/admin/budgets/{tenant_id}", tags=["Governance"])
+def get_budget(
+    tenant_id: str,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Get tenant budget configuration."""
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["governance_viewer", "governance_admin", "platform_admin"],
+        tenant_id=tenant_id,
+    )
+    return get_tenant_budget(tenant_id)
+
+
+@app.get("/admin/quotas/usage", tags=["Governance"])
+def get_quota_usage(
+    tenant_id: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Get usage summary for one or all tenants."""
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["governance_viewer", "governance_admin", "platform_admin"],
+        tenant_id=tenant_id,
+    )
+    return get_usage_summary(tenant_id)
+
+
+@app.get("/admin/audit/events", tags=["Governance"])
+def get_audit_events(
+    limit: int = 100,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Get latest audit events."""
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["audit_viewer", "platform_admin"],
+    )
+    return {"items": list_audit_events(limit=limit)}
+
+
+@app.post("/admin/policies", tags=["Policy"])
+def create_policy(
+    payload: Dict[str, Any],
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Create or update a policy version."""
+    auth = _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["policy_admin", "platform_admin"],
+    )
+    version = str(payload.get("version") or "").strip()
+    if not version:
+        raise HTTPException(status_code=400, detail="version is required")
+    description = str(payload.get("description") or "")
+    config = payload.get("config") or {}
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="config must be an object")
+    create_policy_version(version=version, config=config, description=description)
+    log_audit_event(
+        actor=x_user_id or auth["authorized_by"],
+        action="policy_upsert",
+        resource="policy_versions",
+        metadata={"version": version, "roles": auth["roles"]},
+    )
+    return {"status": "created_or_updated", "version": version}
+
+
+@app.post("/admin/policies/{version}/activate", tags=["Policy"])
+def activate_policy(
+    version: str,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Activate one policy version."""
+    auth = _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["policy_admin", "platform_admin"],
+    )
+    if not activate_policy_version(version):
+        raise HTTPException(status_code=404, detail=f"Policy not found: {version}")
+    log_audit_event(
+        actor=x_user_id or auth["authorized_by"],
+        action="policy_activate",
+        resource="policy_versions",
+        metadata={"version": version, "roles": auth["roles"]},
+    )
+    return {"status": "activated", "version": version}
+
+
+@app.get("/admin/policies", tags=["Policy"])
+def list_policies(
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """List policy versions."""
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["policy_viewer", "policy_admin", "platform_admin"],
+    )
+    return {"active": get_active_policy(), "items": list_policy_versions()}
+
+
+@app.post("/admin/evals/runs", tags=["Eval"])
+def create_eval(
+    payload: Dict[str, Any],
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Create an eval run (MVP academic harness)."""
+    auth = _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_admin", "researcher", "platform_admin"],
+        tenant_id=str(payload.get("tenant_id")) if payload.get("tenant_id") else None,
+    )
+    prompts = payload.get("prompts") or []
+    if not isinstance(prompts, list) or not prompts:
+        raise HTTPException(status_code=400, detail="prompts must be a non-empty list")
+    prompts = [str(p) for p in prompts if str(p).strip()]
+    run_id = payload.get("run_id") or f"eval_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    policy_version = payload.get("policy_version")
+    tenant_id = payload.get("tenant_id")
+    notes = str(payload.get("notes") or "")
+    create_eval_run(
+        run_id=run_id,
+        prompts=prompts,
+        policy_version=str(policy_version) if policy_version else None,
+        tenant_id=str(tenant_id) if tenant_id else None,
+        notes=notes,
+    )
+    log_audit_event(
+        actor=x_user_id or auth["authorized_by"],
+        action="eval_create",
+        resource="eval_runs",
+        tenant_id=tenant_id,
+        metadata={"run_id": run_id, "prompt_count": len(prompts), "roles": auth["roles"]},
+    )
+    return {"status": "queued", "run_id": run_id, "prompt_count": len(prompts)}
+
+
+@app.post("/admin/evals/runs/{run_id}/execute", tags=["Eval"])
+def execute_eval(
+    run_id: str,
+    payload: Dict[str, Any] = Body(default={}),
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Enqueue asynchronous eval execution in Celery."""
+    run = get_eval_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    auth = _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_admin", "researcher", "platform_admin"],
+        tenant_id=run.get("tenant_id"),
+    )
+    task = task_execute_eval_run.delay(
+        run_id=run_id,
+        modality=str(payload.get("modality") or "text"),
+        use_cache=bool(payload.get("use_cache", False)),
+        max_tokens=int(payload.get("max_tokens", settings.MAX_TOKENS_DEFAULT)),
+        temperature=float(payload.get("temperature", settings.TEMPERATURE_DEFAULT)),
+    )
+    log_audit_event(
+        actor=x_user_id or auth["authorized_by"],
+        action="eval_execute_queued",
+        resource="eval_runs",
+        tenant_id=run.get("tenant_id"),
+        metadata={"run_id": run_id, "task_id": task.id, "roles": auth["roles"]},
+    )
+    return {"status": "queued", "run_id": run_id, "task_id": task.id}
+
+
+@app.get("/admin/evals/runs/{run_id}", tags=["Eval"])
+def get_eval(
+    run_id: str,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Get eval run details."""
+    run = get_eval_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+        tenant_id=run.get("tenant_id"),
+    )
+    return run
+
+
+@app.get("/admin/evals/runs", tags=["Eval"])
+def list_evals(
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """List eval runs."""
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+    )
+    return {"items": list_eval_runs()}
+
+
+@app.get("/admin/evals/runs/{run_id}/results", tags=["Eval"])
+def get_eval_results(
+    run_id: str,
+    limit: int = 2000,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Get individual result rows for one eval run."""
+    run = get_eval_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+        tenant_id=run.get("tenant_id"),
+    )
+    return {"run_id": run_id, "items": list_eval_run_results(run_id, limit=limit)}
+
+
+@app.get("/admin/evals/runs/{run_id}/significance", tags=["Eval"])
+def get_eval_significance(
+    run_id: str,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Get significance report for model comparisons in one eval run."""
+    run = get_eval_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+        tenant_id=run.get("tenant_id"),
+    )
+    return eval_significance_report(run_id)
+
+
+@app.post("/admin/rbac/grants", tags=["Governance"])
+def create_role_grant(
+    payload: Dict[str, Any],
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Grant a role to a user. Bootstrap is admin-token only."""
+    _require_admin(x_admin_token)
+    user_id = str(payload.get("user_id") or "").strip()
+    role_name = str(payload.get("role_name") or "").strip()
+    tenant_id = payload.get("tenant_id")
+    if not user_id or not role_name:
+        raise HTTPException(status_code=400, detail="user_id and role_name are required")
+    grant_role(user_id=user_id, role_name=role_name, tenant_id=str(tenant_id) if tenant_id else None)
+    log_audit_event(actor="admin", action="rbac_grant", resource="rbac_user_roles", tenant_id=str(tenant_id) if tenant_id else None, metadata={"user_id": user_id, "role_name": role_name})
+    return {"status": "granted", "user_id": user_id, "role_name": role_name, "tenant_id": tenant_id}
+
+
+@app.post("/admin/rbac/revokes", tags=["Governance"])
+def delete_role_grant(
+    payload: Dict[str, Any],
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Revoke a role from a user. Bootstrap is admin-token only."""
+    _require_admin(x_admin_token)
+    user_id = str(payload.get("user_id") or "").strip()
+    role_name = str(payload.get("role_name") or "").strip()
+    tenant_id = payload.get("tenant_id")
+    if not user_id or not role_name:
+        raise HTTPException(status_code=400, detail="user_id and role_name are required")
+    removed = revoke_role(user_id=user_id, role_name=role_name, tenant_id=str(tenant_id) if tenant_id else None)
+    log_audit_event(actor="admin", action="rbac_revoke", resource="rbac_user_roles", tenant_id=str(tenant_id) if tenant_id else None, metadata={"user_id": user_id, "role_name": role_name, "removed": removed})
+    return {"status": "revoked", "removed": removed}
+
+
+@app.get("/admin/rbac/roles", tags=["Governance"])
+def get_rbac_roles(
+    user_id: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(None),
+):
+    """List RBAC role bindings."""
+    _require_admin(x_admin_token)
+    return {"items": list_roles(user_id=user_id)}
 
 
 # ==============================================================================

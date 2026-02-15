@@ -21,7 +21,7 @@ else:
 # 🚨 CORREÇÃO AQUI: Adicionado include=['app.tasks']
 # Isso força o worker a importar o módulo tasks.py ao iniciar.
 # ==============================================================================
-celery_app = Celery("llm_router", include=['app.tasks'])
+celery_app = Celery("llm_router", include=["app.tasks"])
 
 celery_app.conf.update(
     broker_url=BROKER_URL,
@@ -35,6 +35,7 @@ celery_app.conf.update(
     enable_utc=True,
     # Opcional: Define rotas padrão se necessário, mas o queue no decorator já resolve
     task_routes={
-        'app.tasks.task_process_feedback': {'queue': 'feedback_queue'},
+        "app.tasks.task_process_feedback": {"queue": "feedback_queue"},
+        "app.tasks.task_execute_eval_run": {"queue": "feedback_queue"},
     }
 )

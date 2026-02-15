@@ -110,6 +110,32 @@ class QueryRequest(BaseModel):
         description="Timeout da requisição em segundos (5-600)."
     )
 
+    # Roadmap MVP: governança e experimentação
+    tenant_id: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="Identificador do tenant para quota, auditoria e segmentação.",
+    )
+    stream: bool = Field(
+        False,
+        description="Quando true, permite uso de endpoint de streaming SSE.",
+    )
+    policy_version: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="Versão de política de roteamento solicitada.",
+    )
+    experiment_id: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="ID de experimento A/B para atribuição de variante.",
+    )
+    user_key: Optional[str] = Field(
+        None,
+        max_length=256,
+        description="Chave estável de usuário para assignment consistente em experimento.",
+    )
+
     @field_validator("query")
     @classmethod
     def query_not_empty(cls, v: str) -> str:
