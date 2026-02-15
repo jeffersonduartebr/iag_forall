@@ -114,6 +114,8 @@ curl -N -X POST http://localhost:8000/query/stream \
 - `GET /admin/evals/runs`
 - `GET /admin/evals/runs/{run_id}/results`
 - `GET /admin/evals/runs/{run_id}/significance`
+- `GET /admin/evals/tasks/{task_id}`
+- `POST /admin/evals/tasks/{task_id}/cancel`
 - `POST /admin/rbac/grants`
 - `POST /admin/rbac/revokes`
 - `GET /admin/rbac/roles`

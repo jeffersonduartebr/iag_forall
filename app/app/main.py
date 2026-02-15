@@ -36,6 +36,7 @@ from fastapi import FastAPI, HTTPException, Header, Body, Response, Request, API
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+from celery.result import AsyncResult
 
 from .prometheus_setup import setup_prometheus
 from .correlation import (
@@ -78,6 +79,7 @@ from .db import close_engine
 from .routers import rag_router
 from .vectorstore import init_vectorstore, add_document as vs_add_document
 from .tasks import task_execute_eval_run, task_process_feedback
+from .celery_app import celery_app
 from .health import (
     get_full_health_check,
     get_liveness_check,
@@ -108,6 +110,7 @@ from .roadmap_features import (
     get_active_policy,
     list_policy_versions,
     create_eval_run,
+    update_eval_run_status,
     get_eval_run,
     list_eval_run_results,
     list_eval_runs,
@@ -1228,6 +1231,18 @@ def execute_eval(
         max_tokens=int(payload.get("max_tokens", settings.MAX_TOKENS_DEFAULT)),
         temperature=float(payload.get("temperature", settings.TEMPERATURE_DEFAULT)),
     )
+    update_eval_run_status(
+        run_id,
+        "queued",
+        {
+            "queued_at": time.time(),
+            "task_id": task.id,
+            "modality": str(payload.get("modality") or "text"),
+            "use_cache": bool(payload.get("use_cache", False)),
+            "max_tokens": int(payload.get("max_tokens", settings.MAX_TOKENS_DEFAULT)),
+            "temperature": float(payload.get("temperature", settings.TEMPERATURE_DEFAULT)),
+        },
+    )
     log_audit_event(
         actor=x_user_id or auth["authorized_by"],
         action="eval_execute_queued",
@@ -1316,6 +1331,60 @@ def get_eval_significance(
         tenant_id=run.get("tenant_id"),
     )
     return eval_significance_report(run_id)
+
+
+@app.get("/admin/evals/tasks/{task_id}", tags=["Eval"])
+def get_eval_task_status(
+    task_id: str,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Get Celery task status/result for eval execution."""
+    _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+    )
+    task = AsyncResult(task_id, app=celery_app)
+    out: Dict[str, Any] = {
+        "task_id": task_id,
+        "state": task.state,
+        "ready": bool(task.ready()),
+        "successful": bool(task.successful()) if task.ready() else False,
+    }
+    if task.ready():
+        try:
+            out["result"] = task.result
+        except Exception as e:
+            out["result_error"] = str(e)
+    return out
+
+
+@app.post("/admin/evals/tasks/{task_id}/cancel", tags=["Eval"])
+def cancel_eval_task(
+    task_id: str,
+    terminate: bool = False,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Cancel/revoke a queued eval Celery task."""
+    auth = _require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["eval_admin", "platform_admin"],
+    )
+    celery_app.control.revoke(task_id, terminate=terminate)
+    log_audit_event(
+        actor=x_user_id or auth["authorized_by"],
+        action="eval_task_cancel",
+        resource="celery_task",
+        metadata={"task_id": task_id, "terminate": terminate, "roles": auth["roles"]},
+    )
+    return {"status": "revoked", "task_id": task_id, "terminate": terminate}
 
 
 @app.post("/admin/rbac/grants", tags=["Governance"])

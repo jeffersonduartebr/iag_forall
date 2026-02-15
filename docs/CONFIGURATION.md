@@ -67,6 +67,7 @@ Além de settings dinâmicos globais, o sistema agora suporta:
 4. RBAC simples por usuário (`rbac_user_roles`) para governança, política e eval.
 5. Execução assíncrona de eval via Celery (`task_execute_eval_run`).
 6. Relatório de significância estatística por run de avaliação.
+7. Consulta de status e cancelamento de tasks de eval via endpoints administrativos.
 
 Observação:
 - A governança por tenant é aplicada quando `tenant_id` é enviado no `POST /query`.
