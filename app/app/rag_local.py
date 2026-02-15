@@ -68,6 +68,15 @@ def _hash_image(image_b64: str) -> str:
 # ================================================================
 
 def _auto_modality(requested: Optional[str], image_b64: Optional[str]) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        requested: Parâmetro de entrada.
+        image_b64: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     req = (requested or "text").lower().strip()
 
     if image_b64 and req == "multimodal":
@@ -228,6 +237,17 @@ async def build_augmented_prompt(
     image_b64: Optional[str] = None,
     k: int = 3,
 ) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        query: Parâmetro de entrada.
+        modality: Parâmetro de entrada.
+        image_b64: Parâmetro de entrada.
+        k: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     query = (query or "").strip()
     if not query and not image_b64:
         return ""
@@ -321,6 +341,18 @@ async def add_document_local(
     modality: str = "text",
     image_b64: Optional[str] = None,
 ) -> bool:
+    """Resumo do comportamento desta função.
+
+    Args:
+        doc_id: Parâmetro de entrada.
+        text: Parâmetro de entrada.
+        metadata: Parâmetro de entrada.
+        modality: Parâmetro de entrada.
+        image_b64: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         await add_document(
             modality=modality,
@@ -340,6 +372,11 @@ async def add_document_local(
 # ================================================================
 
 async def health() -> Dict[str, Any]:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         chroma_ok = await health_async()
     except Exception:

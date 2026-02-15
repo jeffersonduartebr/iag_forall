@@ -1,3 +1,5 @@
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 # app/rag.py
 import logging
 from .settings import settings

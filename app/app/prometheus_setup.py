@@ -1,3 +1,5 @@
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 # prometheus_setup.py
 # ----------------------------------------------------------
 # Inicialização segura do Prometheus em modo multiprocess.

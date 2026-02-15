@@ -82,6 +82,11 @@ class ModelConfig:
     requires_alternating_roles: bool = False
 
     def __post_init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if not self.display_name:
             self.display_name = self.name
 
@@ -92,14 +97,29 @@ class ModelConfig:
 
     @property
     def supports_vision(self) -> bool:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return Capability.VISION in self.capabilities
 
     @property
     def supports_streaming(self) -> bool:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return Capability.STREAMING in self.capabilities
 
     @property
     def supports_reasoning(self) -> bool:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return Capability.REASONING in self.capabilities
 
     def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
@@ -134,6 +154,11 @@ class ModelRegistry:
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 

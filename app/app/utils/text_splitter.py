@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 import re
 import numpy as np
 import logging
@@ -11,9 +13,26 @@ logger = logging.getLogger(__name__)
 
 def split_into_sentences(text: str) -> List[str]:
     # Regex robusto para separar sentenças (preserva pontuação)
+    """Resumo do comportamento desta função.
+
+    Args:
+        text: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return re.split(r'(?<=[.?!])\s+', text)
 
 def _cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
+    """Resumo do comportamento desta função.
+
+    Args:
+        v1: Parâmetro de entrada.
+        v2: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     norm1 = np.linalg.norm(v1)
     norm2 = np.linalg.norm(v2)
     if norm1 == 0 or norm2 == 0: return 0.0

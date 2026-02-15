@@ -126,10 +126,26 @@ def _ensure_list_of_floats(vec):
 
 
 def _safe_metadata(meta):
+    """Resumo do comportamento desta função.
+
+    Args:
+        meta: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return meta if isinstance(meta, dict) else {"source": "router"}
 
 
 def _normalize_modality(modality: Optional[str]) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        modality: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if not modality:
         return "text"
     m = modality.lower().strip()
@@ -213,6 +229,18 @@ def _insert_embedding_sync(
     embedding: List[float],
     metadata: Optional[Dict[str, Any]],
 ):
+    """Resumo do comportamento desta função.
+
+    Args:
+        collection_name: Parâmetro de entrada.
+        doc_id: Parâmetro de entrada.
+        text: Parâmetro de entrada.
+        embedding: Parâmetro de entrada.
+        metadata: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         col = get_chroma_client().get_or_create_collection(
             name=collection_name,
@@ -293,6 +321,16 @@ async def add_document(
 # Consulta (Com Auto-Healing)
 # ============================================================
 def _query_embedding_sync(collection_name: str, embedding, n_results: int):
+    """Resumo do comportamento desta função.
+
+    Args:
+        collection_name: Parâmetro de entrada.
+        embedding: Parâmetro de entrada.
+        n_results: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         col = get_chroma_client().get_or_create_collection(name=collection_name)
         return col.query(
@@ -346,6 +384,11 @@ async def reset_collections():
 
 
 async def health_async() -> bool:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         await asyncio.to_thread(get_chroma_client().heartbeat)
         return True

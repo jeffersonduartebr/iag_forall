@@ -66,6 +66,11 @@ class Experiment:
     target_samples: int = 1000
 
     def to_dict(self) -> Dict[str, Any]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return {
             "id": self.id,
             "name": self.name,
@@ -80,6 +85,14 @@ class Experiment:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Experiment":
+        """Resumo do comportamento desta função.
+
+        Args:
+            data: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         variants = [
             Variant(name=v["name"], weight=v["weight"], config=v.get("config", {}))
             for v in data.get("variants", [])
@@ -116,6 +129,11 @@ class ABTestManager:
     _lock = threading.Lock()
 
     def __new__(cls) -> "ABTestManager":
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -124,6 +142,11 @@ class ABTestManager:
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 
@@ -132,6 +155,11 @@ class ABTestManager:
         self._initialized = True
 
     def _get_redis(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return get_redis()
 
     def _load_experiments(self) -> None:

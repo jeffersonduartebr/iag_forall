@@ -1,3 +1,5 @@
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 # app/utils/redis_client.py
 # ------------------------------------------------------------
 # Cliente Redis SÍNCRONO, seguro e com cache interno opcional.

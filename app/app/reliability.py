@@ -60,6 +60,11 @@ class ModelCircuitBreakerManager:
     _lock = threading.Lock()
 
     def __new__(cls) -> "ModelCircuitBreakerManager":
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -68,6 +73,11 @@ class ModelCircuitBreakerManager:
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 
@@ -179,6 +189,11 @@ class RequestDeduplicator:
     _lock = threading.Lock()
 
     def __new__(cls) -> "RequestDeduplicator":
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -187,6 +202,11 @@ class RequestDeduplicator:
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 
@@ -485,6 +505,11 @@ class CascadeDetector:
     _lock = threading.Lock()
 
     def __new__(cls) -> "CascadeDetector":
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -493,6 +518,11 @@ class CascadeDetector:
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 

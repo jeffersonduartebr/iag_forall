@@ -66,6 +66,11 @@ class QueryDriftDetector:
     _lock = threading.Lock()
 
     def __new__(cls) -> "QueryDriftDetector":
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -74,6 +79,11 @@ class QueryDriftDetector:
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 
@@ -97,6 +107,11 @@ class QueryDriftDetector:
         self._initialized = True
 
     def _get_redis(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return get_redis()
 
     def _load_state(self) -> None:

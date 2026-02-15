@@ -61,6 +61,14 @@ RAG_TOP_K = int(settings.get("RAG_TOP_K", 3))
 # ============================================================
 
 def _unit(x: np.ndarray) -> np.ndarray:
+    """Resumo do comportamento desta função.
+
+    Args:
+        x: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     x = x.astype(np.float32).reshape(-1)
     n = float(np.linalg.norm(x))
     return x if n == 0 else (x / n)
@@ -72,6 +80,16 @@ def _embed_for_rag(
     image_b64: Optional[str] = None,
 ) -> np.ndarray:
 
+    """Resumo do comportamento desta função.
+
+    Args:
+        query: Parâmetro de entrada.
+        modality: Parâmetro de entrada.
+        image_b64: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     modality = (modality or "text").lower()
     q = (query or "").strip()
 
@@ -103,6 +121,14 @@ def _embed_for_rag(
 # ============================================================
 
 def _extract_docs_from(res: Dict[str, Any]) -> List[str]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        res: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if not res:
         return []
     docs = res.get("documents") or []
@@ -212,6 +238,11 @@ async def add_document(
 # ============================================================
 
 async def health() -> Dict[str, Any]:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         chroma_ok = await vector_health_async()
     except Exception:

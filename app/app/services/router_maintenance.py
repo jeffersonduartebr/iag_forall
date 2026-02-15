@@ -14,6 +14,18 @@ def create_background_threads(
     cleanup_ema_history_log: Callable[[], None],
     update_db_pool_metrics: Callable[[], None],
 ) -> List[threading.Thread]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        cleanup_old_query_logs: Parâmetro de entrada.
+        cleanup_ema_history: Parâmetro de entrada.
+        ema_batch_flusher: Parâmetro de entrada.
+        cleanup_ema_history_log: Parâmetro de entrada.
+        update_db_pool_metrics: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return [
         threading.Thread(target=cleanup_old_query_logs, daemon=True, name="router-cleanup-query-log"),
         threading.Thread(target=cleanup_ema_history, daemon=True, name="router-cleanup-ema-cache"),

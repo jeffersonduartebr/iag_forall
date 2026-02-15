@@ -85,6 +85,15 @@ def _get_db_engine():
     return get_engine()
 
 def _safe_setting_int(key: str, default: int) -> int:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        default: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         return int(settings.get(key, default))
     except Exception:
@@ -92,6 +101,15 @@ def _safe_setting_int(key: str, default: int) -> int:
 
 
 def _safe_setting_float(key: str, default: float) -> float:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        default: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         return float(settings.get(key, default))
     except Exception:
@@ -99,6 +117,15 @@ def _safe_setting_float(key: str, default: float) -> float:
 
 
 def _safe_setting_bool(key: str, default: bool) -> bool:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        default: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     raw_default = "1" if default else "0"
     try:
         getter = getattr(settings, "get", None)
@@ -113,6 +140,11 @@ def _safe_setting_bool(key: str, default: bool) -> bool:
 BLOCKED_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")
 LOG_RETENTION_DAYS = _safe_setting_int("QUERY_LOG_RETENTION_DAYS", 7)
 def _get_rds():
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return get_redis_async_safe() or ensure_redis_connected(max_wait_s=0.0, min_retry_interval_s=2.0)
 
 
@@ -121,6 +153,11 @@ _dep_uq_breaker = pybreaker.CircuitBreaker(fail_max=10, reset_timeout=30, name="
 
 
 def _record_dependency_breaker_metrics() -> None:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     mapping = {"closed": 0, "half-open": 1, "open": 2}
     try:
         DEPENDENCY_CIRCUIT_STATE.labels(dependency="cache").set(mapping.get(_dep_cache_breaker.current_state, 0))
@@ -130,6 +167,11 @@ def _record_dependency_breaker_metrics() -> None:
 
 
 def _error_budget_window() -> Tuple[int, float, int]:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     window_s = _safe_setting_int("ERROR_BUDGET_WINDOW_S", 300)
     threshold = _safe_setting_float("ERROR_BUDGET_THRESHOLD", 0.20)
     min_requests = _safe_setting_int("ERROR_BUDGET_MIN_REQUESTS", 20)
@@ -137,6 +179,14 @@ def _error_budget_window() -> Tuple[int, float, int]:
 
 
 def _record_request_outcome(success: bool) -> None:
+    """Resumo do comportamento desta função.
+
+    Args:
+        success: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     rds = _get_rds()
     if not rds or not _safe_setting_bool("ERROR_BUDGET_ENABLED", True):
         return
@@ -156,6 +206,11 @@ def _record_request_outcome(success: bool) -> None:
 
 
 def _is_error_budget_exceeded() -> bool:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     rds = _get_rds()
     if not rds or not _safe_setting_bool("ERROR_BUDGET_ENABLED", True):
         return False
@@ -189,6 +244,15 @@ class EMAHistoryCache:
     """Cache LRU com TTL para histórico EMA."""
 
     def __init__(self, maxsize: int = EMA_MAX_ENTRIES, ttl_s: int = EMA_TTL_SECONDS):
+        """Resumo do comportamento desta função.
+
+        Args:
+            maxsize: Parâmetro de entrada.
+            ttl_s: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
@@ -196,6 +260,14 @@ class EMAHistoryCache:
         self._access_order: list = []
 
     def get(self, key: Tuple[str, str]) -> Optional[Dict[str, Any]]:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         now = time.time()
         with self._lock:
             if key not in self._data:
@@ -214,6 +286,15 @@ class EMAHistoryCache:
             return entry
 
     def set(self, key: Tuple[str, str], value: Dict[str, Any]) -> None:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+            value: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         now = time.time()
         value["_last_update"] = now
         with self._lock:
@@ -228,9 +309,22 @@ class EMAHistoryCache:
                 self._data.pop(oldest, None)
 
     def __contains__(self, key: Tuple[str, str]) -> bool:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return key in self._data
 
     def items(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         with self._lock:
             return list(self._data.items())
 
@@ -252,6 +346,11 @@ class EMAHistoryCache:
         return removed
 
     def size(self) -> int:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return len(self._data)
 
 EMA_HISTORY = EMAHistoryCache()
@@ -266,6 +365,15 @@ class EMABatchQueue:
     """Queue for batching EMA updates to reduce DB writes."""
 
     def __init__(self, max_size: int = EMA_BATCH_MAX_SIZE, flush_interval: int = EMA_BATCH_INTERVAL_S):
+        """Resumo do comportamento desta função.
+
+        Args:
+            max_size: Parâmetro de entrada.
+            flush_interval: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         self.max_size = max_size
         self.flush_interval = flush_interval
         self._lock = threading.Lock()
@@ -356,6 +464,11 @@ class EMABatchQueue:
         return (time.time() - self._last_flush) >= self.flush_interval
 
     def size(self) -> int:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         with self._lock:
             return len(self._queue)
 
@@ -422,6 +535,15 @@ def get_dynamic_strategy_weights(modality: str) -> Dict[str, float]:
     Recupera os pesos da estratégia (Objetivos) diretamente do Settings Dinâmico.
     """
     def _safe_attr(name: str, default: float) -> float:
+        """Resumo do comportamento desta função.
+
+        Args:
+            name: Parâmetro de entrada.
+            default: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         try:
             return float(getattr(settings, name))
         except Exception:
@@ -690,6 +812,14 @@ async def _route_and_answer_internal(
         max_fallbacks = _safe_setting_int("REQUEST_MAX_FALLBACKS", 2)
 
         async def _execute_provider(model_name: str):
+            """Resumo do comportamento desta função.
+
+            Args:
+                model_name: Parâmetro de entrada.
+
+            Returns:
+                Valor retornado pela função.
+            """
             return await call_model(
                 model=model_name,
                 prompt=final_prompt,

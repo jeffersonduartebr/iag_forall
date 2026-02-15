@@ -45,17 +45,32 @@ class PerformanceRecord:
 
     @property
     def avg_quality(self) -> float:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self.total_samples == 0:
             return 5.0
         return self.quality_sum / self.total_samples
 
     @property
     def success_rate(self) -> float:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self.total_samples == 0:
             return 0.5
         return self.success_count / self.total_samples
 
     def to_dict(self) -> Dict[str, Any]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return {
             "total_samples": self.total_samples,
             "quality_sum": self.quality_sum,
@@ -64,6 +79,14 @@ class PerformanceRecord:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "PerformanceRecord":
+        """Resumo do comportamento desta função.
+
+        Args:
+            data: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return PerformanceRecord(
             total_samples=data.get("total_samples", 0),
             quality_sum=data.get("quality_sum", 0.0),
@@ -83,6 +106,11 @@ class AdaptiveRiskTuner:
     _lock = threading.Lock()
 
     def __new__(cls) -> "AdaptiveRiskTuner":
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -91,6 +119,11 @@ class AdaptiveRiskTuner:
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 
@@ -113,6 +146,11 @@ class AdaptiveRiskTuner:
         self._initialized = True
 
     def _get_redis(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return get_redis()
 
     def _load_state(self) -> None:

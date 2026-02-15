@@ -24,6 +24,7 @@ from enum import Enum
 # ============================================================
 
 class Modality(str, Enum):
+    """Representa a responsabilidade principal desta classe."""
     TEXT = "text"
     VISION = "vision"
     MULTIMODAL = "multimodal"

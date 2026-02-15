@@ -11,6 +11,15 @@ import numpy as np
 
 
 def dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]], default_epsilon: float) -> float:
+    """Resumo do comportamento desta função.
+
+    Args:
+        ctx_stats: Parâmetro de entrada.
+        default_epsilon: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     eps = default_epsilon
     if not ctx_stats:
         return min(1.0, eps + 0.15)
@@ -31,6 +40,16 @@ def choose_epsilon_greedy(
     ctx_stats: Dict[str, Dict[str, float]],
     default_epsilon: float,
 ) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        models: Parâmetro de entrada.
+        ctx_stats: Parâmetro de entrada.
+        default_epsilon: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     eps = dynamic_epsilon(ctx_stats, default_epsilon)
     if random.random() < eps:
         scored = []
@@ -53,6 +72,15 @@ def choose_epsilon_greedy(
 
 
 def choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        models: Parâmetro de entrada.
+        ctx_stats: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     total = sum(s.get("count", 0) for s in ctx_stats.values())
     if total <= 0:
         total = 1
@@ -74,6 +102,15 @@ def choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> st
 
 
 def choose_thompson(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        models: Parâmetro de entrada.
+        ctx_stats: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     cand = []
     for m in models:
         s = ctx_stats.get(m, {})
@@ -94,6 +131,17 @@ def meta_combine_choices(
     default_epsilon: float,
     preferred_strategy: str,
 ) -> Tuple[str, Dict[str, str]]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        models: Parâmetro de entrada.
+        ctx_stats: Parâmetro de entrada.
+        default_epsilon: Parâmetro de entrada.
+        preferred_strategy: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if not models:
         raise RuntimeError("Nenhum modelo recebido em meta_combine_choices.")
 

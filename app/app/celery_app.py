@@ -1,3 +1,5 @@
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 # app/celery_app.py
 import os
 from celery import Celery

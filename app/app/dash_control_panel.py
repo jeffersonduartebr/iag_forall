@@ -1,3 +1,5 @@
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 import os
 import redis
 import dash
@@ -42,6 +44,11 @@ engine = create_engine(f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}
 # 🧠 Funções auxiliares
 # =========================================================
 def get_system_status():
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         redis_ok = r.ping()
     except Exception:
@@ -169,6 +176,14 @@ app.layout = html.Div(
 # =========================================================
 @app.callback(Output("tabs-content", "children"), [Input("tabs", "value")])
 def render_content(tab):
+    """Resumo do comportamento desta função.
+
+    Args:
+        tab: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if tab == "tab-sys":
         redis_ok, db_ok = get_system_status()
         color_r = "green" if redis_ok else "red"
@@ -255,6 +270,18 @@ def render_content(tab):
     State("slider-bandit", "value"),
 )
 def save_variables(n_clicks, temp, tokens, top_p, bandit):
+    """Resumo do comportamento desta função.
+
+    Args:
+        n_clicks: Parâmetro de entrada.
+        temp: Parâmetro de entrada.
+        tokens: Parâmetro de entrada.
+        top_p: Parâmetro de entrada.
+        bandit: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if n_clicks > 0:
         save_dynamic_settings( # <-- CORRIGIDO
             {
@@ -273,6 +300,14 @@ def save_variables(n_clicks, temp, tokens, top_p, bandit):
     Input("btn-refresh-hist", "n_clicks"),
 )
 def refresh_history(n_clicks):
+    """Resumo do comportamento desta função.
+
+    Args:
+        n_clicks: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     df = fetch_query_history()
     return df.to_dict("records")
 
@@ -285,6 +320,17 @@ def refresh_history(n_clicks):
     State("w-cost", "value"),
 )
 def update_nsga_weights_callback(n, w_acc, w_lat, w_cost):
+    """Resumo do comportamento desta função.
+
+    Args:
+        n: Parâmetro de entrada.
+        w_acc: Parâmetro de entrada.
+        w_lat: Parâmetro de entrada.
+        w_cost: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if n > 0:
         update_nsga_weight("accuracy", w_acc)
         update_nsga_weight("latency", w_lat)

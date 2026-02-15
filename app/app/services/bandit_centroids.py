@@ -9,6 +9,15 @@ import numpy as np
 
 
 def normalize_centroid_vec(vec: np.ndarray, dim: int) -> np.ndarray:
+    """Resumo do comportamento desta função.
+
+    Args:
+        vec: Parâmetro de entrada.
+        dim: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     v = vec.astype(np.float32).reshape(-1)
     if len(v) != dim:
         if len(v) > dim:
@@ -20,6 +29,15 @@ def normalize_centroid_vec(vec: np.ndarray, dim: int) -> np.ndarray:
 
 
 def nearest_centroid_from_array(v: np.ndarray, cents: List[dict]) -> Tuple[Optional[int], float]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        v: Parâmetro de entrada.
+        cents: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if not cents:
         return None, 0.0
     c = np.stack([c_["vec"] for c_ in cents], axis=0)

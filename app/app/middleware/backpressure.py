@@ -39,12 +39,22 @@ class BackpressureSemaphore:
     _lock = asyncio.Lock()
 
     def __new__(cls) -> "BackpressureSemaphore":
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if self._initialized:
             return
 
@@ -135,6 +145,15 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         # Check if backpressure is enabled
+        """Resumo do comportamento desta função.
+
+        Args:
+            request: Parâmetro de entrada.
+            call_next: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         if not settings.BACKPRESSURE_ENABLED:
             return await call_next(request)
 

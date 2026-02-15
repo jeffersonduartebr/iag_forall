@@ -230,9 +230,26 @@ class _LazyEngine:
     """Lazy engine accessor for backward compatibility."""
 
     def __getattr__(self, name):
+        """Resumo do comportamento desta função.
+
+        Args:
+            name: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return getattr(get_engine(), name)
 
     def __call__(self, *args, **kwargs):
+        """Resumo do comportamento desta função.
+
+        Args:
+            *args: Parâmetro de entrada.
+            **kwargs: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return get_engine()
 
 

@@ -72,6 +72,11 @@ def _get_db_engine():
 # Redis
 # ============================================================
 def _get_rds():
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return get_redis_async_safe() or ensure_redis_connected(max_wait_s=0.0, min_retry_interval_s=2.0)
 
 # Redis Keys (ajustadas)
@@ -87,6 +92,15 @@ R_CLUSTERING_LOCK = "meta:bandit:cluster:lock"
 # Hyperparams
 # ============================================================
 def _safe_setting_float(key: str, default: float) -> float:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        default: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         return float(settings.get(key, default))
     except Exception:
@@ -94,6 +108,15 @@ def _safe_setting_float(key: str, default: float) -> float:
 
 
 def _safe_setting_int(key: str, default: int) -> int:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        default: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         return int(settings.get(key, default))
     except Exception:
@@ -114,11 +137,28 @@ META_STRATEGIES = ["epsilon_greedy", "ucb1", "thompson"]
 # Utils NumPy
 # ============================================================
 def _unit(v: np.ndarray) -> np.ndarray:
+    """Resumo do comportamento desta função.
+
+    Args:
+        v: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     n = np.linalg.norm(v)
     return v if n == 0 else v / n
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    """Resumo do comportamento desta função.
+
+    Args:
+        a: Parâmetro de entrada.
+        b: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     denom = np.linalg.norm(a) * np.linalg.norm(b)
     if denom == 0:
         return 0.0
@@ -126,6 +166,14 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _ensure_dim(v: np.ndarray) -> np.ndarray:
+    """Resumo do comportamento desta função.
+
+    Args:
+        v: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return normalize_centroid_vec(v, CENTROIDS_DIM)
 
 
@@ -134,6 +182,15 @@ def _sanitize_model_stats(raw: Optional[Dict[str, float]]) -> Dict[str, float]:
     s = raw or {}
 
     def _f(key: str, default: float) -> float:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+            default: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         try:
             v = float(s.get(key, default))
             return v if math.isfinite(v) else default
@@ -141,6 +198,15 @@ def _sanitize_model_stats(raw: Optional[Dict[str, float]]) -> Dict[str, float]:
             return default
 
     def _i(key: str, default: int) -> int:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+            default: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         try:
             v = int(s.get(key, default))
             return max(0, v)
@@ -165,6 +231,11 @@ class CentroidMatrixCache:
     """Cache para matriz de centróides pré-computada."""
 
     def __init__(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         self._lock = threading.Lock()
         self._matrix: Optional[np.ndarray] = None  # (K, D)
         self._ids: List[int] = []
@@ -212,6 +283,15 @@ _centroid_matrix_cache = CentroidMatrixCache()
 # ============================================================
 
 def _acquire_lock(key: str, ttl: int = 10) -> bool:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        ttl: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     rds = _get_rds()
     if not rds:
         return False
@@ -222,6 +302,14 @@ def _acquire_lock(key: str, ttl: int = 10) -> bool:
 
 
 def _release_lock(key: str) -> None:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     rds = _get_rds()
     if not rds:
         return
@@ -322,6 +410,14 @@ def _save_centroids(cents: List[dict]) -> None:
 
 
 def _new_centroid_id(cents: List[dict]) -> int:
+    """Resumo do comportamento desta função.
+
+    Args:
+        cents: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     used = {c["id"] for c in cents}
     cid = 0
     while cid in used:
@@ -471,6 +567,14 @@ def _auto_context_labels(query: str, modality: str = "text") -> List[str]:
 # ============================================================
 
 def _ctx_key(ctx: str) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        ctx: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return f"{R_CTX_PREFIX}:{ctx}"
 
 
@@ -538,6 +642,15 @@ def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
 
 
 def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
+    """Resumo do comportamento desta função.
+
+    Args:
+        ctx: Parâmetro de entrada.
+        stats: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     rds = _get_rds()
     if not rds:
         return
@@ -562,6 +675,16 @@ def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
 
 
 def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
+    """Resumo do comportamento desta função.
+
+    Args:
+        ctx: Parâmetro de entrada.
+        model: Parâmetro de entrada.
+        s: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         with _get_db_engine().begin() as conn:
             conn.execute(
@@ -599,20 +722,55 @@ def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
 # ============================================================
 
 def _dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]]) -> float:
+    """Resumo do comportamento desta função.
+
+    Args:
+        ctx_stats: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return bandit_policy.dynamic_epsilon(ctx_stats, DEFAULT_EPSILON)
 
 
 def _choose_epsilon_greedy(
     models: List[str], ctx_stats: Dict[str, Dict[str, float]]
 ) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        models: Parâmetro de entrada.
+        ctx_stats: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return bandit_policy.choose_epsilon_greedy(models, ctx_stats, DEFAULT_EPSILON)
 
 
 def _choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        models: Parâmetro de entrada.
+        ctx_stats: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return bandit_policy.choose_ucb1(models, ctx_stats)
 
 
 def _choose_thompson(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        models: Parâmetro de entrada.
+        ctx_stats: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return bandit_policy.choose_thompson(models, ctx_stats)
 
 

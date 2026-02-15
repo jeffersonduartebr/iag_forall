@@ -1,3 +1,5 @@
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 from chromadb import PersistentClient
 
 def reset_incompatible_collections(chroma_path: str = "/app/chroma_data", expected_dim: int = 1024):

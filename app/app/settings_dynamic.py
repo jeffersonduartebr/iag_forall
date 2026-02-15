@@ -29,6 +29,11 @@ REDIS_PREFIX = "settings:"
 REDIS_RELOAD_CHANNEL = "settings:reload"
 
 def _get_rds():
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return get_redis_async_safe() or ensure_redis_connected(max_wait_s=0.0, min_retry_interval_s=2.0)
 
 # Environment variable defaults (used by db.py)
@@ -62,13 +67,28 @@ class _EngineProxy:
     """Proxy to centralized engine for backward compatibility."""
 
     def begin(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _get_settings_engine().begin()
 
     def connect(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _get_settings_engine().connect()
 
     @property
     def pool(self):
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _get_settings_engine().pool
 
 
@@ -97,13 +117,31 @@ except Exception as e:
 # ============================================================
 
 class LRUCache:
+    """Representa a responsabilidade principal desta classe."""
     def __init__(self, maxsize: int = 512, ttl_s: int = 30):
+        """Resumo do comportamento desta função.
+
+        Args:
+            maxsize: Parâmetro de entrada.
+            ttl_s: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
         self._data: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
 
     def get(self, key: str) -> Optional[Any]:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         now = time.time()
         with self._lock:
             if key not in self._data:
@@ -119,6 +157,15 @@ class LRUCache:
             return value
 
     def set(self, key: str, value: Any) -> None:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+            value: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         now = time.time()
         with self._lock:
             if key in self._data:
@@ -128,6 +175,11 @@ class LRUCache:
                 self._data.popitem(last=False)
 
     def clear(self) -> None:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         with self._lock:
             self._data.clear()
 
@@ -139,6 +191,11 @@ _lru = LRUCache(maxsize=SETTINGS_CACHE_SIZE, ttl_s=SETTINGS_CACHE_TTL_S)
 
 
 def _invalidate_cache():
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     _lru.clear()
     logger.info("[settings_dynamic] Cache LRU invalidado.")
 
@@ -148,6 +205,14 @@ def _invalidate_cache():
 # ============================================================
 
 def _get_from_redis(key: str) -> Optional[str]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     rds = _get_rds()
     if not rds:
         return None
@@ -167,6 +232,14 @@ def _get_from_redis(key: str) -> Optional[str]:
 
 
 def _get_from_db(key: str) -> Optional[str]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     try:
         with engine.connect() as conn:
             r = conn.execute(
@@ -184,6 +257,15 @@ def _get_from_db(key: str) -> Optional[str]:
 
 
 def _set_to_redis(key: str, val: str):
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        val: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     rds = _get_rds()
     if not rds:
         return
@@ -194,6 +276,14 @@ def _set_to_redis(key: str, val: str):
 
 
 def _load_json_list(raw: Optional[str]) -> List[str]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        raw: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if raw is None:
         return []
     raw = raw.strip()
@@ -214,6 +304,7 @@ def _load_json_list(raw: Optional[str]) -> List[str]:
 
 class DynamicSettings:
 
+    """Representa a responsabilidade principal desta classe."""
     DEFAULTS: Dict[str, str] = {
         "MAX_TOKENS_DEFAULT": "2000",
         "TEMPERATURE_DEFAULT": "0.55",
@@ -363,6 +454,15 @@ class DynamicSettings:
     }
 
     def get(self, key: str, fallback: Any = None) -> Any:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+            fallback: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         cached = _lru.get(key)
         if cached is not None:
             return cached
@@ -378,6 +478,17 @@ class DynamicSettings:
         return v
 
     def set(self, key: str, value: str, actor: str = "system", source: str = "internal") -> None:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+            value: Parâmetro de entrada.
+            actor: Parâmetro de entrada.
+            source: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         try:
             with engine.begin() as conn:
                 conn.execute(
@@ -401,6 +512,14 @@ class DynamicSettings:
         logger.info(f"[settings] '{key}' atualizado por {actor} via {source}.")
 
     def snapshot(self, only_known: bool = False) -> Dict[str, Any]:
+        """Resumo do comportamento desta função.
+
+        Args:
+            only_known: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         keys = list(self.DEFAULTS.keys()) + [
             "DB_HOST", "DB_USER", "DB_NAME", "DB_PORT", 
             "OLLAMA_HOST", "OLLAMA_BASE_URL"
@@ -418,239 +537,444 @@ class DynamicSettings:
     # -------------------------
     @property
     def CANDIDATE_MODELS_LIST(self) -> List[str]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _load_json_list(self.get("CANDIDATE_MODELS_LIST", "[]"))
 
     @property
     def CANDIDATE_VISION_MODELS_LIST(self) -> List[str]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _load_json_list(self.get("CANDIDATE_VISION_MODELS_LIST", "[]"))
 
     @property
     def CANDIDATE_MULTIMODAL_MODELS_LIST(self) -> List[str]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _load_json_list(self.get("CANDIDATE_MULTIMODAL_MODELS_LIST", "[]"))
 
     @property
     def VLM_OLLAMA_MODELS(self) -> List[str]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _load_json_list(self.get("VLM_OLLAMA_MODELS", "[]"))
     
     @property
     def JUDGE_MODELS(self) -> List[str]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _load_json_list(self.get("JUDGE_MODELS", "[]"))
 
     # Embeddings
     @property
     def EMBED_TEXT_MODEL(self) -> str:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return self.get("EMBED_TEXT_MODEL", "nomic-embed-text")
 
     @property
-    def TEXT_EMBEDDING_MODEL(self) -> str: return self.get("TEXT_EMBEDDING_MODEL")
+    def TEXT_EMBEDDING_MODEL(self) -> str:
+        """Retorna o valor da configuração `TEXT_EMBEDDING_MODEL`."""
+        return self.get("TEXT_EMBEDDING_MODEL")
     @property
-    def IMAGE_EMBEDDING_MODEL(self) -> str: return self.get("IMAGE_EMBEDDING_MODEL")
+    def IMAGE_EMBEDDING_MODEL(self) -> str:
+        """Retorna o valor da configuração `IMAGE_EMBEDDING_MODEL`."""
+        return self.get("IMAGE_EMBEDDING_MODEL")
     @property
-    def MULTIMODAL_EMBEDDING_MODEL(self) -> str: return self.get("MULTIMODAL_EMBEDDING_MODEL")
+    def MULTIMODAL_EMBEDDING_MODEL(self) -> str:
+        """Retorna o valor da configuração `MULTIMODAL_EMBEDDING_MODEL`."""
+        return self.get("MULTIMODAL_EMBEDDING_MODEL")
     @property
-    def EMBED_MODEL(self) -> str: return self.get("EMBED_MODEL")
+    def EMBED_MODEL(self) -> str:
+        """Retorna o valor da configuração `EMBED_MODEL`."""
+        return self.get("EMBED_MODEL")
     @property
-    def EMBED_PROVIDER(self) -> str: return self.get("EMBED_PROVIDER")
+    def EMBED_PROVIDER(self) -> str:
+        """Retorna o valor da configuração `EMBED_PROVIDER`."""
+        return self.get("EMBED_PROVIDER")
     @property
-    def EMBED_DEVICE(self) -> str: return self.get("EMBED_DEVICE")
+    def EMBED_DEVICE(self) -> str:
+        """Retorna o valor da configuração `EMBED_DEVICE`."""
+        return self.get("EMBED_DEVICE")
 
     # Router Params
     @property
-    def MAX_TOKENS_DEFAULT(self) -> int: return int(self.get("MAX_TOKENS_DEFAULT", 2000))
+    def MAX_TOKENS_DEFAULT(self) -> int:
+        """Retorna o valor da configuração `MAX_TOKENS_DEFAULT`."""
+        return int(self.get("MAX_TOKENS_DEFAULT", 2000))
     @property
-    def TEMPERATURE_DEFAULT(self) -> float: return float(self.get("TEMPERATURE_DEFAULT", 0.5))
+    def TEMPERATURE_DEFAULT(self) -> float:
+        """Retorna o valor da configuração `TEMPERATURE_DEFAULT`."""
+        return float(self.get("TEMPERATURE_DEFAULT", 0.5))
     @property
-    def BANDIT_EPSILON(self) -> float: return float(self.get("BANDIT_EPSILON"))
+    def BANDIT_EPSILON(self) -> float:
+        """Retorna o valor da configuração `BANDIT_EPSILON`."""
+        return float(self.get("BANDIT_EPSILON"))
     @property
-    def QUERY_LOG_RETENTION_DAYS(self) -> int: return int(self.get("QUERY_LOG_RETENTION_DAYS"))
+    def QUERY_LOG_RETENTION_DAYS(self) -> int:
+        """Retorna o valor da configuração `QUERY_LOG_RETENTION_DAYS`."""
+        return int(self.get("QUERY_LOG_RETENTION_DAYS"))
     
     # Banco / Infra
     @property
-    def REDIS_HOST(self) -> str: return self.get("REDIS_HOST")
+    def REDIS_HOST(self) -> str:
+        """Retorna o valor da configuração `REDIS_HOST`."""
+        return self.get("REDIS_HOST")
     @property
-    def REDIS_PORT(self) -> int: return int(self.get("REDIS_PORT"))
+    def REDIS_PORT(self) -> int:
+        """Retorna o valor da configuração `REDIS_PORT`."""
+        return int(self.get("REDIS_PORT"))
     @property
-    def REDIS_DB(self) -> int: return int(self.get("REDIS_DB"))
+    def REDIS_DB(self) -> int:
+        """Retorna o valor da configuração `REDIS_DB`."""
+        return int(self.get("REDIS_DB"))
     @property
-    def REDIS_PASSWORD(self) -> str: return self.get("REDIS_PASSWORD")
+    def REDIS_PASSWORD(self) -> str:
+        """Retorna o valor da configuração `REDIS_PASSWORD`."""
+        return self.get("REDIS_PASSWORD")
 
     @property
-    def DB_HOST(self) -> str: return self.get("DB_HOST", DB_HOST_ENV)
+    def DB_HOST(self) -> str:
+        """Retorna o valor da configuração `DB_HOST`."""
+        return self.get("DB_HOST", DB_HOST_ENV)
     @property
-    def DB_PORT(self) -> int: return int(self.get("DB_PORT", str(DB_PORT_ENV)))
+    def DB_PORT(self) -> int:
+        """Retorna o valor da configuração `DB_PORT`."""
+        return int(self.get("DB_PORT", str(DB_PORT_ENV)))
     @property
-    def DB_USER(self) -> str: return self.get("DB_USER", DB_USER_ENV)
+    def DB_USER(self) -> str:
+        """Retorna o valor da configuração `DB_USER`."""
+        return self.get("DB_USER", DB_USER_ENV)
     @property
-    def DB_PASS(self) -> str: return self.get("DB_PASS", DB_PASS_ENV)
+    def DB_PASS(self) -> str:
+        """Retorna o valor da configuração `DB_PASS`."""
+        return self.get("DB_PASS", DB_PASS_ENV)
     @property
-    def DB_NAME(self) -> str: return self.get("DB_NAME", DB_NAME_ENV)
+    def DB_NAME(self) -> str:
+        """Retorna o valor da configuração `DB_NAME`."""
+        return self.get("DB_NAME", DB_NAME_ENV)
     
     @property
-    def ADMIN_TOKEN(self) -> str: return self.get("ADMIN_TOKEN", "")
+    def ADMIN_TOKEN(self) -> str:
+        """Retorna o valor da configuração `ADMIN_TOKEN`."""
+        return self.get("ADMIN_TOKEN", "")
     @property
-    def ADMIN_TOKEN_PREVIOUS(self) -> str: return self.get("ADMIN_TOKEN_PREVIOUS", "")
+    def ADMIN_TOKEN_PREVIOUS(self) -> str:
+        """Retorna o valor da configuração `ADMIN_TOKEN_PREVIOUS`."""
+        return self.get("ADMIN_TOKEN_PREVIOUS", "")
 
     # Judges
     @property
-    def JUDGES_ENABLED(self) -> bool: return str(self.get("JUDGES_ENABLED")).strip() in ("1", "true", "True")
+    def JUDGES_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `JUDGES_ENABLED`."""
+        return str(self.get("JUDGES_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def JUDGES_MODE(self) -> str: return self.get("JUDGES_MODE")
+    def JUDGES_MODE(self) -> str:
+        """Retorna o valor da configuração `JUDGES_MODE`."""
+        return self.get("JUDGES_MODE")
     @property
-    def JUDGES_LOCAL_MODEL(self) -> str: return self.get("JUDGES_LOCAL_MODEL")
+    def JUDGES_LOCAL_MODEL(self) -> str:
+        """Retorna o valor da configuração `JUDGES_LOCAL_MODEL`."""
+        return self.get("JUDGES_LOCAL_MODEL")
     @property
-    def JUDGES_REMOTE_MODEL(self) -> str: return self.get("JUDGES_REMOTE_MODEL")
+    def JUDGES_REMOTE_MODEL(self) -> str:
+        """Retorna o valor da configuração `JUDGES_REMOTE_MODEL`."""
+        return self.get("JUDGES_REMOTE_MODEL")
     @property
-    def JUDGES_TIMEOUT_S(self) -> int: return int(self.get("JUDGES_TIMEOUT_S"))
+    def JUDGES_TIMEOUT_S(self) -> int:
+        """Retorna o valor da configuração `JUDGES_TIMEOUT_S`."""
+        return int(self.get("JUDGES_TIMEOUT_S"))
     @property
-    def JUDGE_MIN_SAMPLE_RATE(self) -> float: return float(self.get("JUDGE_MIN_SAMPLE_RATE", 0.05))
+    def JUDGE_MIN_SAMPLE_RATE(self) -> float:
+        """Retorna o valor da configuração `JUDGE_MIN_SAMPLE_RATE`."""
+        return float(self.get("JUDGE_MIN_SAMPLE_RATE", 0.05))
 
     # Ollama
     @property
-    def OLLAMA_HOST(self) -> str: return self.get("OLLAMA_HOST") or "http://ollama:11434"
+    def OLLAMA_HOST(self) -> str:
+        """Retorna o valor da configuração `OLLAMA_HOST`."""
+        return self.get("OLLAMA_HOST") or "http://ollama:11434"
     @property
-    def OLLAMA_BASE_URL(self) -> str: return self.get("OLLAMA_BASE_URL") or self.OLLAMA_HOST
+    def OLLAMA_BASE_URL(self) -> str:
+        """Retorna o valor da configuração `OLLAMA_BASE_URL`."""
+        return self.get("OLLAMA_BASE_URL") or self.OLLAMA_HOST
 
     # Centroids
     @property
-    def CENTROIDS_DIM(self) -> int: return int(self.get("CENTROIDS_DIM"))
+    def CENTROIDS_DIM(self) -> int:
+        """Retorna o valor da configuração `CENTROIDS_DIM`."""
+        return int(self.get("CENTROIDS_DIM"))
     @property
-    def CENTROIDS_K(self) -> int: return int(self.get("CENTROIDS_K"))
+    def CENTROIDS_K(self) -> int:
+        """Retorna o valor da configuração `CENTROIDS_K`."""
+        return int(self.get("CENTROIDS_K"))
     @property
-    def CENTROIDS_MIN_SIM_CREATE(self) -> float: return float(self.get("CENTROIDS_MIN_SIM_CREATE"))
+    def CENTROIDS_MIN_SIM_CREATE(self) -> float:
+        """Retorna o valor da configuração `CENTROIDS_MIN_SIM_CREATE`."""
+        return float(self.get("CENTROIDS_MIN_SIM_CREATE"))
     @property
-    def CENTROIDS_ENABLE_ONLINE(self) -> bool: return str(self.get("CENTROIDS_ENABLE_ONLINE")).strip() in ("1", "true", "True")
+    def CENTROIDS_ENABLE_ONLINE(self) -> bool:
+        """Retorna o valor da configuração `CENTROIDS_ENABLE_ONLINE`."""
+        return str(self.get("CENTROIDS_ENABLE_ONLINE")).strip() in ("1", "true", "True")
     @property
-    def CENTROIDS_UPDATE_INTERVAL_S(self) -> int: return int(self.get("CENTROIDS_UPDATE_INTERVAL_S"))
+    def CENTROIDS_UPDATE_INTERVAL_S(self) -> int:
+        """Retorna o valor da configuração `CENTROIDS_UPDATE_INTERVAL_S`."""
+        return int(self.get("CENTROIDS_UPDATE_INTERVAL_S"))
     @property
-    def CENTROIDS_MIN_RECORDS_FOR_TRAIN(self) -> int: return int(self.get("CENTROIDS_MIN_RECORDS_FOR_TRAIN"))
+    def CENTROIDS_MIN_RECORDS_FOR_TRAIN(self) -> int:
+        """Retorna o valor da configuração `CENTROIDS_MIN_RECORDS_FOR_TRAIN`."""
+        return int(self.get("CENTROIDS_MIN_RECORDS_FOR_TRAIN"))
     @property
-    def CENTROIDS_MAX_HISTORY(self) -> int: return int(self.get("CENTROIDS_MAX_HISTORY"))
+    def CENTROIDS_MAX_HISTORY(self) -> int:
+        """Retorna o valor da configuração `CENTROIDS_MAX_HISTORY`."""
+        return int(self.get("CENTROIDS_MAX_HISTORY"))
     @property
-    def CENTROIDS_HOURLY_REFRESH_ENABLED(self) -> bool: return str(self.get("CENTROIDS_HOURLY_REFRESH_ENABLED")).strip() in ("1", "true", "True")
+    def CENTROIDS_HOURLY_REFRESH_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `CENTROIDS_HOURLY_REFRESH_ENABLED`."""
+        return str(self.get("CENTROIDS_HOURLY_REFRESH_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH(self) -> int: return int(self.get("CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH"))
+    def CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH(self) -> int:
+        """Retorna o valor da configuração `CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH`."""
+        return int(self.get("CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH"))
 
     # NSGA / Meta
     @property
-    def NSGA_UPDATE_INTERVAL_S(self) -> int: return int(self.get("NSGA_UPDATE_INTERVAL_S", "300"))
+    def NSGA_UPDATE_INTERVAL_S(self) -> int:
+        """Retorna o valor da configuração `NSGA_UPDATE_INTERVAL_S`."""
+        return int(self.get("NSGA_UPDATE_INTERVAL_S", "300"))
     @property
-    def NSGA_LOOKBACK_MINUTES(self) -> int: return int(self.get("NSGA_LOOKBACK_MINUTES", "180"))
+    def NSGA_LOOKBACK_MINUTES(self) -> int:
+        """Retorna o valor da configuração `NSGA_LOOKBACK_MINUTES`."""
+        return int(self.get("NSGA_LOOKBACK_MINUTES", "180"))
     @property
-    def NSGA_LOOKBACK_MAXROWS(self) -> int: return int(self.get("NSGA_LOOKBACK_MAXROWS", "2000"))
+    def NSGA_LOOKBACK_MAXROWS(self) -> int:
+        """Retorna o valor da configuração `NSGA_LOOKBACK_MAXROWS`."""
+        return int(self.get("NSGA_LOOKBACK_MAXROWS", "2000"))
     @property
-    def METAOPT_REPS(self) -> int: return int(self.get("METAOPT_REPS", "5"))
+    def METAOPT_REPS(self) -> int:
+        """Retorna o valor da configuração `METAOPT_REPS`."""
+        return int(self.get("METAOPT_REPS", "5"))
     @property
-    def METAOPT_TRIALS(self) -> int: return int(self.get("METAOPT_TRIALS", "100"))
+    def METAOPT_TRIALS(self) -> int:
+        """Retorna o valor da configuração `METAOPT_TRIALS`."""
+        return int(self.get("METAOPT_TRIALS", "100"))
 
     # Propriedades de Pesos NSGA-II
     @property
-    def NSGA_W_QUALITY(self) -> float: return float(self.get("NSGA_W_QUALITY", 1.0))
+    def NSGA_W_QUALITY(self) -> float:
+        """Retorna o valor da configuração `NSGA_W_QUALITY`."""
+        return float(self.get("NSGA_W_QUALITY", 1.0))
     @property
-    def NSGA_W_LATENCY(self) -> float: return float(self.get("NSGA_W_LATENCY", 0.5))
+    def NSGA_W_LATENCY(self) -> float:
+        """Retorna o valor da configuração `NSGA_W_LATENCY`."""
+        return float(self.get("NSGA_W_LATENCY", 0.5))
     @property
-    def NSGA_W_COST(self) -> float: return float(self.get("NSGA_W_COST", 50.0))
+    def NSGA_W_COST(self) -> float:
+        """Retorna o valor da configuração `NSGA_W_COST`."""
+        return float(self.get("NSGA_W_COST", 50.0))
     @property
-    def NSGA_W_ALIGNMENT(self) -> float: return float(self.get("NSGA_W_ALIGNMENT", 1.0))
+    def NSGA_W_ALIGNMENT(self) -> float:
+        """Retorna o valor da configuração `NSGA_W_ALIGNMENT`."""
+        return float(self.get("NSGA_W_ALIGNMENT", 1.0))
 
     # Phase 1: Monitoring Properties
     @property
-    def NSGA_CONVERGENCE_HISTORY_SIZE(self) -> int: return int(self.get("NSGA_CONVERGENCE_HISTORY_SIZE", 20))
+    def NSGA_CONVERGENCE_HISTORY_SIZE(self) -> int:
+        """Retorna o valor da configuração `NSGA_CONVERGENCE_HISTORY_SIZE`."""
+        return int(self.get("NSGA_CONVERGENCE_HISTORY_SIZE", 20))
     @property
-    def CASCADE_WARNING_THRESHOLD(self) -> float: return float(self.get("CASCADE_WARNING_THRESHOLD", 0.3))
+    def CASCADE_WARNING_THRESHOLD(self) -> float:
+        """Retorna o valor da configuração `CASCADE_WARNING_THRESHOLD`."""
+        return float(self.get("CASCADE_WARNING_THRESHOLD", 0.3))
     @property
-    def CASCADE_CRITICAL_THRESHOLD(self) -> float: return float(self.get("CASCADE_CRITICAL_THRESHOLD", 0.5))
+    def CASCADE_CRITICAL_THRESHOLD(self) -> float:
+        """Retorna o valor da configuração `CASCADE_CRITICAL_THRESHOLD`."""
+        return float(self.get("CASCADE_CRITICAL_THRESHOLD", 0.5))
 
     # Phase 2: Self-Tuning Properties
     @property
-    def RISK_FACTOR_SOTA_HIGH_UQ(self) -> float: return float(self.get("RISK_FACTOR_SOTA_HIGH_UQ", 1.3))
+    def RISK_FACTOR_SOTA_HIGH_UQ(self) -> float:
+        """Retorna o valor da configuração `RISK_FACTOR_SOTA_HIGH_UQ`."""
+        return float(self.get("RISK_FACTOR_SOTA_HIGH_UQ", 1.3))
     @property
-    def RISK_FACTOR_LOCAL_HIGH_UQ(self) -> float: return float(self.get("RISK_FACTOR_LOCAL_HIGH_UQ", 0.6))
+    def RISK_FACTOR_LOCAL_HIGH_UQ(self) -> float:
+        """Retorna o valor da configuração `RISK_FACTOR_LOCAL_HIGH_UQ`."""
+        return float(self.get("RISK_FACTOR_LOCAL_HIGH_UQ", 0.6))
     @property
-    def RISK_FACTOR_LOCAL_LOW_UQ(self) -> float: return float(self.get("RISK_FACTOR_LOCAL_LOW_UQ", 1.1))
+    def RISK_FACTOR_LOCAL_LOW_UQ(self) -> float:
+        """Retorna o valor da configuração `RISK_FACTOR_LOCAL_LOW_UQ`."""
+        return float(self.get("RISK_FACTOR_LOCAL_LOW_UQ", 1.1))
     @property
-    def RISK_FACTOR_ADAPT_ENABLED(self) -> bool: return str(self.get("RISK_FACTOR_ADAPT_ENABLED")).strip() in ("1", "true", "True")
+    def RISK_FACTOR_ADAPT_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `RISK_FACTOR_ADAPT_ENABLED`."""
+        return str(self.get("RISK_FACTOR_ADAPT_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def RISK_FACTOR_ADAPT_RATE(self) -> float: return float(self.get("RISK_FACTOR_ADAPT_RATE", 0.02))
+    def RISK_FACTOR_ADAPT_RATE(self) -> float:
+        """Retorna o valor da configuração `RISK_FACTOR_ADAPT_RATE`."""
+        return float(self.get("RISK_FACTOR_ADAPT_RATE", 0.02))
     @property
-    def ADAPTIVE_TIMEOUT_ENABLED(self) -> bool: return str(self.get("ADAPTIVE_TIMEOUT_ENABLED")).strip() in ("1", "true", "True")
+    def ADAPTIVE_TIMEOUT_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `ADAPTIVE_TIMEOUT_ENABLED`."""
+        return str(self.get("ADAPTIVE_TIMEOUT_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def ADAPTIVE_TIMEOUT_MULTIPLIER(self) -> float: return float(self.get("ADAPTIVE_TIMEOUT_MULTIPLIER", 2.0))
+    def ADAPTIVE_TIMEOUT_MULTIPLIER(self) -> float:
+        """Retorna o valor da configuração `ADAPTIVE_TIMEOUT_MULTIPLIER`."""
+        return float(self.get("ADAPTIVE_TIMEOUT_MULTIPLIER", 2.0))
     @property
-    def ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER(self) -> float: return float(self.get("ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER", 3.0))
+    def ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER(self) -> float:
+        """Retorna o valor da configuração `ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER`."""
+        return float(self.get("ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER", 3.0))
     @property
-    def MIN_TIMEOUT(self) -> int: return int(self.get("MIN_TIMEOUT", 30))
+    def MIN_TIMEOUT(self) -> int:
+        """Retorna o valor da configuração `MIN_TIMEOUT`."""
+        return int(self.get("MIN_TIMEOUT", 30))
     @property
-    def MAX_TIMEOUT(self) -> int: return int(self.get("MAX_TIMEOUT", 1200))
+    def MAX_TIMEOUT(self) -> int:
+        """Retorna o valor da configuração `MAX_TIMEOUT`."""
+        return int(self.get("MAX_TIMEOUT", 1200))
     @property
-    def META_OPT_ENABLED(self) -> bool: return str(self.get("META_OPT_ENABLED")).strip() in ("1", "true", "True")
+    def META_OPT_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `META_OPT_ENABLED`."""
+        return str(self.get("META_OPT_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def META_OPT_SCHEDULE_HOUR(self) -> int: return int(self.get("META_OPT_SCHEDULE_HOUR", 3))
+    def META_OPT_SCHEDULE_HOUR(self) -> int:
+        """Retorna o valor da configuração `META_OPT_SCHEDULE_HOUR`."""
+        return int(self.get("META_OPT_SCHEDULE_HOUR", 3))
     @property
-    def META_OPT_SCHEDULED_TRIALS(self) -> int: return int(self.get("META_OPT_SCHEDULED_TRIALS", 20))
+    def META_OPT_SCHEDULED_TRIALS(self) -> int:
+        """Retorna o valor da configuração `META_OPT_SCHEDULED_TRIALS`."""
+        return int(self.get("META_OPT_SCHEDULED_TRIALS", 20))
 
     # Phase 3: Feedback Properties
     @property
-    def DRIFT_THRESHOLD(self) -> float: return float(self.get("DRIFT_THRESHOLD", 0.15))
+    def DRIFT_THRESHOLD(self) -> float:
+        """Retorna o valor da configuração `DRIFT_THRESHOLD`."""
+        return float(self.get("DRIFT_THRESHOLD", 0.15))
     @property
-    def DRIFT_WINDOW_SIZE(self) -> int: return int(self.get("DRIFT_WINDOW_SIZE", 100))
+    def DRIFT_WINDOW_SIZE(self) -> int:
+        """Retorna o valor da configuração `DRIFT_WINDOW_SIZE`."""
+        return int(self.get("DRIFT_WINDOW_SIZE", 100))
     @property
-    def USER_FEEDBACK_WEIGHT(self) -> float: return float(self.get("USER_FEEDBACK_WEIGHT", 0.7))
+    def USER_FEEDBACK_WEIGHT(self) -> float:
+        """Retorna o valor da configuração `USER_FEEDBACK_WEIGHT`."""
+        return float(self.get("USER_FEEDBACK_WEIGHT", 0.7))
 
     # Phase 4: A/B Testing Properties
     @property
-    def AB_TESTING_ENABLED(self) -> bool: return str(self.get("AB_TESTING_ENABLED")).strip() in ("1", "true", "True")
+    def AB_TESTING_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `AB_TESTING_ENABLED`."""
+        return str(self.get("AB_TESTING_ENABLED")).strip() in ("1", "true", "True")
 
     # Phase 5: Autonomous Behavior - Adaptive Cache Properties
     @property
-    def CACHE_THRESHOLD_MIN(self) -> float: return float(self.get("CACHE_THRESHOLD_MIN", 0.85))
+    def CACHE_THRESHOLD_MIN(self) -> float:
+        """Retorna o valor da configuração `CACHE_THRESHOLD_MIN`."""
+        return float(self.get("CACHE_THRESHOLD_MIN", 0.85))
     @property
-    def CACHE_THRESHOLD_MAX(self) -> float: return float(self.get("CACHE_THRESHOLD_MAX", 0.98))
+    def CACHE_THRESHOLD_MAX(self) -> float:
+        """Retorna o valor da configuração `CACHE_THRESHOLD_MAX`."""
+        return float(self.get("CACHE_THRESHOLD_MAX", 0.98))
     @property
-    def CACHE_HIT_RATE_TARGET(self) -> float: return float(self.get("CACHE_HIT_RATE_TARGET", 0.20))
+    def CACHE_HIT_RATE_TARGET(self) -> float:
+        """Retorna o valor da configuração `CACHE_HIT_RATE_TARGET`."""
+        return float(self.get("CACHE_HIT_RATE_TARGET", 0.20))
     @property
-    def CACHE_THRESHOLD_ADAPT_ENABLED(self) -> bool: return str(self.get("CACHE_THRESHOLD_ADAPT_ENABLED")).strip() in ("1", "true", "True")
+    def CACHE_THRESHOLD_ADAPT_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `CACHE_THRESHOLD_ADAPT_ENABLED`."""
+        return str(self.get("CACHE_THRESHOLD_ADAPT_ENABLED")).strip() in ("1", "true", "True")
 
     # Phase 5: Autonomous Behavior - Predictor Validation Properties
     @property
-    def PREDICTOR_VALIDATION_ENABLED(self) -> bool: return str(self.get("PREDICTOR_VALIDATION_ENABLED")).strip() in ("1", "true", "True")
+    def PREDICTOR_VALIDATION_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `PREDICTOR_VALIDATION_ENABLED`."""
+        return str(self.get("PREDICTOR_VALIDATION_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def PREDICTOR_BRIER_SCORE_THRESHOLD(self) -> float: return float(self.get("PREDICTOR_BRIER_SCORE_THRESHOLD", 0.25))
+    def PREDICTOR_BRIER_SCORE_THRESHOLD(self) -> float:
+        """Retorna o valor da configuração `PREDICTOR_BRIER_SCORE_THRESHOLD`."""
+        return float(self.get("PREDICTOR_BRIER_SCORE_THRESHOLD", 0.25))
     @property
-    def PREDICTOR_CALIBRATION_WINDOW(self) -> int: return int(self.get("PREDICTOR_CALIBRATION_WINDOW", 1000))
+    def PREDICTOR_CALIBRATION_WINDOW(self) -> int:
+        """Retorna o valor da configuração `PREDICTOR_CALIBRATION_WINDOW`."""
+        return int(self.get("PREDICTOR_CALIBRATION_WINDOW", 1000))
 
     # Phase 5: Autonomous Behavior - UQ Calibration Properties
     @property
-    def UQ_CALIBRATION_ENABLED(self) -> bool: return str(self.get("UQ_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
+    def UQ_CALIBRATION_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `UQ_CALIBRATION_ENABLED`."""
+        return str(self.get("UQ_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def UQ_QUALITY_GAP_RELAX(self) -> float: return float(self.get("UQ_QUALITY_GAP_RELAX", 0.5))
+    def UQ_QUALITY_GAP_RELAX(self) -> float:
+        """Retorna o valor da configuração `UQ_QUALITY_GAP_RELAX`."""
+        return float(self.get("UQ_QUALITY_GAP_RELAX", 0.5))
     @property
-    def UQ_QUALITY_GAP_TIGHTEN(self) -> float: return float(self.get("UQ_QUALITY_GAP_TIGHTEN", 2.0))
+    def UQ_QUALITY_GAP_TIGHTEN(self) -> float:
+        """Retorna o valor da configuração `UQ_QUALITY_GAP_TIGHTEN`."""
+        return float(self.get("UQ_QUALITY_GAP_TIGHTEN", 2.0))
 
     # Phase 5: Autonomous Behavior - Judge Calibration Properties
     @property
-    def JUDGE_CALIBRATION_ENABLED(self) -> bool: return str(self.get("JUDGE_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
+    def JUDGE_CALIBRATION_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `JUDGE_CALIBRATION_ENABLED`."""
+        return str(self.get("JUDGE_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
     @property
-    def JUDGE_CACHE_AGREEMENT_TARGET(self) -> float: return float(self.get("JUDGE_CACHE_AGREEMENT_TARGET", 0.7))
+    def JUDGE_CACHE_AGREEMENT_TARGET(self) -> float:
+        """Retorna o valor da configuração `JUDGE_CACHE_AGREEMENT_TARGET`."""
+        return float(self.get("JUDGE_CACHE_AGREEMENT_TARGET", 0.7))
 
     # Circuit Breaker Properties
     @property
-    def CIRCUIT_BREAKER_FAIL_MAX(self) -> int: return int(self.get("CIRCUIT_BREAKER_FAIL_MAX", 5))
+    def CIRCUIT_BREAKER_FAIL_MAX(self) -> int:
+        """Retorna o valor da configuração `CIRCUIT_BREAKER_FAIL_MAX`."""
+        return int(self.get("CIRCUIT_BREAKER_FAIL_MAX", 5))
     @property
-    def CIRCUIT_BREAKER_RESET_TIMEOUT(self) -> int: return int(self.get("CIRCUIT_BREAKER_RESET_TIMEOUT", 60))
+    def CIRCUIT_BREAKER_RESET_TIMEOUT(self) -> int:
+        """Retorna o valor da configuração `CIRCUIT_BREAKER_RESET_TIMEOUT`."""
+        return int(self.get("CIRCUIT_BREAKER_RESET_TIMEOUT", 60))
     @property
-    def CIRCUIT_BREAKER_LOCAL_FAIL_MAX(self) -> int: return int(self.get("CIRCUIT_BREAKER_LOCAL_FAIL_MAX", 3))
+    def CIRCUIT_BREAKER_LOCAL_FAIL_MAX(self) -> int:
+        """Retorna o valor da configuração `CIRCUIT_BREAKER_LOCAL_FAIL_MAX`."""
+        return int(self.get("CIRCUIT_BREAKER_LOCAL_FAIL_MAX", 3))
     @property
-    def CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT(self) -> int: return int(self.get("CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT", 30))
+    def CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT(self) -> int:
+        """Retorna o valor da configuração `CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT`."""
+        return int(self.get("CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT", 30))
 
     # Backpressure / Concurrency Control
     @property
-    def MAX_CONCURRENT_REQUESTS(self) -> int: return int(self.get("MAX_CONCURRENT_REQUESTS", 500))
+    def MAX_CONCURRENT_REQUESTS(self) -> int:
+        """Retorna o valor da configuração `MAX_CONCURRENT_REQUESTS`."""
+        return int(self.get("MAX_CONCURRENT_REQUESTS", 500))
     @property
-    def BACKPRESSURE_ENABLED(self) -> bool: return str(self.get("BACKPRESSURE_ENABLED")).strip() in ("1", "true", "True")
+    def BACKPRESSURE_ENABLED(self) -> bool:
+        """Retorna o valor da configuração `BACKPRESSURE_ENABLED`."""
+        return str(self.get("BACKPRESSURE_ENABLED")).strip() in ("1", "true", "True")
 
     # Emergency Fallback Models
     @property
     def EMERGENCY_FALLBACK_MODELS(self) -> List[str]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         return _load_json_list(self.get("EMERGENCY_FALLBACK_MODELS", "[]"))
 
 
@@ -703,6 +1027,15 @@ def validate_critical_settings(settings_obj: Optional[Any] = None) -> List[str]:
     cfg = settings_obj or settings
 
     def _read(name: str, default: Any) -> Any:
+        """Resumo do comportamento desta função.
+
+        Args:
+            name: Parâmetro de entrada.
+            default: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         try:
             if hasattr(cfg, name):
                 return getattr(cfg, name)
@@ -751,6 +1084,11 @@ _reload_listener_stop = threading.Event()
 
 
 def start_reload_listener() -> None:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     global _reload_listener_thread
     if _reload_listener_thread and _reload_listener_thread.is_alive():
         return
@@ -758,6 +1096,11 @@ def start_reload_listener() -> None:
 
     # Usamos uma conexão dedicada para o listener, sem timeout
     def _bg():
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         while not _reload_listener_stop.is_set():
             listener = None
             pubsub = None
@@ -808,6 +1151,11 @@ def start_reload_listener() -> None:
 
 
 def stop_reload_listener() -> None:
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     global _reload_listener_thread
     _reload_listener_stop.set()
     if _reload_listener_thread and _reload_listener_thread.is_alive():

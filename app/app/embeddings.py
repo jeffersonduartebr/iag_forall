@@ -57,6 +57,15 @@ class EmbeddingL1Cache:
     """Cache LRU in-memory para embeddings com TTL."""
 
     def __init__(self, maxsize: int = EMBED_L1_CACHE_SIZE, ttl_s: int = EMBED_L1_CACHE_TTL_S):
+        """Resumo do comportamento desta função.
+
+        Args:
+            maxsize: Parâmetro de entrada.
+            ttl_s: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
@@ -65,6 +74,14 @@ class EmbeddingL1Cache:
         self._misses = 0
 
     def get(self, key: str) -> Optional[List[float]]:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         now = time.time()
         with self._lock:
             if key not in self._data:
@@ -81,6 +98,15 @@ class EmbeddingL1Cache:
             return vec
 
     def set(self, key: str, vec: List[float]) -> None:
+        """Resumo do comportamento desta função.
+
+        Args:
+            key: Parâmetro de entrada.
+            vec: Parâmetro de entrada.
+
+        Returns:
+            Valor retornado pela função.
+        """
         now = time.time()
         with self._lock:
             if key in self._data:
@@ -90,6 +116,11 @@ class EmbeddingL1Cache:
                 self._data.popitem(last=False)
 
     def stats(self) -> Dict[str, Any]:
+        """Resumo do comportamento desta função.
+
+        Returns:
+            Valor retornado pela função.
+        """
         total = self._hits + self._misses
         return {
             "hits": self._hits,
@@ -118,6 +149,11 @@ _rds = get_redis()
 _LOCAL_MODEL_INSTANCE = None
 
 def get_local_model():
+    """Resumo do comportamento desta função.
+
+    Returns:
+        Valor retornado pela função.
+    """
     global _LOCAL_MODEL_INSTANCE
     if _LOCAL_MODEL_INSTANCE is None and ST_AVAILABLE:
         logger.info(f"[Embeddings] Carregando modelo local CPU: {EMBED_MODEL_TEXT}...")
@@ -132,14 +168,40 @@ def get_local_model():
 # ============================================================
 
 def _hash_text(text: str, model: str) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        text: Parâmetro de entrada.
+        model: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     payload = f"{model}|{text}".encode("utf-8", errors="ignore")
     return hashlib.sha256(payload).hexdigest()
 
 def _norm(vec: np.ndarray) -> np.ndarray:
+    """Resumo do comportamento desta função.
+
+    Args:
+        vec: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     n = np.linalg.norm(vec)
     return vec if n == 0 else vec / n
 
 def _save_cache(key: str, vec: List[float]):
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+        vec: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if _rds:
         try:
             _rds.setex(key, EMBED_CACHE_TTL_S, json.dumps({"v": vec}))
@@ -147,6 +209,14 @@ def _save_cache(key: str, vec: List[float]):
             logger.warning(f"[Embeddings] Failed to save cache for key {key[:20]}...: {e}")
 
 def _load_cache(key: str) -> Optional[List[float]]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        key: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     if _rds:
         try:
             raw = _rds.get(key)
@@ -179,6 +249,14 @@ def _local_cpu_embed(text: str) -> List[float]:
 # ============================================================
 
 def embed_text(text: str) -> List[float]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        text: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     text = (text or "").strip()
     if not text:
         return [0.0]
@@ -229,9 +307,26 @@ def get_embedding_cache_stats() -> Dict[str, Any]:
 # Vision embedding removido/simplificado pois o RAG agora usa "Ponte Descritiva"
 # (VLM gera texto -> Texto vira embedding)
 def embed_image(image_b64: str) -> List[float]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        image_b64: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     return [0.0] 
 
 def embed_multimodal(text: str, image_b64: Optional[str]) -> Dict[str, List[float]]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        text: Parâmetro de entrada.
+        image_b64: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     text_vec = embed_text(text)
     # Retorna apenas o texto, pois estamos usando a estratégia de descrição
     return {

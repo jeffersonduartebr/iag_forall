@@ -176,6 +176,7 @@ async def add_doc(file: UploadFile = File(...)):
 
 
 class IngestRequest(BaseModel):
+    """Representa a responsabilidade principal desta classe."""
     text: str
     doc_id: str
     metadata: Dict[str, Any]

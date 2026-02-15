@@ -1,3 +1,5 @@
+"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+
 import asyncio, json
 from typing import Dict, Any
 from ..settings import settings
@@ -11,6 +13,16 @@ Return ONLY a JSON object: {"score": <0-10>, "rationale": "<short reason>"}.
 """
 
 def _build_prompt(user_q: str, assistant_a: str, use_rag: bool) -> str:
+    """Resumo do comportamento desta função.
+
+    Args:
+        user_q: Parâmetro de entrada.
+        assistant_a: Parâmetro de entrada.
+        use_rag: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     ctx = ""
     if use_rag:
         rag = retrieve_context(user_q)
@@ -26,6 +38,17 @@ ASSISTANT ANSWER:
 """
 
 def _score_sync(user_q: str, assistant_a: str, judge_id: str, use_rag: bool) -> Dict[str, Any]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        user_q: Parâmetro de entrada.
+        assistant_a: Parâmetro de entrada.
+        judge_id: Parâmetro de entrada.
+        use_rag: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     prompt = _build_prompt(user_q, assistant_a, use_rag)
     resp = completion(model=settings.JUDGE_LLM_MODEL,
                       messages=[{"role":"user","content": prompt}],
@@ -42,5 +65,15 @@ def _score_sync(user_q: str, assistant_a: str, judge_id: str, use_rag: bool) -> 
     return {"judge_id": judge_id, "score": score, "rationale": rationale}
 
 async def score(user_q: str, assistant_a: str, idx: int) -> Dict[str, Any]:
+    """Resumo do comportamento desta função.
+
+    Args:
+        user_q: Parâmetro de entrada.
+        assistant_a: Parâmetro de entrada.
+        idx: Parâmetro de entrada.
+
+    Returns:
+        Valor retornado pela função.
+    """
     judge_id = f"llm_{idx}"
     return await asyncio.to_thread(_score_sync, user_q, assistant_a, judge_id, settings.JUDGE_USE_RAG)
