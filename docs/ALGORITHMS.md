@@ -3,6 +3,27 @@
 ## Objetivo do sistema
 Escolher o melhor modelo para cada requisição balanceando qualidade, latência e custo.
 
+## Diagrama do pipeline algorítmico
+Objetivo: resumir como as estratégias se encadeiam no caminho de decisão do roteador.
+
+```mermaid
+flowchart LR
+    A[Consulta recebida]
+    B[Seleção de candidatos]
+    C[Estimativa de incerteza]
+    D[Cache semântico]
+    E[RAG opcional]
+    F[Bandit e decisão final]
+    G[Provider / fallback]
+    H[Feedback e aprendizado]
+
+    A --> B --> C --> D
+    D -->|cache hit| H
+    D -->|cache miss| E --> F --> G --> H
+```
+
+Nota: o diagrama mostra a ordem lógica principal; detalhes internos de cada algoritmo continuam nas seções abaixo.
+
 ## 1. Seleção de candidatos
 Arquivo principal: `app/app/router_strategy.py`
 

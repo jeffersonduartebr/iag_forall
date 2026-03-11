@@ -5,6 +5,45 @@ Base URL local:
 http://localhost:8000
 ```
 
+## Mapa de endpoints
+Objetivo: organizar a API por grupos funcionais antes dos detalhes de payload e autenticação.
+
+```mermaid
+flowchart TD
+    API[API HTTP]
+    Query[Consulta<br/>/query e /query/stream]
+    Health[Saúde<br/>/health /healthz /ready /metrics]
+    Feedback[Feedback e A/B<br/>/feedback /feedback/stats /admin/experiments*]
+    Admin[Administração<br/>/admin/settings /admin/runtime /admin/circuit-breakers]
+    Gov[Governança e eval<br/>budgets policies privacy rbac evals]
+
+    API --> Query
+    API --> Health
+    API --> Feedback
+    API --> Admin
+    API --> Gov
+```
+
+## Sequência da chamada principal
+Objetivo: mostrar a jornada mais comum de uso da API.
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant API as POST /query
+    participant R as Roteador
+    participant M as Modelo
+    participant F as Feedback assíncrono
+
+    C->>API: envia payload
+    API->>R: valida e roteia
+    R->>M: solicita resposta
+    M-->>R: retorna conteúdo
+    R-->>API: resposta final
+    API-->>C: 200 + answer/model
+    API->>F: dispara processamento posterior
+```
+
 ## Autenticação administrativa
 Endpoints administrativos exigem header:
 ```text

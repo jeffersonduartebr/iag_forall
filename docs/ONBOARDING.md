@@ -2,6 +2,21 @@
 
 Este guia foi feito para alguém que está entrando agora no projeto e precisa começar a contribuir com segurança.
 
+## Jornada da primeira semana
+Objetivo: visualizar a progressão esperada do onboarding até a primeira contribuição segura.
+
+```mermaid
+flowchart LR
+    A[Dia 1<br/>ambiente e arquitetura]
+    B[Dia 2<br/>API e contratos]
+    C[Dia 3<br/>roteamento e providers]
+    D[Dia 4<br/>dados e configuração]
+    E[Dia 5<br/>observabilidade e feedback]
+    F[Primeira PR pequena]
+
+    A --> B --> C --> D --> E --> F
+```
+
 ## Objetivo da primeira semana
 Ao final da semana você deve conseguir:
 1. Subir o ambiente local.

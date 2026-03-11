@@ -2,6 +2,20 @@
 
 Este documento define como manter a documentação técnica do projeto consistente para novos contribuidores (especialmente estagiários).
 
+## Fluxo de atualização documental
+Objetivo: resumir a sequência mínima esperada quando o código muda.
+
+```mermaid
+flowchart LR
+    A[Mudança no código]
+    B[Atualizar docstrings]
+    C[Atualizar docs temáticos]
+    D[Regenerar catálogos]
+    E[Revisar backlog e consistência]
+
+    A --> B --> C --> D --> E
+```
+
 ## Objetivo
 1. Garantir rastreabilidade entre código e documentação.
 2. Facilitar onboarding e manutenção.

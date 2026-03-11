@@ -5,6 +5,29 @@ Para referência detalhada de todos os métodos e arquivos (incluindo fora de `a
 2. `docs/METHOD_CATALOG.md`
 3. `docs/DOCSTRING_BACKLOG.md`
 
+## Mapa do core por subsistema
+Objetivo: visualizar rapidamente como os grupos de módulos se organizam no diretório `app/app`.
+
+```mermaid
+flowchart TD
+    Core[Core app/app]
+    API[Entrada e API]
+    Routing[Roteamento e decisão]
+    Providers[Providers e resiliência]
+    Rag[RAG, cache e embeddings]
+    Config[Configuração e persistência]
+    Ops[Operação e observabilidade]
+    Aux[Serviços auxiliares e utilitários]
+
+    Core --> API
+    Core --> Routing
+    Core --> Providers
+    Core --> Rag
+    Core --> Config
+    Core --> Ops
+    Core --> Aux
+```
+
 ## Entrada e API
 | Módulo | Responsabilidade | Pontos de atenção |
 |---|---|---|

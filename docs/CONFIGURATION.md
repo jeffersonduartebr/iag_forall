@@ -5,6 +5,34 @@
 2. Parte das configurações é dinâmica (hot-reload) via `settings_dynamic`.
 3. Configurações críticas devem ser explícitas em produção.
 
+## Precedência de configuração
+Objetivo: mostrar qual fonte tende a prevalecer na resolução de settings.
+
+```mermaid
+flowchart LR
+    A[Variáveis de ambiente]
+    B[Redis / settings dinâmicos]
+    C[DB / persistência]
+    D[Defaults do código]
+
+    A --> B --> C --> D
+```
+
+## Dinâmico vs restart
+Objetivo: diferenciar ajustes aplicáveis em runtime daqueles que costumam exigir reinício.
+
+```mermaid
+flowchart TD
+    A[Configuração alterada]
+    B{Lida via settings_dynamic.get(...)?}
+    C[Aplica em runtime]
+    D[Provável necessidade de restart]
+
+    A --> B
+    B -->|sim| C
+    B -->|não| D
+```
+
 ## Variáveis críticas (obrigatórias em produção)
 - `ADMIN_TOKEN` (quando `AUTH_JWT_ENABLED=0`)
 - `DB_PASS`

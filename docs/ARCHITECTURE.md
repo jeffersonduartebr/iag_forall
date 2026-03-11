@@ -6,6 +6,20 @@ O sistema roteia consultas para modelos de linguagem com foco em equilíbrio ent
 2. Latência.
 3. Custo.
 
+## Mapa deste documento
+Objetivo: separar rapidamente a camada de explicação para professores da camada técnica detalhada.
+
+```mermaid
+flowchart LR
+    A[Visão geral]
+    B[Visão para professores]
+    C[Documentação técnica detalhada]
+    D[Fluxos e componentes]
+    E[Riscos e investigação]
+
+    A --> B --> C --> D --> E
+```
+
 ## Visão Para Professores
 Esta seção explica o sistema sem depender de nomes de arquivos, bancos ou serviços internos.
 
