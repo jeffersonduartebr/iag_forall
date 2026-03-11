@@ -15,6 +15,103 @@ Roteador de consultas para LLMs/VLMs com decisão multiobjetivo (custo, latênci
 ## Arquitetura em uma frase
 FastAPI (`app/app/main.py`) -> roteamento (`app/app/router_core.py`) -> providers (`app/app/providers_async.py`) -> persistência/cache (MariaDB + Redis + ChromaDB) -> feedback em background (Celery/tasks).
 
+## Entenda Rapidamente
+Esta seção foi pensada para professores e outros leitores sem formação em TI.
+
+### Como o sistema funciona para o professor
+Objetivo: mostrar, em linguagem simples, o caminho da pergunta até a resposta.
+
+```mermaid
+flowchart LR
+    A[Professor faz uma pergunta<br/>ou pede apoio pedagógico]
+    B[Sistema interpreta<br/>o pedido]
+    C[Sistema consulta conhecimentos<br/>e respostas já aprendidas]
+    D[Sistema monta uma resposta<br/>ou sugestão]
+    E[Professor lê, adapta<br/>e decide se vai usar]
+
+    A --> B --> C --> D --> E
+```
+
+Legenda:
+- `Professor faz uma pergunta`: pode ser uma dúvida, explicação, atividade ou roteiro de aula.
+- `Sistema interpreta o pedido`: identifica o que está sendo solicitado.
+- `Consulta conhecimentos`: busca informações úteis e exemplos parecidos.
+- `Monta uma resposta`: produz uma sugestão de apoio.
+- `Professor lê, adapta e decide`: a decisão final continua com a pessoa docente.
+
+### Como o sistema melhora com o uso
+Objetivo: mostrar que o sistema tenta aprender com o uso, mas não substitui o julgamento do professor.
+
+```mermaid
+flowchart TD
+    A[Professor usa a resposta]
+    B[Professor aprova, ajusta<br/>ou ignora]
+    C[Sistema registra sinais<br/>de uso]
+    D[Sistema tenta melhorar<br/>respostas futuras]
+
+    A --> B --> C --> D
+```
+
+Mensagem principal:
+- a IA oferece apoio;
+- o professor continua responsável pela escolha pedagógica;
+- o sistema tenta melhorar ao longo do tempo.
+
+## Diagrama de contexto
+Objetivo: dar uma visão rápida da stack local e das principais dependências do caminho de requisição.
+
+```mermaid
+flowchart LR
+    Client[Cliente HTTP]
+    API[FastAPI API<br/>app/app/main.py]
+    Router[Router Core<br/>router_core.py]
+    Providers[Providers Async<br/>providers_async.py]
+    Ollama[Ollama]
+    External[LLM APIs externas]
+    Redis[(Redis)]
+    MariaDB[(MariaDB)]
+    Chroma[(ChromaDB)]
+    Celery[Celery Worker<br/>tasks.py]
+    NSGA[NSGA Updater / Meta Optimizer]
+    Obs[Prometheus / Grafana / Loki]
+
+    Client --> API
+    API --> Router
+    Router --> Redis
+    Router --> Chroma
+    Router --> MariaDB
+    Router --> Providers
+    Providers --> Ollama
+    Providers --> External
+    API --> Celery
+    Celery --> MariaDB
+    Celery --> Redis
+    Celery --> Chroma
+    NSGA --> MariaDB
+    NSGA --> Redis
+    API -. metrics/logs .-> Obs
+    Celery -. metrics/logs .-> Obs
+    NSGA -. metrics/logs .-> Obs
+```
+
+Nota: o diagrama resume o fluxo principal; threads internas de manutenção do roteador e detalhes de lifecycle ficam em `docs/ARCHITECTURE.md`.
+
+## Documentação visual
+Para entender a arquitetura sem depender só de texto, use esta trilha:
+
+1. `README.md`: visão simples para professores + diagrama de contexto técnico.
+2. `docs/ARCHITECTURE.md`: visão para professores + arquitetura técnica detalhada.
+3. `docs/ONBOARDING.md`: ordem recomendada de leitura dos diagramas para novos mantenedores.
+4. `docs/DOCUMENTATION_WORKFLOW.md`: regra de manutenção dos diagramas na mesma PR que alterar fluxo ou dependência.
+
+Leitura rápida:
+- “Quero entender sem linguagem técnica” -> `README.md`
+- “Quero entender como funciona para o professor” -> `docs/ARCHITECTURE.md`
+- “Quem conversa com quem tecnicamente?” -> `README.md`
+- “Onde esse comportamento mora?” -> `docs/ARCHITECTURE.md`
+- “Em que ordem o fluxo acontece?” -> `docs/ARCHITECTURE.md`
+- “Quando preciso atualizar os diagramas?” -> `docs/DOCUMENTATION_WORKFLOW.md`
+
 ## Primeiros 30 minutos (onboarding rápido)
 1. Configure variáveis de ambiente:
 - Copie `.env.example` para `.env`.
@@ -49,15 +146,15 @@ curl -s http://localhost:8000/metrics | head -n 40
 
 ## Mapa de leitura para estagiário
 1. `docs/ONBOARDING.md` (trilha de estudo).
-2. `docs/MODULE_INDEX.md` (quem faz o quê).
-3. `docs/ARCHITECTURE.md` (fluxos e componentes).
+2. `docs/ARCHITECTURE.md` (fluxos, componentes e diagramas Mermaid).
+3. `docs/MODULE_INDEX.md` (quem faz o quê).
 4. `docs/API.md` (contratos de endpoint).
 5. `docs/CONFIGURATION.md` (variáveis e hot-reload).
 6. `docs/FILE_CATALOG.md` (responsabilidade de cada arquivo em `app/app`).
 7. `docs/METHOD_CATALOG.md` (inventário de funções/métodos com assinatura e localização).
 8. `docs/DOCSTRING_BACKLOG.md` (itens pendentes de docstring detalhada).
 9. `docs/DOCUMENTATION_WORKFLOW.md` (processo para manter documentação viva).
-6. Código core:
+10. Código core:
 - `app/app/main.py`
 - `app/app/router_core.py`
 - `app/app/providers_async.py`

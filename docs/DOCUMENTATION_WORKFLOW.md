@@ -28,6 +28,19 @@ python3 scripts/generate_docs_catalog.py
 ```
 4. Revisar `docs/DOCSTRING_BACKLOG.md` e reduzir backlog quando possível.
 
+## Manutenção dos diagramas
+1. Mudou fluxo crítico, dependência externa ou responsabilidade entre módulos? Atualize o diagrama correspondente na mesma PR.
+2. Use `Mermaid` embutido em Markdown; não adicione imagem exportada quando o diagrama puder ser versionado como texto.
+3. Cada diagrama deve ter:
+   - título curto;
+   - objetivo em uma frase;
+   - nota curta explicando simplificações relevantes.
+4. Prefira:
+   - `flowchart` para arquitetura, topologia e dependências;
+   - `sequenceDiagram` para fluxos síncronos ou assíncronos.
+5. Mantenha nomes fiéis ao código e à stack real (`router_core.py`, `providers_async.py`, `MariaDB`, `Redis`, `ChromaDB`), evitando caixas genéricas.
+6. Se o fluxo ficar grande demais, divida em dois diagramas por responsabilidade em vez de aumentar ramificações.
+
 ## Critérios mínimos de qualidade de docstring
 1. Explicar responsabilidade do método e contexto de uso.
 2. Explicar parâmetros e retornos relevantes.

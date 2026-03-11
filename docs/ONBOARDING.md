@@ -24,6 +24,18 @@ Checklist:
 - Consulta básica retorna `200`.
 - Você consegue identificar modelo escolhido na resposta.
 
+### Como ler os diagramas
+Use esta ordem para reduzir o tempo de entendimento:
+1. Diagrama de contexto no `README.md`: mostra a stack local e as dependências externas.
+2. Diagrama de componentes em `docs/ARCHITECTURE.md`: mostra onde cada módulo entra no caminho de decisão.
+3. Sequência de `POST /query` em `docs/ARCHITECTURE.md`: mostra o fluxo síncrono crítico.
+4. Sequência de feedback assíncrono em `docs/ARCHITECTURE.md`: mostra o que acontece depois da resposta ao cliente.
+
+Regra prática:
+- Se a dúvida for “quem conversa com quem?”, comece pelo contexto.
+- Se a dúvida for “onde alterar comportamento?”, vá para componentes.
+- Se a dúvida for “em que ordem isso acontece?”, vá para sequência.
+
 ## Dia 2 - API e contratos
 1. Leia `docs/API.md`.
 2. Leia `docs/FILE_CATALOG.md` e `docs/METHOD_CATALOG.md` para mapear arquivos e métodos.
