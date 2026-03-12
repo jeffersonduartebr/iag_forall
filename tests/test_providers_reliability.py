@@ -251,6 +251,127 @@ class TestOllamaProvider:
             assert result.text == "Resposta final"
             assert result.reasoning == "Etapas internas de raciocinio"
 
+    @pytest.mark.asyncio
+    async def test_ollama_provider_emits_queue_wait_and_load_metrics(self):
+        """OllamaProvider should emit queue wait, inflight, load, and throughput metrics."""
+        metric_inflight = MagicMock()
+        metric_queue = MagicMock()
+        metric_load = MagicMock()
+        metric_loaded = MagicMock()
+        metric_tps = MagicMock()
+        for metric in (metric_inflight, metric_queue, metric_load, metric_loaded, metric_tps):
+            metric.labels.return_value = metric
+
+        mock_response = {
+            "response": "Resposta final",
+            "prompt_eval_count": 10,
+            "eval_count": 20,
+            "load_duration": 1_000_000_000,
+        }
+
+        mock_http_client = AsyncMock()
+        mock_response_obj = MagicMock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = MagicMock()
+        mock_http_client.post.return_value = mock_response_obj
+
+        with patch("app.providers_async.get_http_client", AsyncMock(return_value=mock_http_client)):
+            from app import providers_async as pa
+            from app.providers_async import OllamaProvider, local_breaker
+
+            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+            with patch.object(pa, "PROVIDER_INFLIGHT_REQUESTS", metric_inflight), \
+                 patch.object(pa, "PROVIDER_QUEUE_WAIT", metric_queue), \
+                 patch.object(pa, "OLLAMA_MODEL_LOAD_SECONDS", metric_load), \
+                 patch.object(pa, "OLLAMA_MODEL_LOADED", metric_loaded), \
+                 patch.object(pa, "GENERATION_TOKENS_PER_SECOND", metric_tps):
+                provider = OllamaProvider()
+                await provider.generate(prompt="Explique.", model="qwen3.5:2b", max_tokens=64)
+
+        assert metric_queue.observe.called
+        assert metric_inflight.inc.called
+        assert metric_inflight.dec.called
+        assert metric_load.observe.called
+        assert metric_loaded.set.called
+        assert metric_tps.observe.called
+
+    @pytest.mark.asyncio
+    async def test_dynamic_controller_reduces_and_recovers_limit(self):
+        """The dynamic controller should reduce on high VRAM and recover conservatively."""
+        from app import providers_async as pa
+
+        controller = pa.OllamaConcurrencyController()
+        cfg = {
+            "ollama_concurrency_limit": 5,
+            "ollama_dynamic_concurrency_enabled": True,
+            "ollama_concurrency_min": 1,
+            "ollama_concurrency_max": 5,
+            "ollama_vram_target_utilization": 0.72,
+            "ollama_vram_high_watermark": 0.82,
+            "ollama_vram_low_watermark": 0.55,
+            "ollama_vram_poll_interval_seconds": 5,
+            "ollama_concurrency_step_up": 1,
+            "ollama_concurrency_step_down": 1,
+            "ollama_concurrency_stable_windows": 2,
+            "ollama_gpu_index": 0,
+            "adaptive_timeout_enabled": True,
+            "base_timeout": 60,
+            "max_timeout": 1200,
+            "timeout_multiplier": 2.0,
+            "reasoning_multiplier": 3.0,
+        }
+
+        with patch.object(
+            pa,
+            "_runtime_provider_settings",
+            return_value=cfg,
+        ):
+            with patch.object(controller, "_read_vram_snapshot", side_effect=[
+                (9 * 1024**3, 10 * 1024**3),
+                (4 * 1024**3, 10 * 1024**3),
+                (4 * 1024**3, 10 * 1024**3),
+            ]):
+                await controller.force_refresh()
+                assert controller.get_effective_limit() == 4
+                await controller.force_refresh()
+                assert controller.get_effective_limit() == 4
+                await controller.force_refresh()
+                assert controller.get_effective_limit() == 5
+
+    @pytest.mark.asyncio
+    async def test_dynamic_controller_falls_back_when_telemetry_fails(self):
+        """The dynamic controller should keep a static fallback on telemetry failure."""
+        from app import providers_async as pa
+
+        controller = pa.OllamaConcurrencyController()
+        cfg = {
+            "ollama_concurrency_limit": 5,
+            "ollama_dynamic_concurrency_enabled": True,
+            "ollama_concurrency_min": 1,
+            "ollama_concurrency_max": 5,
+            "ollama_vram_target_utilization": 0.72,
+            "ollama_vram_high_watermark": 0.82,
+            "ollama_vram_low_watermark": 0.55,
+            "ollama_vram_poll_interval_seconds": 5,
+            "ollama_concurrency_step_up": 1,
+            "ollama_concurrency_step_down": 1,
+            "ollama_concurrency_stable_windows": 2,
+            "ollama_gpu_index": 0,
+            "adaptive_timeout_enabled": True,
+            "base_timeout": 60,
+            "max_timeout": 1200,
+            "timeout_multiplier": 2.0,
+            "reasoning_multiplier": 3.0,
+        }
+        with patch.object(
+            pa,
+            "_runtime_provider_settings",
+            return_value=cfg,
+        ):
+            with patch.object(controller, "_read_vram_snapshot", return_value=None):
+                await controller.force_refresh()
+                assert controller.get_effective_limit() == 5
+
 
 class TestCallModelWrapper:
     """Tests for the call_model wrapper function."""

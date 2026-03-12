@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict
 
 from fastapi import HTTPException
@@ -11,7 +12,12 @@ from fastapi import HTTPException
 from ..ab_testing import get_ab_test_manager
 from ..error_handling import ErrorCategory, create_error_response, log_error
 from ..guardrails import check_input_guardrails, sanitize_output_guardrails
-from ..observability import logger
+from ..observability import (
+    QUERY_POLICY_APPLIED,
+    POLICY_VERSION_ACTIVE,
+    ROUTER_QUERY_OUTCOME,
+    logger,
+)
 from ..providers_async import ProviderCallError, ProviderCircuitOpenError
 from ..router_core import route_and_answer
 from ..services.governance_runtime import check_runtime_budget, get_runtime_active_policy, record_runtime_usage
@@ -30,6 +36,11 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
 
     input_decision = check_input_guardrails(req.query)
     if not input_decision.allowed:
+        ROUTER_QUERY_OUTCOME.labels(
+            outcome="guardrail_blocked",
+            model="guardrails",
+            modality=(getattr(req, "modality", None) or "text").lower(),
+        ).inc()
         raise HTTPException(
             status_code=400,
             detail={
@@ -42,6 +53,11 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
 
     pre_budget = check_tenant_budget(req.tenant_id)
     if not pre_budget.allowed:
+        ROUTER_QUERY_OUTCOME.labels(
+            outcome="budget_rejected",
+            model="budget_control",
+            modality=(getattr(req, "modality", None) or "text").lower(),
+        ).inc()
         raise HTTPException(
             status_code=429,
             detail={
@@ -66,6 +82,8 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     active_policy = get_active_policy()
     if not selected_policy and active_policy:
         selected_policy = active_policy.get("version")
+    if active_policy and active_policy.get("version"):
+        POLICY_VERSION_ACTIVE.labels(policy_version=str(active_policy["version"])).set(1)
 
     assigned_variant = None
     if req.experiment_id and settings.AB_TESTING_ENABLED:
@@ -105,15 +123,30 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
             timeout_seconds=req.timeout_seconds,
         )
     except asyncio.TimeoutError:
+        ROUTER_QUERY_OUTCOME.labels(
+            outcome="provider_timeout",
+            model="unknown",
+            modality=modality,
+        ).inc()
         error_info = log_error(
             asyncio.TimeoutError("Request timed out"),
             category=ErrorCategory.PROVIDER_TIMEOUT,
         )
         raise HTTPException(status_code=504, detail=create_error_response(error_info))
     except ProviderCircuitOpenError as exc:
+        ROUTER_QUERY_OUTCOME.labels(
+            outcome="provider_unavailable",
+            model=exc.model or "unknown",
+            modality=modality,
+        ).inc()
         error_info = log_error(exc, category=ErrorCategory.CIRCUIT_OPEN, model=exc.model)
         raise HTTPException(status_code=503, detail=create_error_response(error_info))
     except ProviderCallError as exc:
+        ROUTER_QUERY_OUTCOME.labels(
+            outcome=exc.category,
+            model=exc.model or "unknown",
+            modality=modality,
+        ).inc()
         category_map = {
             "provider_timeout": ErrorCategory.PROVIDER_TIMEOUT,
             "provider_rate_limit": ErrorCategory.PROVIDER_RATE_LIMIT,
@@ -124,6 +157,11 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
         error_info = log_error(exc, category=category, model=exc.model)
         raise HTTPException(status_code=status_code, detail=create_error_response(error_info))
     except Exception as exc:
+        ROUTER_QUERY_OUTCOME.labels(
+            outcome="provider_unavailable",
+            model="unknown",
+            modality=modality,
+        ).inc()
         error_info = log_error(exc)
         logger.exception(f"[router] Erro: {exc}")
         raise HTTPException(status_code=500, detail=create_error_response(error_info))
@@ -136,6 +174,27 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     metadata["experiment_id"] = req.experiment_id
     metadata["experiment_variant"] = assigned_variant
     metadata["tenant_id"] = req.tenant_id
+
+    chosen_model = result.get("model", "unknown")
+    if selected_policy:
+        QUERY_POLICY_APPLIED.labels(policy_version=str(selected_policy)).inc()
+
+    fallback_used = bool(((result.get("route") or {}).get("fallback") or {}).get("used"))
+    answer_clean_str = str(result.get("answer", "") or "").strip()
+    if chosen_model == "semantic_cache":
+        outcome = "cache_hit"
+    elif not answer_clean_str:
+        outcome = "empty_answer"
+    elif fallback_used:
+        outcome = "fallback_success"
+    else:
+        outcome = "success"
+
+    ROUTER_QUERY_OUTCOME.labels(
+        outcome=outcome,
+        model=chosen_model,
+        modality=result.get("modality", modality),
+    ).inc()
 
     return {
         "result": result,
@@ -159,6 +218,7 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     combined_payload = {
         "raw_payload": raw_payload_str,
         "uncertainty_score": uncertainty_score,
+        "queue_enqueued_at": time.time(),
     }
 
     try:

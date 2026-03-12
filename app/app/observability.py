@@ -147,6 +147,36 @@ ROUTER_HISTORY_ENTRIES = Gauge(
     "Número de modelos com histórico EMA ativo",
     registry=registry,
 )
+ROUTER_QUERY_OUTCOME = Counter(
+    "router_query_outcome_total",
+    "Final outcome of one routed query",
+    ["outcome", "model", "modality"],
+    registry=registry,
+)
+ROUTER_STAGE_LATENCY = Histogram(
+    "router_stage_latency_seconds",
+    "Latency spent in individual routing stages",
+    ["stage"],
+    registry=registry,
+)
+ROUTER_ATTEMPTS_PER_QUERY = Histogram(
+    "router_attempts_per_query",
+    "Number of provider attempts required to finish one query",
+    registry=registry,
+    buckets=(1, 2, 3, 4, 5, 8),
+)
+ROUTER_RETRY_TOTAL = Counter(
+    "router_retry_total",
+    "Retries or fallback retries triggered during routing",
+    ["model", "reason"],
+    registry=registry,
+)
+ROUTER_RESPONSE_EMPTY = Counter(
+    "router_response_empty_total",
+    "Responses that completed without a usable final answer",
+    ["model", "reason"],
+    registry=registry,
+)
 FALLBACK_USED = Counter(
     "router_fallback_used_total",
     "Fallback usado entre modelos",
@@ -252,6 +282,75 @@ PROV_LAST_TS = Gauge(
     "Timestamp da última chamada ao provedor",
     ["model"],
     registry=registry,
+)
+PROVIDER_INFLIGHT_REQUESTS = Gauge(
+    "provider_inflight_requests",
+    "Current in-flight provider requests",
+    ["model"],
+    registry=registry,
+)
+PROVIDER_QUEUE_WAIT = Histogram(
+    "provider_queue_wait_seconds",
+    "Time spent waiting for provider concurrency slots",
+    ["model"],
+    registry=registry,
+    buckets=(0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+OLLAMA_MODEL_LOAD_SECONDS = Histogram(
+    "ollama_model_load_seconds",
+    "Time spent loading an Ollama model into memory",
+    ["model"],
+    registry=registry,
+    buckets=(0.0, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+OLLAMA_MODEL_LOADED = Gauge(
+    "ollama_model_loaded",
+    "Whether an Ollama model has been observed as loaded in the current process",
+    ["model"],
+    registry=registry,
+)
+OLLAMA_VRAM_USED_BYTES = Gauge(
+    "ollama_vram_used_bytes",
+    "Observed VRAM currently used by the Ollama GPU",
+    registry=registry,
+)
+OLLAMA_VRAM_TOTAL_BYTES = Gauge(
+    "ollama_vram_total_bytes",
+    "Observed total VRAM available on the Ollama GPU",
+    registry=registry,
+)
+OLLAMA_VRAM_UTILIZATION_RATIO = Gauge(
+    "ollama_vram_utilization_ratio",
+    "Observed VRAM utilization ratio on the Ollama GPU",
+    registry=registry,
+)
+OLLAMA_DYNAMIC_CONCURRENCY_LIMIT = Gauge(
+    "ollama_dynamic_concurrency_limit",
+    "Effective dynamic concurrency limit applied to Ollama requests",
+    registry=registry,
+)
+OLLAMA_DYNAMIC_CONCURRENCY_ADJUSTMENTS = Counter(
+    "ollama_dynamic_concurrency_adjustments_total",
+    "Number of dynamic Ollama concurrency adjustments",
+    ["direction"],
+    registry=registry,
+)
+OLLAMA_DYNAMIC_CONCURRENCY_TELEMETRY_FAILURES = Counter(
+    "ollama_dynamic_concurrency_telemetry_failures_total",
+    "Failures while reading GPU telemetry for Ollama dynamic concurrency",
+    registry=registry,
+)
+OLLAMA_DYNAMIC_CONCURRENCY_MODE = Gauge(
+    "ollama_dynamic_concurrency_mode",
+    "Dynamic concurrency mode for Ollama (0=static fallback, 1=dynamic active)",
+    registry=registry,
+)
+GENERATION_TOKENS_PER_SECOND = Histogram(
+    "generation_tokens_per_second",
+    "Observed token generation throughput by model",
+    ["model"],
+    registry=registry,
+    buckets=(0.1, 0.5, 1, 2, 5, 10, 20, 40, 80, 160),
 )
 
 # ------------------------------------------------------------
@@ -569,6 +668,40 @@ EMBEDDING_CACHE_HIT_RATE = Gauge(
     "Embedding L1 cache hit rate",
     registry=registry,
 )
+SEMANTIC_CACHE_LOOKUP_TOTAL = Counter(
+    "semantic_cache_lookup_total",
+    "Outcomes of semantic cache lookup attempts",
+    ["result"],
+    registry=registry,
+)
+SEMANTIC_CACHE_LATENCY = Histogram(
+    "semantic_cache_latency_seconds",
+    "Latency of semantic cache lookups",
+    ["result"],
+    registry=registry,
+    buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+RETRIEVAL_DOCUMENTS_RETURNED = Histogram(
+    "retrieval_documents_returned",
+    "Number of documents returned by the retrieval pipeline",
+    ["modality"],
+    registry=registry,
+    buckets=(0, 1, 2, 3, 5, 8, 13, 21),
+)
+RETRIEVAL_CONTEXT_TOKENS = Histogram(
+    "retrieval_context_tokens",
+    "Approximate token volume injected as retrieval context",
+    ["modality"],
+    registry=registry,
+    buckets=(0, 32, 64, 128, 256, 512, 1024, 2048, 4096),
+)
+RETRIEVAL_SCORE = Histogram(
+    "retrieval_score",
+    "Retrieval quality proxy derived from top-ranked candidate similarity",
+    ["modality"],
+    registry=registry,
+    buckets=(0.0, 0.1, 0.2, 0.4, 0.6, 0.75, 0.85, 0.92, 0.97, 1.0),
+)
 CENTROID_LOOKUP_DURATION = Histogram(
     "centroid_lookup_duration_seconds",
     "Duration of centroid lookup operations",
@@ -594,6 +727,17 @@ FEEDBACK_PROCESSING_LATENCY = Histogram(
     "Latency of background feedback processing",
     registry=registry,
     buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+)
+FEEDBACK_BACKLOG_AGE = Gauge(
+    "feedback_backlog_age_seconds",
+    "Age of the oldest observed feedback item when processing starts",
+    registry=registry,
+)
+FEEDBACK_TASK_FAILURES = Counter(
+    "feedback_task_failures_total",
+    "Failures observed in background feedback processing by stage",
+    ["stage"],
+    registry=registry,
 )
 EMA_BATCH_QUEUE_SIZE = Gauge(
     "ema_batch_queue_size",
@@ -666,6 +810,18 @@ PRICING_CACHE_HITS = Counter(
 PRICING_CACHE_MISSES = Counter(
     "pricing_cache_misses_total",
     "Total pricing cache misses (Redis layer)",
+    registry=registry,
+)
+POLICY_VERSION_ACTIVE = Gauge(
+    "policy_version_active",
+    "The currently active runtime policy version",
+    ["policy_version"],
+    registry=registry,
+)
+QUERY_POLICY_APPLIED = Counter(
+    "query_policy_applied_total",
+    "Queries processed under each policy version",
+    ["policy_version"],
     registry=registry,
 )
 

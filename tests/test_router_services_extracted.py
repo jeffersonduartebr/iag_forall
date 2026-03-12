@@ -52,6 +52,11 @@ def _deps_for_execution():
         "DEPENDENCY_FAILURES": metric,
         "logger": logger,
         "ROUTER_ROUTE_COST": metric,
+        "ROUTER_STAGE_LATENCY": metric,
+        "ROUTER_ATTEMPTS_PER_QUERY": metric,
+        "ROUTER_RETRY_TOTAL": metric,
+        "ROUTER_RESPONSE_EMPTY": metric,
+        "FALLBACK_USED": metric,
         "get_uncertainty_score": lambda query, modality: 0.2,
         "BLOCKED_PREFIXES": ("nomic-embed", "text-embedding", "bge-", "e5-"),
         "_is_error_budget_exceeded": lambda: False,
@@ -203,6 +208,8 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
         "ROUTER_QUALITY_AVG": metric_quality,
         "ROUTER_LOCAL_USAGE_RATIO": metric_local,
         "FEEDBACK_PROCESSING_LATENCY": metric_latency,
+        "FEEDBACK_BACKLOG_AGE": metric_latency,
+        "FEEDBACK_TASK_FAILURES": metric_latency,
     }
     state = {"EMA_HISTORY": _History()}
 
@@ -315,6 +322,33 @@ async def test_router_execution_covers_cache_uq_and_metadata_error_paths():
     assert out["metadata"]["prompt_tokens"] == 0
     assert out["cost_per_1k"] == 0.0
     assert any("UQ fail" in msg or "Metadata error" in msg for msg in warnings)
+
+
+@pytest.mark.asyncio
+async def test_router_execution_tracks_empty_answer_reason():
+    """Execution helper should mark empty responses with a classified reason."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+
+    async def _call_model(**kwargs):
+        return "", {"reasoning": "internal trace", "prompt_tokens": 1, "completion_tokens": 0, "cost_per_1k": 0.0}
+
+    deps["call_model"] = _call_model
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="pergunta",
+        system_prompt="SYS",
+        use_rag=False,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+    )
+    assert out["answer"] == ""
+    assert deps["ROUTER_RESPONSE_EMPTY"].values
 
 
 @pytest.mark.asyncio
@@ -441,6 +475,8 @@ async def test_router_feedback_covers_failure_branches():
         "ROUTER_QUALITY_AVG": SimpleNamespace(labels=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("metric fail"))),
         "ROUTER_LOCAL_USAGE_RATIO": metric,
         "FEEDBACK_PROCESSING_LATENCY": metric,
+        "FEEDBACK_BACKLOG_AGE": metric,
+        "FEEDBACK_TASK_FAILURES": metric,
     }
     await process_background_feedback_impl(
         deps=deps,

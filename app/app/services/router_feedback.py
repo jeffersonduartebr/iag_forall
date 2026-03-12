@@ -26,6 +26,13 @@ async def process_background_feedback_impl(
 ) -> None:
     """Process feedback using injected router_core dependencies and state."""
     feedback_start = time.time()
+    raw_payload_dict = raw_payload if isinstance(raw_payload, dict) else {}
+    enqueued_at = raw_payload_dict.get("queue_enqueued_at")
+    if isinstance(enqueued_at, (int, float)):
+        try:
+            deps["FEEDBACK_BACKLOG_AGE"].set(max(0.0, time.time() - float(enqueued_at)))
+        except Exception:
+            pass
     try:
         stats = deps["_get_ctx_stats"]("global")
         model_stats = stats.get(chosen_model, {})
@@ -58,6 +65,10 @@ async def process_background_feedback_impl(
                 predictor.save()
             except Exception:
                 final_quality = 5.0
+                try:
+                    deps["FEEDBACK_TASK_FAILURES"].labels(stage="judge").inc()
+                except Exception:
+                    pass
         else:
             final_quality = model_stats.get("mean", 0.5) * 10.0
 
@@ -70,6 +81,10 @@ async def process_background_feedback_impl(
             deps["bandit_update"](model=chosen_model, query=query, reward=reward, modality=modality)
         except Exception as exc:
             deps["logger"].warning(f"[Background] Bandit fail: {exc}")
+            try:
+                deps["FEEDBACK_TASK_FAILURES"].labels(stage="bandit_update").inc()
+            except Exception:
+                pass
 
         try:
             alpha = 0.2
@@ -97,6 +112,10 @@ async def process_background_feedback_impl(
             )
         except Exception as exc:
             deps["logger"].warning(f"[Background] EMA update failed: {exc}")
+            try:
+                deps["FEEDBACK_TASK_FAILURES"].labels(stage="ema_update").inc()
+            except Exception:
+                pass
 
         if final_quality >= 7.0:
             try:
@@ -109,6 +128,10 @@ async def process_background_feedback_impl(
                 )
             except Exception as exc:
                 deps["logger"].warning(f"[Background] Cache store failed: {exc}")
+                try:
+                    deps["FEEDBACK_TASK_FAILURES"].labels(stage="cache_write").inc()
+                except Exception:
+                    pass
 
         try:
             deps["ROUTER_QUALITY_AVG"].labels(model=chosen_model).set(final_quality)
@@ -136,8 +159,16 @@ async def process_background_feedback_impl(
             )
         except Exception as exc:
             deps["logger"].warning(f"[Background] Log fail: {exc}")
+            try:
+                deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc()
+            except Exception:
+                pass
 
         deps["FEEDBACK_PROCESSING_LATENCY"].observe(time.time() - feedback_start)
     except Exception as exc:
         deps["FEEDBACK_PROCESSING_LATENCY"].observe(time.time() - feedback_start)
+        try:
+            deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc()
+        except Exception:
+            pass
         deps["logger"].exception(f"[Background] Critical fail: {exc}")

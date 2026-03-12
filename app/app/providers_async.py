@@ -20,9 +20,11 @@ import logging
 import asyncio
 import base64
 import json
+import contextlib
 import traceback
 import re
 import warnings
+import subprocess
 from types import SimpleNamespace
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
@@ -76,6 +78,18 @@ from app.observability import (
     registry, 
     PROV_REQ, PROV_ERR, PROV_OK, PROV_LAT, PROV_COST,
     PROVIDER_TIMEOUT_ERRORS, PROVIDER_RATE_LIMIT_ERRORS,
+    PROVIDER_INFLIGHT_REQUESTS,
+    PROVIDER_QUEUE_WAIT,
+    OLLAMA_MODEL_LOAD_SECONDS,
+    OLLAMA_MODEL_LOADED,
+    OLLAMA_VRAM_USED_BYTES,
+    OLLAMA_VRAM_TOTAL_BYTES,
+    OLLAMA_VRAM_UTILIZATION_RATIO,
+    OLLAMA_DYNAMIC_CONCURRENCY_LIMIT,
+    OLLAMA_DYNAMIC_CONCURRENCY_ADJUSTMENTS,
+    OLLAMA_DYNAMIC_CONCURRENCY_TELEMETRY_FAILURES,
+    OLLAMA_DYNAMIC_CONCURRENCY_MODE,
+    GENERATION_TOKENS_PER_SECOND,
 )
 from prometheus_client.exposition import CONTENT_TYPE_LATEST
 from prometheus_client import generate_latest
@@ -271,6 +285,17 @@ REASONING_MODEL_KEYWORDS = ["phi4", "reasoning", "deepseek-r1", "cot", "math"]
 
 # Quick Win #6 & #7: defaults + runtime-reload settings
 DEFAULT_OLLAMA_CONCURRENCY_LIMIT = 5
+DEFAULT_OLLAMA_DYNAMIC_CONCURRENCY_ENABLED = False
+DEFAULT_OLLAMA_CONCURRENCY_MIN = 1
+DEFAULT_OLLAMA_CONCURRENCY_MAX = 5
+DEFAULT_OLLAMA_VRAM_TARGET_UTILIZATION = 0.72
+DEFAULT_OLLAMA_VRAM_HIGH_WATERMARK = 0.82
+DEFAULT_OLLAMA_VRAM_LOW_WATERMARK = 0.55
+DEFAULT_OLLAMA_VRAM_POLL_INTERVAL_SECONDS = 5
+DEFAULT_OLLAMA_CONCURRENCY_STEP_UP = 1
+DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN = 1
+DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS = 3
+DEFAULT_OLLAMA_GPU_INDEX = 0
 DEFAULT_ADAPTIVE_TIMEOUT_ENABLED = True
 DEFAULT_BASE_TIMEOUT = 60
 DEFAULT_MAX_TIMEOUT = 1200
@@ -279,6 +304,7 @@ DEFAULT_REASONING_MULTIPLIER = 3.0
 
 # Backward-compatible exported values (used by tests/legacy code)
 OLLAMA_CONCURRENCY_LIMIT = DEFAULT_OLLAMA_CONCURRENCY_LIMIT
+OLLAMA_DYNAMIC_CONCURRENCY_ENABLED = DEFAULT_OLLAMA_DYNAMIC_CONCURRENCY_ENABLED
 ADAPTIVE_TIMEOUT_ENABLED = DEFAULT_ADAPTIVE_TIMEOUT_ENABLED
 BASE_TIMEOUT = DEFAULT_BASE_TIMEOUT
 MAX_TIMEOUT = DEFAULT_MAX_TIMEOUT
@@ -294,6 +320,17 @@ def _runtime_provider_settings() -> Dict[str, Any]:
     """
     out = {
         "ollama_concurrency_limit": DEFAULT_OLLAMA_CONCURRENCY_LIMIT,
+        "ollama_dynamic_concurrency_enabled": DEFAULT_OLLAMA_DYNAMIC_CONCURRENCY_ENABLED,
+        "ollama_concurrency_min": DEFAULT_OLLAMA_CONCURRENCY_MIN,
+        "ollama_concurrency_max": DEFAULT_OLLAMA_CONCURRENCY_MAX,
+        "ollama_vram_target_utilization": DEFAULT_OLLAMA_VRAM_TARGET_UTILIZATION,
+        "ollama_vram_high_watermark": DEFAULT_OLLAMA_VRAM_HIGH_WATERMARK,
+        "ollama_vram_low_watermark": DEFAULT_OLLAMA_VRAM_LOW_WATERMARK,
+        "ollama_vram_poll_interval_seconds": DEFAULT_OLLAMA_VRAM_POLL_INTERVAL_SECONDS,
+        "ollama_concurrency_step_up": DEFAULT_OLLAMA_CONCURRENCY_STEP_UP,
+        "ollama_concurrency_step_down": DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN,
+        "ollama_concurrency_stable_windows": DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS,
+        "ollama_gpu_index": DEFAULT_OLLAMA_GPU_INDEX,
         "adaptive_timeout_enabled": DEFAULT_ADAPTIVE_TIMEOUT_ENABLED,
         "base_timeout": DEFAULT_BASE_TIMEOUT,
         "max_timeout": DEFAULT_MAX_TIMEOUT,
@@ -303,6 +340,17 @@ def _runtime_provider_settings() -> Dict[str, Any]:
     try:
         from app.settings_dynamic import settings as dynamic_settings
         out["ollama_concurrency_limit"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_LIMIT", str(DEFAULT_OLLAMA_CONCURRENCY_LIMIT))))
+        out["ollama_dynamic_concurrency_enabled"] = str(dynamic_settings.get("OLLAMA_DYNAMIC_CONCURRENCY_ENABLED", "0")).strip() in ("1", "true", "True")
+        out["ollama_concurrency_min"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_MIN", str(DEFAULT_OLLAMA_CONCURRENCY_MIN))))
+        out["ollama_concurrency_max"] = max(out["ollama_concurrency_min"], int(dynamic_settings.get("OLLAMA_CONCURRENCY_MAX", str(out["ollama_concurrency_limit"]))))
+        out["ollama_vram_target_utilization"] = min(0.99, max(0.1, float(dynamic_settings.get("OLLAMA_VRAM_TARGET_UTILIZATION", str(DEFAULT_OLLAMA_VRAM_TARGET_UTILIZATION)))))
+        out["ollama_vram_high_watermark"] = min(0.99, max(0.1, float(dynamic_settings.get("OLLAMA_VRAM_HIGH_WATERMARK", str(DEFAULT_OLLAMA_VRAM_HIGH_WATERMARK)))))
+        out["ollama_vram_low_watermark"] = min(out["ollama_vram_high_watermark"], max(0.0, float(dynamic_settings.get("OLLAMA_VRAM_LOW_WATERMARK", str(DEFAULT_OLLAMA_VRAM_LOW_WATERMARK)))))
+        out["ollama_vram_poll_interval_seconds"] = max(1, int(dynamic_settings.get("OLLAMA_VRAM_POLL_INTERVAL_SECONDS", str(DEFAULT_OLLAMA_VRAM_POLL_INTERVAL_SECONDS))))
+        out["ollama_concurrency_step_up"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_STEP_UP", str(DEFAULT_OLLAMA_CONCURRENCY_STEP_UP))))
+        out["ollama_concurrency_step_down"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_STEP_DOWN", str(DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN))))
+        out["ollama_concurrency_stable_windows"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_STABLE_WINDOWS", str(DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS))))
+        out["ollama_gpu_index"] = max(0, int(dynamic_settings.get("OLLAMA_GPU_INDEX", str(DEFAULT_OLLAMA_GPU_INDEX))))
         out["adaptive_timeout_enabled"] = str(dynamic_settings.get("ADAPTIVE_TIMEOUT_ENABLED", "1")).strip() in ("1", "true", "True")
         out["base_timeout"] = max(1, int(dynamic_settings.get("MIN_TIMEOUT", str(DEFAULT_BASE_TIMEOUT))))
         out["max_timeout"] = max(out["base_timeout"], int(dynamic_settings.get("MAX_TIMEOUT", str(DEFAULT_MAX_TIMEOUT))))
@@ -311,6 +359,202 @@ def _runtime_provider_settings() -> Dict[str, Any]:
     except Exception:
         pass
     return out
+
+
+class OllamaConcurrencyController:
+    """Track VRAM pressure and compute a conservative dynamic Ollama concurrency limit."""
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
+        self._lock = asyncio.Lock()
+        self._effective_limit = DEFAULT_OLLAMA_CONCURRENCY_LIMIT
+        self._last_limit = DEFAULT_OLLAMA_CONCURRENCY_LIMIT
+        self._latest_vram_used = 0
+        self._latest_vram_total = 0
+        self._latest_ratio = 0.0
+        self._telemetry_ok = False
+        self._stable_low_windows = 0
+
+    async def start(self) -> None:
+        """Start the background polling loop if dynamic mode is enabled."""
+        cfg = _runtime_provider_settings()
+        fallback_limit = int(cfg["ollama_concurrency_limit"])
+        self._effective_limit = fallback_limit
+        self._last_limit = fallback_limit
+        if not bool(cfg["ollama_dynamic_concurrency_enabled"]):
+            self._publish_mode(dynamic=False)
+            self._publish_limit(fallback_limit)
+            return
+
+        async with self._lock:
+            if self._task and not self._task.done():
+                return
+            self._stop_event = asyncio.Event()
+            self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        """Stop the background polling loop."""
+        async with self._lock:
+            if not self._task:
+                return
+            self._stop_event.set()
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+
+    def get_effective_limit(self) -> int:
+        """Return the latest effective concurrency limit."""
+        cfg = _runtime_provider_settings()
+        fallback_limit = int(cfg["ollama_concurrency_limit"])
+        if not bool(cfg["ollama_dynamic_concurrency_enabled"]):
+            self._publish_mode(dynamic=False)
+            self._publish_limit(fallback_limit)
+            return fallback_limit
+        return max(1, int(self._effective_limit or fallback_limit))
+
+    async def force_refresh(self) -> int:
+        """Run one telemetry refresh cycle synchronously and return the new limit."""
+        await self._refresh_once()
+        return self.get_effective_limit()
+
+    async def _run(self) -> None:
+        """Continuously refresh VRAM telemetry and the derived concurrency limit."""
+        while not self._stop_event.is_set():
+            await self._refresh_once()
+            cfg = _runtime_provider_settings()
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=float(cfg["ollama_vram_poll_interval_seconds"]),
+                )
+            except asyncio.TimeoutError:
+                continue
+
+    async def _refresh_once(self) -> None:
+        """Read VRAM telemetry once and update the effective concurrency limit."""
+        cfg = _runtime_provider_settings()
+        fallback_limit = int(cfg["ollama_concurrency_limit"])
+        if not bool(cfg["ollama_dynamic_concurrency_enabled"]):
+            self._effective_limit = fallback_limit
+            self._publish_mode(dynamic=False)
+            self._publish_limit(fallback_limit)
+            return
+
+        reading = await asyncio.to_thread(self._read_vram_snapshot, int(cfg["ollama_gpu_index"]))
+        if reading is None:
+            OLLAMA_DYNAMIC_CONCURRENCY_TELEMETRY_FAILURES.inc()
+            self._telemetry_ok = False
+            self._stable_low_windows = 0
+            self._effective_limit = self._effective_limit or fallback_limit
+            self._publish_mode(dynamic=False)
+            self._publish_limit(self._effective_limit)
+            return
+
+        used_bytes, total_bytes = reading
+        ratio = (used_bytes / total_bytes) if total_bytes > 0 else 0.0
+        self._latest_vram_used = used_bytes
+        self._latest_vram_total = total_bytes
+        self._latest_ratio = ratio
+        self._telemetry_ok = True
+        self._publish_mode(dynamic=True)
+        self._publish_vram(used_bytes, total_bytes, ratio)
+
+        current_limit = max(int(cfg["ollama_concurrency_min"]), min(int(cfg["ollama_concurrency_max"]), int(self._effective_limit or fallback_limit)))
+        high_watermark = float(cfg["ollama_vram_high_watermark"])
+        low_watermark = float(cfg["ollama_vram_low_watermark"])
+        step_up = int(cfg["ollama_concurrency_step_up"])
+        step_down = int(cfg["ollama_concurrency_step_down"])
+        stable_windows = int(cfg["ollama_concurrency_stable_windows"])
+        min_limit = int(cfg["ollama_concurrency_min"])
+        max_limit = min(int(cfg["ollama_concurrency_max"]), fallback_limit)
+
+        new_limit = current_limit
+        direction: str | None = None
+        if ratio >= high_watermark:
+            new_limit = max(min_limit, current_limit - step_down)
+            self._stable_low_windows = 0
+            direction = "down" if new_limit != current_limit else None
+        elif ratio <= low_watermark:
+            self._stable_low_windows += 1
+            if self._stable_low_windows >= stable_windows:
+                new_limit = min(max_limit, current_limit + step_up)
+                self._stable_low_windows = 0
+                direction = "up" if new_limit != current_limit else None
+        else:
+            self._stable_low_windows = 0
+
+        self._effective_limit = new_limit
+        self._publish_limit(new_limit)
+        if direction:
+            OLLAMA_DYNAMIC_CONCURRENCY_ADJUSTMENTS.labels(direction=direction).inc()
+            logger.info(
+                "[ollama] Dynamic concurrency adjusted from %s to %s (vram_used=%s, vram_total=%s, ratio=%.3f)",
+                current_limit,
+                new_limit,
+                used_bytes,
+                total_bytes,
+                ratio,
+            )
+
+    def _read_vram_snapshot(self, gpu_index: int) -> tuple[int, int] | None:
+        """Return one `(used_bytes, total_bytes)` snapshot from `nvidia-smi`."""
+        cmd = [
+            "nvidia-smi",
+            f"--id={gpu_index}",
+            "--query-gpu=memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            line = (proc.stdout or "").strip().splitlines()[0]
+            used_mb_str, total_mb_str = [part.strip() for part in line.split(",", 1)]
+            return int(used_mb_str) * 1024 * 1024, int(total_mb_str) * 1024 * 1024
+        except Exception:
+            return None
+
+    def _publish_vram(self, used_bytes: int, total_bytes: int, ratio: float) -> None:
+        """Publish current VRAM telemetry gauges."""
+        try:
+            OLLAMA_VRAM_USED_BYTES.set(used_bytes)
+            OLLAMA_VRAM_TOTAL_BYTES.set(total_bytes)
+            OLLAMA_VRAM_UTILIZATION_RATIO.set(ratio)
+        except Exception:
+            pass
+
+    def _publish_limit(self, limit: int) -> None:
+        """Publish current effective dynamic limit."""
+        try:
+            OLLAMA_DYNAMIC_CONCURRENCY_LIMIT.set(limit)
+        except Exception:
+            pass
+
+    def _publish_mode(self, *, dynamic: bool) -> None:
+        """Publish whether dynamic mode is active or static fallback is in effect."""
+        try:
+            OLLAMA_DYNAMIC_CONCURRENCY_MODE.set(1 if dynamic else 0)
+        except Exception:
+            pass
+
+
+_ollama_concurrency_controller = OllamaConcurrencyController()
+
+
+async def start_provider_runtime_services() -> None:
+    """Start background provider-side runtime services."""
+    await _ollama_concurrency_controller.start()
+
+
+async def stop_provider_runtime_services() -> None:
+    """Stop background provider-side runtime services."""
+    await _ollama_concurrency_controller.stop()
 
 
 def _get_adaptive_timeout(model: str) -> float:
@@ -406,6 +650,27 @@ class BaseProvider(ABC):
         """Generate a normalized model response for the given prompt."""
         pass
 
+    async def _acquire_slot(self, model: str) -> None:
+        """Wait for provider capacity and publish queue/in-flight metrics."""
+        wait_started_at = time.time()
+        await self.semaphore.acquire()
+        waited = time.time() - wait_started_at
+        try:
+            PROVIDER_QUEUE_WAIT.labels(model=model).observe(waited)
+            PROVIDER_INFLIGHT_REQUESTS.labels(model=model).inc()
+        except Exception:
+            pass
+
+    def _release_slot(self, model: str) -> None:
+        """Release provider capacity and publish in-flight metrics."""
+        try:
+            self.semaphore.release()
+        finally:
+            try:
+                PROVIDER_INFLIGHT_REQUESTS.labels(model=model).dec()
+            except Exception:
+                pass
+
     def _record_metrics(self, model: str, latency: float, cost: float, success: bool):
         """Publish provider-level success, latency, and cost metrics."""
         PROV_REQ.labels(model=model).inc()
@@ -415,6 +680,15 @@ class BaseProvider(ABC):
             PROV_COST.labels(model=model).observe(cost)
         else:
             PROV_ERR.labels(model=model).inc()
+
+    def _record_generation_metrics(self, model: str, completion_tokens: int, latency: float) -> None:
+        """Publish generation throughput metrics for successful responses."""
+        if latency <= 0 or completion_tokens <= 0:
+            return
+        try:
+            GENERATION_TOKENS_PER_SECOND.labels(model=model).observe(completion_tokens / latency)
+        except Exception:
+            pass
 
 # ==============================================================================
 # 6. PROVEDOR: OPENAI
@@ -437,52 +711,55 @@ class OpenAIProvider(BaseProvider):
         max_tokens = kwargs.get("max_tokens", 512)
         start = time.time()
 
-        async with self.semaphore:
+        await self._acquire_slot(model)
+        try:
+            content = [{"type": "text", "text": prompt}]
+            if image_b64:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+                })
+
+            api_args = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+            }
+
+            if model.startswith("o1-") or "gpt-5" in model:
+                api_args["max_completion_tokens"] = max_tokens
+            else:
+                api_args["max_tokens"] = max_tokens
+                api_args["temperature"] = temperature
+
+            resp = await self.client.chat.completions.create(**api_args)
+
+            text_out = resp.choices[0].message.content or ""
+            usage = resp.usage
+            p_tok = usage.prompt_tokens if usage else 0
+            c_tok = usage.completion_tokens if usage else 0
+
+            cost = get_model_cost(model, p_tok, c_tok)
+            latency = time.time() - start
+            self._record_metrics(model, latency, cost, True)
+            self._record_generation_metrics(model, c_tok, latency)
+
             try:
-                content = [{"type": "text", "text": prompt}]
-                if image_b64:
-                    content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
-                    })
+                raw_payload = json.dumps(resp.model_dump(), default=str)
+            except Exception:
+                raw_payload = str(resp)
 
-                api_args = {
-                    "model": model,
-                    "messages": [{"role": "user", "content": content}],
-                }
-
-                if model.startswith("o1-") or "gpt-5" in model:
-                    api_args["max_completion_tokens"] = max_tokens
-                else:
-                    api_args["max_tokens"] = max_tokens
-                    api_args["temperature"] = temperature
-
-                resp = await self.client.chat.completions.create(**api_args)
-                
-                text_out = resp.choices[0].message.content or ""
-                usage = resp.usage
-                p_tok = usage.prompt_tokens if usage else 0
-                c_tok = usage.completion_tokens if usage else 0
-                
-                cost = get_model_cost(model, p_tok, c_tok)
-                latency = time.time() - start
-                self._record_metrics(model, latency, cost, True)
-                
-                try:
-                    raw_payload = json.dumps(resp.model_dump(), default=str)
-                except Exception:
-                    raw_payload = str(resp)
-
-                return LLMResponse(
-                    text=text_out, latency=latency, load_time=0.0,
-                    cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
-                    model_used=model, raw_payload=raw_payload,
-                    reasoning=None # OpenAI o1 não expõe o reasoning token a token publicamente ainda
-                )
-            except Exception as e:
-                self._record_metrics(model, time.time()-start, 0, False)
-                structlog_logger.error("openai_provider_fail", error=str(e), model=model)
-                raise
+            return LLMResponse(
+                text=text_out, latency=latency, load_time=0.0,
+                cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
+                model_used=model, raw_payload=raw_payload,
+                reasoning=None,
+            )
+        except Exception as e:
+            self._record_metrics(model, time.time()-start, 0, False)
+            structlog_logger.error("openai_provider_fail", error=str(e), model=model)
+            raise
+        finally:
+            self._release_slot(model)
 
 # ==============================================================================
 # 7. PROVEDOR: ANTHROPIC
@@ -503,40 +780,43 @@ class AnthropicProvider(BaseProvider):
         model = kwargs.get("model", "claude-3-5-sonnet-latest")
         start = time.time()
 
-        async with self.semaphore:
-            try:
-                content = [{"type": "text", "text": prompt}]
-                if image_b64:
-                    content.append({
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}
-                    })
+        await self._acquire_slot(model)
+        try:
+            content = [{"type": "text", "text": prompt}]
+            if image_b64:
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}
+                })
 
-                resp = await self.client.messages.create(
-                    model=model,
-                    max_tokens=kwargs.get("max_tokens", 512),
-                    temperature=kwargs.get("temperature", 0.5),
-                    messages=[{"role": "user", "content": content}]
-                )
+            resp = await self.client.messages.create(
+                model=model,
+                max_tokens=kwargs.get("max_tokens", 512),
+                temperature=kwargs.get("temperature", 0.5),
+                messages=[{"role": "user", "content": content}]
+            )
 
-                text_out = resp.content[0].text
-                usage = resp.usage
-                p_tok = usage.input_tokens
-                c_tok = usage.output_tokens
-                
-                cost = get_model_cost(model, p_tok, c_tok)
-                latency = time.time() - start
-                self._record_metrics(model, latency, cost, True)
+            text_out = resp.content[0].text
+            usage = resp.usage
+            p_tok = usage.input_tokens
+            c_tok = usage.output_tokens
 
-                return LLMResponse(
-                    text=text_out, latency=latency, load_time=0.0,
-                    cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
-                    model_used=model, raw_payload=str(resp),
-                    reasoning=None
-                )
-            except Exception as e:
-                self._record_metrics(model, time.time()-start, 0, False)
-                raise
+            cost = get_model_cost(model, p_tok, c_tok)
+            latency = time.time() - start
+            self._record_metrics(model, latency, cost, True)
+            self._record_generation_metrics(model, c_tok, latency)
+
+            return LLMResponse(
+                text=text_out, latency=latency, load_time=0.0,
+                cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
+                model_used=model, raw_payload=str(resp),
+                reasoning=None
+            )
+        except Exception as e:
+            self._record_metrics(model, time.time()-start, 0, False)
+            raise
+        finally:
+            self._release_slot(model)
 
 # ==============================================================================
 # 8. PROVEDOR: GEMINI (GOOGLE)
@@ -607,37 +887,40 @@ class GeminiProvider(BaseProvider):
         model_name = kwargs.get("model", "gemini-1.5-flash")
         start = time.time()
 
-        async with self.semaphore:
-            try:
-                def _call():
-                    """Invoke the adapter in a worker thread-friendly callable."""
-                    return self._adapter.generate(
-                        model_name=model_name,
-                        prompt=prompt,
-                        image_b64=image_b64,
-                        temperature=kwargs.get("temperature", 0.5),
-                        max_tokens=kwargs.get("max_tokens", 512),
-                    )
-
-                resp = await asyncio.to_thread(_call)
-                text_out = resp.text or ""
-                
-                p_tok = count_tokens(prompt, model_name)
-                c_tok = count_tokens(text_out, model_name)
-                cost = get_model_cost(model_name, p_tok, c_tok)
-
-                latency = time.time() - start
-                self._record_metrics(model_name, latency, cost, True)
-
-                return LLMResponse(
-                    text=text_out, latency=latency, load_time=0.0,
-                    cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
-                    model_used=model_name, raw_payload=str(resp),
-                    reasoning=None
+        await self._acquire_slot(model_name)
+        try:
+            def _call():
+                """Invoke the adapter in a worker thread-friendly callable."""
+                return self._adapter.generate(
+                    model_name=model_name,
+                    prompt=prompt,
+                    image_b64=image_b64,
+                    temperature=kwargs.get("temperature", 0.5),
+                    max_tokens=kwargs.get("max_tokens", 512),
                 )
-            except Exception as e:
-                self._record_metrics(model_name, time.time()-start, 0, False)
-                raise
+
+            resp = await asyncio.to_thread(_call)
+            text_out = resp.text or ""
+
+            p_tok = count_tokens(prompt, model_name)
+            c_tok = count_tokens(text_out, model_name)
+            cost = get_model_cost(model_name, p_tok, c_tok)
+
+            latency = time.time() - start
+            self._record_metrics(model_name, latency, cost, True)
+            self._record_generation_metrics(model_name, c_tok, latency)
+
+            return LLMResponse(
+                text=text_out, latency=latency, load_time=0.0,
+                cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
+                model_used=model_name, raw_payload=str(resp),
+                reasoning=None
+            )
+        except Exception as e:
+            self._record_metrics(model_name, time.time()-start, 0, False)
+            raise
+        finally:
+            self._release_slot(model_name)
 
 # ==============================================================================
 # 9. PROVEDOR: OLLAMA (LOCAL & HTTPX ASYNC)
@@ -658,8 +941,7 @@ class OllamaProvider(BaseProvider):
 
     def _refresh_concurrency_limit(self) -> None:
         """Refresh the Ollama semaphore when runtime settings change."""
-        cfg = _runtime_provider_settings()
-        new_limit = int(cfg["ollama_concurrency_limit"])
+        new_limit = _ollama_concurrency_controller.get_effective_limit()
         if new_limit != self._concurrency_limit:
             self._concurrency_limit = new_limit
             self.semaphore = asyncio.Semaphore(new_limit)
@@ -688,95 +970,101 @@ class OllamaProvider(BaseProvider):
                     f"{prompt}"
                 )
 
-        async with self.semaphore:
-            try:
-                payload = {
-                    "model": model,
-                    "prompt": final_prompt,
-                    "stream": False,
-                    # Avoid empty final answers on models that support a separate
-                    # thinking channel (for example qwen3.5) unless we explicitly
-                    # want reasoning output.
-                    "think": is_reasoning_model,
-                    "options": {
-                        "temperature": kwargs.get("temperature", 0.5),
-                        "num_predict": kwargs.get("max_tokens", 512),
-                        "num_ctx": 4096
-                    }
+        await self._acquire_slot(model)
+        try:
+            payload = {
+                "model": model,
+                "prompt": final_prompt,
+                "stream": False,
+                # Avoid empty final answers on models that support a separate
+                # thinking channel (for example qwen3.5) unless we explicitly
+                # want reasoning output.
+                "think": is_reasoning_model,
+                "options": {
+                    "temperature": kwargs.get("temperature", 0.5),
+                    "num_predict": kwargs.get("max_tokens", 512),
+                    "num_ctx": 4096
                 }
-                if image_b64:
-                    payload["images"] = [image_b64]
+            }
+            if image_b64:
+                payload["images"] = [image_b64]
 
-                # Quick Win #6: Adaptive timeout based on model type
-                timeout = _get_adaptive_timeout(model)
+            # Quick Win #6: Adaptive timeout based on model type
+            timeout = _get_adaptive_timeout(model)
 
-                # Use pooled HTTP client for better performance
-                client = await get_http_client()
-                resp = await client.post(
-                    f"{self.host}/api/generate",
-                    json=payload,
-                    timeout=timeout  # Override default timeout for this request
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            client = await get_http_client()
+            resp = await client.post(
+                f"{self.host}/api/generate",
+                json=payload,
+                timeout=timeout
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-                raw_text = data.get("response", "").strip()
-                raw_thinking = data.get("thinking", "").strip()
-                
-                # --- EXTRAÇÃO DE REASONING (THINKING) ---
-                # Modelos como Phi-4 e DeepSeek-R1 retornam o raciocínio dentro de <think>...</think>
-                reasoning = None
-                text_out = raw_text
+            raw_text = data.get("response", "").strip()
+            raw_thinking = data.get("thinking", "").strip()
 
-                # Regex para capturar o conteúdo dentro de <think>
-                think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
-                if think_match:
-                    reasoning = think_match.group(1).strip()
-                    # Remove o pensamento da resposta final para o usuário
-                    text_out = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-                elif raw_thinking:
-                    reasoning = raw_thinking
-                
-                # --- EXTRAÇÃO DE LOAD TIME ---
-                load_ns = data.get("load_duration", 0)
-                load_sec = float(load_ns) / 1_000_000_000.0
-                
-                p_tok = data.get("prompt_eval_count", 0)
-                c_tok = data.get("eval_count", 0)
-                cost = get_model_cost(model, p_tok, c_tok)
-                latency = time.time() - start
-                
-                self._record_metrics(model, latency, cost, True)
+            reasoning = None
+            text_out = raw_text
 
-                return LLMResponse(
-                    text=text_out, 
-                    latency=latency, 
-                    load_time=load_sec,
-                    cost=cost,
-                    prompt_tokens=p_tok, 
-                    completion_tokens=c_tok,
-                    model_used=model, 
-                    raw_payload=json.dumps(data),
-                    reasoning=reasoning # <--- Campo preenchido se houver <think>
-                )
-            except Exception as e:
-                self._record_metrics(model, time.time()-start, 0, False)
-                
-                error_msg = str(e)
-                if isinstance(e, httpx.HTTPStatusError):
-                    try:
-                        error_msg += f" | Body: {e.response.text}"
-                    except Exception as body_err:
-                        error_msg += f" | Body read failed: {body_err}"
-                
-                structlog_logger.error(
-                    "provider_call_failed", 
-                    model=model, 
-                    error=error_msg,
-                    error_type=type(e).__name__,
-                    traceback=traceback.format_exc()
-                )
-                raise
+            think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
+            if think_match:
+                reasoning = think_match.group(1).strip()
+                text_out = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+            elif raw_thinking:
+                reasoning = raw_thinking
+
+            load_ns = data.get("load_duration", 0)
+            load_sec = float(load_ns) / 1_000_000_000.0
+
+            p_tok = data.get("prompt_eval_count", 0)
+            c_tok = data.get("eval_count", 0)
+            cost = get_model_cost(model, p_tok, c_tok)
+            latency = time.time() - start
+
+            self._record_metrics(model, latency, cost, True)
+            self._record_generation_metrics(model, c_tok, latency)
+            if load_sec > 0:
+                try:
+                    OLLAMA_MODEL_LOAD_SECONDS.labels(model=model).observe(load_sec)
+                except Exception:
+                    pass
+            try:
+                OLLAMA_MODEL_LOADED.labels(model=model).set(1)
+            except Exception:
+                pass
+
+            return LLMResponse(
+                text=text_out,
+                latency=latency,
+                load_time=load_sec,
+                cost=cost,
+                prompt_tokens=p_tok,
+                completion_tokens=c_tok,
+                model_used=model,
+                raw_payload=json.dumps(data),
+                reasoning=reasoning,
+            )
+        except Exception as e:
+            self._record_metrics(model, time.time()-start, 0, False)
+
+            error_msg = str(e)
+            if isinstance(e, httpx.HTTPStatusError):
+                try:
+                    error_msg += f" | Body: {e.response.text}"
+                except Exception as body_err:
+                    error_msg += f" | Body read failed: {body_err}"
+
+            structlog_logger.error(
+                "provider_call_failed",
+                model=model,
+                error=error_msg,
+                error_type=type(e).__name__,
+                traceback=traceback.format_exc()
+            )
+            raise
+        finally:
+            self._release_slot(model)
 
 # ==============================================================================
 # 10. FACTORY
@@ -963,3 +1251,10 @@ def reset_provider_runtime_state() -> None:
     ProviderFactory._instances = {}
     cloud_breaker._state = pybreaker.CircuitClosedState(cloud_breaker)
     local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+    _ollama_concurrency_controller._effective_limit = DEFAULT_OLLAMA_CONCURRENCY_LIMIT
+    _ollama_concurrency_controller._last_limit = DEFAULT_OLLAMA_CONCURRENCY_LIMIT
+    _ollama_concurrency_controller._latest_vram_used = 0
+    _ollama_concurrency_controller._latest_vram_total = 0
+    _ollama_concurrency_controller._latest_ratio = 0.0
+    _ollama_concurrency_controller._telemetry_ok = False
+    _ollama_concurrency_controller._stable_low_windows = 0

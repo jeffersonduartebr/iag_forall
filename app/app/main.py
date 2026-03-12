@@ -71,7 +71,7 @@ from .observability import (
     TOKENS_OUTPUT_TOTAL,
 )
 from .router_core import start_background_services, stop_background_services
-from .providers_async import close_http_client
+from .providers_async import close_http_client, start_provider_runtime_services, stop_provider_runtime_services
 from .utils.redis_client import get_redis, close_redis
 from .db import close_engine
 from .routers import rag_router
@@ -313,6 +313,7 @@ async def startup_event():
     logger.info(f"[startup] ThreadPoolExecutor configured with {executor_workers} workers")
     start_reload_listener()
     start_background_services()
+    await start_provider_runtime_services()
 
     # Start periodic cleanup task for rate limiting
     asyncio.create_task(rate_limit_cleanup())
@@ -395,6 +396,7 @@ async def shutdown_event():
     try:
         stop_background_services()
         stop_reload_listener()
+        await stop_provider_runtime_services()
         await close_http_client()
         logger.info("[shutdown] HTTP connection pool closed")
     except Exception as e:

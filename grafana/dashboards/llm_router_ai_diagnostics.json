@@ -28,40 +28,25 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          }
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 5,
         "x": 0,
         "y": 0
       },
       "id": 1,
       "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "min"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
@@ -70,11 +55,11 @@
       },
       "targets": [
         {
-          "expr": "min(component_health_status)",
+          "expr": "sum(increase(router_query_outcome_total{outcome=~\"success|fallback_success|cache_hit\"}[15m]))",
           "refId": "A"
         }
       ],
-      "title": "Saude minima",
+      "title": "Outcomes bons 15m",
       "type": "stat"
     },
     {
@@ -90,8 +75,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 4,
+        "w": 5,
+        "x": 5,
         "y": 0
       },
       "id": 2,
@@ -111,11 +96,11 @@
       },
       "targets": [
         {
-          "expr": "increase(api_requests_total[5m])",
+          "expr": "sum(increase(router_response_empty_total[15m]))",
           "refId": "A"
         }
       ],
-      "title": "Requests 5m",
+      "title": "Respostas vazias",
       "type": "stat"
     },
     {
@@ -125,14 +110,14 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 5,
+        "x": 10,
         "y": 0
       },
       "id": 3,
@@ -152,11 +137,11 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(api_request_latency_seconds_bucket[5m])) by (le))",
+          "expr": "sum(increase(router_retry_total[15m]))",
           "refId": "A"
         }
       ],
-      "title": "HTTP p95",
+      "title": "Retries 15m",
       "type": "stat"
     },
     {
@@ -172,8 +157,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 12,
+        "w": 5,
+        "x": 15,
         "y": 0
       },
       "id": 4,
@@ -193,11 +178,11 @@
       },
       "targets": [
         {
-          "expr": "increase(backpressure_rejected_total[5m])",
+          "expr": "sum(increase(router_fallback_used_total[15m]))",
           "refId": "A"
         }
       ],
-      "title": "Backpressure 5m",
+      "title": "Fallbacks 15m",
       "type": "stat"
     },
     {
@@ -214,7 +199,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 16,
+        "x": 20,
         "y": 0
       },
       "id": 5,
@@ -234,52 +219,11 @@
       },
       "targets": [
         {
-          "expr": "backpressure_current_requests",
+          "expr": "max by (policy_version) (policy_version_active)",
           "refId": "A"
         }
       ],
-      "title": "Em processamento",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus_llm_router"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 20,
-        "y": 0
-      },
-      "id": 6,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "expr": "feedback_backlog_age_seconds",
-          "refId": "A"
-        }
-      ],
-      "title": "Atraso feedback",
+      "title": "Policy ativa",
       "type": "stat"
     },
     {
@@ -291,6 +235,39 @@
         "h": 8,
         "w": 12,
         "x": 0,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (increase(router_query_outcome_total{model=~\"$model\", modality=~\"$modality\"}[15m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Outcomes por tipo",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
         "y": 4
       },
       "id": 7,
@@ -307,12 +284,12 @@
       },
       "targets": [
         {
-          "expr": "component_health_status",
-          "legendFormat": "{{component}}",
+          "expr": "sum by (reason, model) (increase(router_response_empty_total{model=~\"$model\"}[15m]))",
+          "legendFormat": "{{model}} {{reason}}",
           "refId": "A"
         }
       ],
-      "title": "Saude por componente",
+      "title": "Respostas vazias por motivo",
       "type": "timeseries"
     },
     {
@@ -323,8 +300,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 4
+        "x": 0,
+        "y": 12
       },
       "id": 8,
       "options": {
@@ -340,17 +317,55 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(api_request_latency_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p50",
+          "expr": "histogram_quantile(0.50, sum(rate(router_stage_latency_seconds_bucket[5m])) by (le, stage))",
+          "legendFormat": "{{stage}} p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(api_request_latency_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum(rate(router_stage_latency_seconds_bucket[5m])) by (le, stage))",
+          "legendFormat": "{{stage}} p95",
           "refId": "B"
         }
       ],
-      "title": "Latencia HTTP",
+      "title": "Latencia por etapa",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason, model) (increase(router_retry_total{model=~\"$model\"}[15m]))",
+          "legendFormat": "{{model}} {{reason}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (first_model, second_model) (increase(router_fallback_used_total[15m]))",
+          "legendFormat": "{{first_model}} -> {{second_model}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Retries e fallback",
       "type": "timeseries"
     },
     {
@@ -362,40 +377,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 12
-      },
-      "id": 9,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum by (outcome) (increase(router_query_outcome_total[15m]))",
-          "legendFormat": "{{outcome}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Outcomes 15m",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus_llm_router"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 12
+        "y": 20
       },
       "id": 10,
       "options": {
@@ -411,17 +393,17 @@
       },
       "targets": [
         {
-          "expr": "provider_inflight_requests{model=~\"$model\"}",
-          "legendFormat": "{{model}} inflight",
+          "expr": "sum by (result) (increase(semantic_cache_lookup_total[15m]))",
+          "legendFormat": "{{result}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(provider_queue_wait_seconds_bucket{model=~\"$model\"}[5m])) by (le, model))",
-          "legendFormat": "{{model}} p95 espera",
+          "expr": "histogram_quantile(0.95, sum(rate(semantic_cache_latency_seconds_bucket[5m])) by (le, result))",
+          "legendFormat": "{{result}} p95",
           "refId": "B"
         }
       ],
-      "title": "Saturacao do provider",
+      "title": "Diagnostico do cache semantico",
       "type": "timeseries"
     },
     {
@@ -432,8 +414,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 12
+        "x": 8,
+        "y": 20
       },
       "id": 11,
       "options": {
@@ -449,17 +431,22 @@
       },
       "targets": [
         {
-          "expr": "sum by (model) (increase(provider_timeout_errors_total[15m]))",
-          "legendFormat": "{{model}} timeout",
+          "expr": "histogram_quantile(0.50, sum(rate(retrieval_documents_returned_bucket[5m])) by (le, modality))",
+          "legendFormat": "{{modality}} docs p50",
           "refId": "A"
         },
         {
-          "expr": "sum by (model) (increase(provider_rate_limit_errors_total[15m]))",
-          "legendFormat": "{{model}} rate-limit",
+          "expr": "histogram_quantile(0.50, sum(rate(retrieval_context_tokens_bucket[5m])) by (le, modality))",
+          "legendFormat": "{{modality}} tokens p50",
           "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(retrieval_score_bucket[5m])) by (le, modality))",
+          "legendFormat": "{{modality}} score p50",
+          "refId": "C"
         }
       ],
-      "title": "Erros do provider",
+      "title": "Recuperacao e RAG",
       "type": "timeseries"
     },
     {
@@ -469,8 +456,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
+        "w": 8,
+        "x": 16,
         "y": 20
       },
       "id": 12,
@@ -487,27 +474,17 @@
       },
       "targets": [
         {
-          "expr": "db_pool_size",
-          "legendFormat": "pool",
+          "expr": "sum by (policy_version) (increase(query_policy_applied_total[15m]))",
+          "legendFormat": "{{policy_version}}",
           "refId": "A"
         },
         {
-          "expr": "db_pool_checked_out",
-          "legendFormat": "checked_out",
+          "expr": "sum by (experiment_id, variant) (increase(ab_experiment_assignments_total[15m]))",
+          "legendFormat": "{{experiment_id}} {{variant}}",
           "refId": "B"
-        },
-        {
-          "expr": "db_pool_checked_in",
-          "legendFormat": "checked_in",
-          "refId": "C"
-        },
-        {
-          "expr": "db_pool_overflow",
-          "legendFormat": "overflow",
-          "refId": "D"
         }
       ],
-      "title": "Pool do banco",
+      "title": "Policy e experimentos",
       "type": "timeseries"
     },
     {
@@ -518,8 +495,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 20
+        "x": 0,
+        "y": 28
       },
       "id": 13,
       "options": {
@@ -535,22 +512,22 @@
       },
       "targets": [
         {
-          "expr": "rate(feedback_processing_latency_seconds_sum[5m]) / rate(feedback_processing_latency_seconds_count[5m])",
-          "legendFormat": "latencia media",
+          "expr": "judge_calibration_score",
+          "legendFormat": "{{judge_model}} calibration",
           "refId": "A"
         },
         {
-          "expr": "feedback_backlog_age_seconds",
-          "legendFormat": "idade fila",
+          "expr": "judge_cache_agreement",
+          "legendFormat": "{{judge_model}} agreement",
           "refId": "B"
         },
         {
-          "expr": "ema_batch_queue_size",
-          "legendFormat": "fila EMA",
+          "expr": "judge_cache_hit_rate",
+          "legendFormat": "judge cache hit rate",
           "refId": "C"
         }
       ],
-      "title": "Feedback e fila",
+      "title": "Juizes e calibracao",
       "type": "timeseries"
     },
     {
@@ -561,7 +538,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 28
       },
       "id": 14,
@@ -578,70 +555,22 @@
       },
       "targets": [
         {
-          "expr": "query_drift_score",
-          "legendFormat": "drift",
+          "expr": "feedback_backlog_age_seconds",
+          "legendFormat": "idade fila",
           "refId": "A"
-        },
-        {
-          "expr": "increase(query_drift_detected_total[15m])",
-          "legendFormat": "deteccoes 15m",
-          "refId": "B"
-        },
-        {
-          "expr": "cascade_severity_level",
-          "legendFormat": "severidade cascata",
-          "refId": "C"
-        },
-        {
-          "expr": "cascade_failed_model_ratio",
-          "legendFormat": "ratio falha",
-          "refId": "D"
-        }
-      ],
-      "title": "Risco operacional",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus_llm_router"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 28
-      },
-      "id": 15,
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "dependency_circuit_state",
-          "legendFormat": "{{dependency}} state",
-          "refId": "A"
-        },
-        {
-          "expr": "sum by (dependency) (increase(dependency_failures_total[15m]))",
-          "legendFormat": "{{dependency}} falhas",
-          "refId": "B"
         },
         {
           "expr": "sum by (stage) (increase(feedback_task_failures_total[15m]))",
-          "legendFormat": "{{stage}} feedback",
+          "legendFormat": "{{stage}} falhas",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(user_feedback_received_total[15m]) by (feedback_type)",
+          "legendFormat": "{{feedback_type}}",
           "refId": "C"
         }
       ],
-      "title": "Falhas e dependencias",
+      "title": "Feedback e qualidade percebida",
       "type": "timeseries"
     }
   ],
@@ -650,7 +579,7 @@
   "style": "dark",
   "tags": [
     "llm-router",
-    "operacao"
+    "diagnostico-ia"
   ],
   "templating": {
     "list": [
@@ -664,7 +593,7 @@
           "type": "prometheus",
           "uid": "prometheus_llm_router"
         },
-        "definition": "label_values(providers_model_requests_total, model)",
+        "definition": "label_values(router_query_outcome_total, model)",
         "hide": 0,
         "includeAll": true,
         "label": "Modelo",
@@ -672,8 +601,35 @@
         "name": "model",
         "options": [],
         "query": {
-          "query": "label_values(providers_model_requests_total, model)",
+          "query": "label_values(router_query_outcome_total, model)",
           "refId": "Prometheus-model"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": ".*",
+          "value": ".*"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus_llm_router"
+        },
+        "definition": "label_values(router_query_outcome_total, modality)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Modalidade",
+        "multi": true,
+        "name": "modality",
+        "options": [],
+        "query": {
+          "query": "label_values(router_query_outcome_total, modality)",
+          "refId": "Prometheus-modality"
         },
         "refresh": 1,
         "regex": "",
@@ -684,13 +640,13 @@
     ]
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-12h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
-  "title": "LLM Router - Operacao",
-  "uid": "llm-router-operations",
-  "version": 2,
+  "title": "LLM Router - Diagnostico IA",
+  "uid": "llm-router-ai-diagnostics",
+  "version": 1,
   "weekStart": ""
 }

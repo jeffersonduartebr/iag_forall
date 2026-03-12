@@ -141,7 +141,7 @@
           "refId": "A"
         }
       ],
-      "title": "Uso de modelos locais",
+      "title": "Uso local",
       "type": "stat"
     },
     {
@@ -182,7 +182,7 @@
           "refId": "A"
         }
       ],
-      "title": "Reward medio do bandit",
+      "title": "Reward medio",
       "type": "stat"
     },
     {
@@ -223,7 +223,7 @@
           "refId": "A"
         }
       ],
-      "title": "Qualidade media percebida",
+      "title": "Qualidade percebida",
       "type": "stat"
     },
     {
@@ -233,7 +233,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 4
       },
@@ -251,22 +251,17 @@
       },
       "targets": [
         {
-          "expr": "increase(api_requests_total[15m])",
-          "legendFormat": "requests 15m",
+          "expr": "increase(total_cost_usd[$__interval])",
+          "legendFormat": "custo total",
           "refId": "A"
         },
         {
-          "expr": "router_history_entries_total",
-          "legendFormat": "historico ativo",
+          "expr": "sum by (provider) (increase(cost_by_provider_usd_total[$__interval]))",
+          "legendFormat": "{{provider}}",
           "refId": "B"
-        },
-        {
-          "expr": "ema_history_size",
-          "legendFormat": "EMA em memoria",
-          "refId": "C"
         }
       ],
-      "title": "Uso e memoria do roteador",
+      "title": "Custo por periodo",
       "type": "timeseries"
     },
     {
@@ -276,8 +271,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 4
       },
       "id": 7,
@@ -302,11 +297,6 @@
           "expr": "histogram_quantile(0.95, sum(rate(candidate_latency_seconds_bucket[5m])) by (le))",
           "legendFormat": "latencia p95",
           "refId": "B"
-        },
-        {
-          "expr": "rate(centroid_lookup_duration_seconds_sum[5m]) / rate(centroid_lookup_duration_seconds_count[5m])",
-          "legendFormat": "centroid lookup",
-          "refId": "C"
         }
       ],
       "title": "Latencia da solucao",
@@ -319,9 +309,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 12
+        "w": 8,
+        "x": 16,
+        "y": 4
       },
       "id": 8,
       "options": {
@@ -337,17 +327,17 @@
       },
       "targets": [
         {
-          "expr": "increase(total_cost_usd_total[15m])",
-          "legendFormat": "custo acumulado",
+          "expr": "histogram_quantile(0.50, sum(rate(generation_tokens_per_second_bucket{model=~\"$model\"}[5m])) by (le, model))",
+          "legendFormat": "{{model}} p50",
           "refId": "A"
         },
         {
-          "expr": "rate(candidate_estimated_cost_usd_sum[5m]) / rate(candidate_estimated_cost_usd_count[5m])",
-          "legendFormat": "custo medio por resposta",
+          "expr": "histogram_quantile(0.95, sum(rate(generation_tokens_per_second_bucket{model=~\"$model\"}[5m])) by (le, model))",
+          "legendFormat": "{{model}} p95",
           "refId": "B"
         }
       ],
-      "title": "Custo da solucao",
+      "title": "Throughput de geracao",
       "type": "timeseries"
     },
     {
@@ -357,8 +347,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 0,
         "y": 12
       },
       "id": 9,
@@ -375,17 +365,98 @@
       },
       "targets": [
         {
-          "expr": "cache_threshold_current",
-          "legendFormat": "threshold atual",
+          "expr": "sum by (model) (increase(tokens_input_total[15m]))",
+          "legendFormat": "{{model}} in",
           "refId": "A"
         },
         {
-          "expr": "increase(cache_threshold_adjustments_total[15m])",
-          "legendFormat": "ajustes 15m",
+          "expr": "sum by (model) (increase(tokens_output_total[15m]))",
+          "legendFormat": "{{model}} out",
           "refId": "B"
         }
       ],
-      "title": "Ajuste adaptativo de cache",
+      "title": "Volume de tokens",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 12
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(router_attempts_per_query_bucket[5m])) by (le))",
+          "legendFormat": "tentativas p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(router_attempts_per_query_bucket[5m])) by (le))",
+          "legendFormat": "tentativas p95",
+          "refId": "B"
+        }
+      ],
+      "title": "Tentativas por query",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 12
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "cache_hit_rate",
+          "legendFormat": "cache semantico",
+          "refId": "A"
+        },
+        {
+          "expr": "judge_cache_hit_rate",
+          "legendFormat": "judge cache",
+          "refId": "B"
+        },
+        {
+          "expr": "embedding_cache_hit_rate",
+          "legendFormat": "embedding cache",
+          "refId": "C"
+        }
+      ],
+      "title": "Taxa de reaproveitamento",
       "type": "timeseries"
     },
     {
@@ -399,10 +470,10 @@
         "x": 0,
         "y": 20
       },
-      "id": 10,
+      "id": 12,
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -413,22 +484,22 @@
       },
       "targets": [
         {
-          "expr": "uq_high_avg_quality",
-          "legendFormat": "alta UQ",
+          "expr": "sum by (result) (increase(semantic_cache_lookup_total[15m]))",
+          "legendFormat": "{{result}}",
           "refId": "A"
         },
         {
-          "expr": "uq_low_avg_quality",
-          "legendFormat": "baixa UQ",
+          "expr": "increase(visual_query_cache_hits_total[15m])",
+          "legendFormat": "visual hit",
           "refId": "B"
         },
         {
-          "expr": "uq_vs_error_correlation",
-          "legendFormat": "UQ x erro",
+          "expr": "increase(pricing_cache_hits_total[15m])",
+          "legendFormat": "pricing hit",
           "refId": "C"
         }
       ],
-      "title": "Qualidade x incerteza",
+      "title": "Reuso por camada",
       "type": "timeseries"
     },
     {
@@ -442,10 +513,10 @@
         "x": 8,
         "y": 20
       },
-      "id": 11,
+      "id": 13,
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -456,22 +527,17 @@
       },
       "targets": [
         {
-          "expr": "cache_hit_rate",
-          "legendFormat": "cache geral",
+          "expr": "sum by (model) (increase(bandit_select_total[15m]))",
+          "legendFormat": "{{model}} select",
           "refId": "A"
         },
         {
-          "expr": "embedding_cache_hit_rate",
-          "legendFormat": "embedding",
+          "expr": "sum by (model) (increase(bandit_update_total[15m]))",
+          "legendFormat": "{{model}} update",
           "refId": "B"
-        },
-        {
-          "expr": "judge_cache_hit_rate",
-          "legendFormat": "judge",
-          "refId": "C"
         }
       ],
-      "title": "Efetividade do cache",
+      "title": "Atividade do bandit",
       "type": "timeseries"
     },
     {
@@ -485,10 +551,10 @@
         "x": 16,
         "y": 20
       },
-      "id": 12,
+      "id": 14,
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -500,43 +566,70 @@
       "targets": [
         {
           "expr": "router_history_entries_total",
-          "legendFormat": "historico roteador",
+          "legendFormat": "historico ativo",
           "refId": "A"
         },
         {
           "expr": "ema_history_size",
-          "legendFormat": "EMA em memoria",
+          "legendFormat": "EMA history",
           "refId": "B"
         },
         {
-          "expr": "increase(ema_history_evictions_total[15m])",
-          "legendFormat": "evictions 15m",
+          "expr": "predictor_accuracy{model=~\"$model\"}",
+          "legendFormat": "{{model}} accuracy",
           "refId": "C"
         }
       ],
-      "title": "Memoria e aprendizado",
+      "title": "Memoria e aprendizagem",
       "type": "timeseries"
     }
   ],
-  "refresh": "15s",
-  "schemaVersion": 37,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
   "tags": [
-    "llm",
-    "router",
-    "efficiency",
-    "prometheus"
+    "llm-router",
+    "eficiencia"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": ".*",
+          "value": ".*"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus_llm_router"
+        },
+        "definition": "label_values(providers_model_requests_total, model)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Modelo",
+        "multi": true,
+        "name": "model",
+        "options": [],
+        "query": {
+          "query": "label_values(providers_model_requests_total, model)",
+          "refId": "Prometheus-model"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-24h",
     "to": "now"
   },
   "timepicker": {},
-  "timezone": "browser",
+  "timezone": "",
   "title": "LLM Router - Eficiencia da Solucao",
-  "uid": "llm-router-efficiency-balanced",
-  "version": 1,
+  "uid": "llm-router-efficiency",
+  "version": 2,
   "weekStart": ""
 }

@@ -19,6 +19,13 @@ from typing import Optional, Dict, Any
 from .settings_dynamic import settings
 from .embeddings import embed_text, embed_image, embed_multimodal
 from .vectorstore import query_embedding, add_document
+from .observability import (
+    L1_CACHE_HITS,
+    L1_CACHE_MISSES,
+    L1_CACHE_SIZE,
+    SEMANTIC_CACHE_LOOKUP_TOTAL,
+    SEMANTIC_CACHE_LATENCY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +210,7 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
     the router. A miss returns ``None`` and allows normal inference to continue.
     """
     modality = _normalize_modality(modality)
+    lookup_started_at = time.time()
     
     # 1. L1 Cache (Exact Match em RAM)
     # Hash da query + imagem para chave rápida
@@ -211,11 +219,29 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
 
     if cached := _l1_cache.get(full_hash):
         logger.info("[semantic_cache] L1 RAM Hit")
+        try:
+            L1_CACHE_HITS.inc()
+            L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
+            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="hit").inc()
+            SEMANTIC_CACHE_LATENCY.labels(result="hit").observe(time.time() - lookup_started_at)
+        except Exception:
+            pass
         return cached
+    try:
+        L1_CACHE_MISSES.inc()
+        L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
+    except Exception:
+        pass
 
     # 2. Gera Embedding
     q_emb = await _make_embedding(query, modality, image_b64)
-    if q_emb is None: return None
+    if q_emb is None:
+        try:
+            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="error").inc()
+            SEMANTIC_CACHE_LATENCY.labels(result="error").observe(time.time() - lookup_started_at)
+        except Exception:
+            pass
+        return None
 
     # 3. L2 Cache (Semantic Search no Chroma)
     try:
@@ -227,10 +253,20 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
         )
         
         if not results:
+            try:
+                SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="miss").inc()
+                SEMANTIC_CACHE_LATENCY.labels(result="miss").observe(time.time() - lookup_started_at)
+            except Exception:
+                pass
             return None
 
         distance, meta = _extract_first_result(results)
         if distance is None or meta is None:
+            try:
+                SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="empty_result").inc()
+                SEMANTIC_CACHE_LATENCY.labels(result="empty_result").observe(time.time() - lookup_started_at)
+            except Exception:
+                pass
             return None
 
         # Chroma retorna 'distances' (Cosine Distance).
@@ -258,10 +294,26 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
             # Atualiza L1
             _l1_cache.store(full_hash, res)
             logger.debug(f"[semantic_cache] L1 cache stored for hash {full_hash[:16]}...")
+            try:
+                L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
+                SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="hit").inc()
+                SEMANTIC_CACHE_LATENCY.labels(result="hit").observe(time.time() - lookup_started_at)
+            except Exception:
+                pass
             return res
+        try:
+            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="below_threshold").inc()
+            SEMANTIC_CACHE_LATENCY.labels(result="below_threshold").observe(time.time() - lookup_started_at)
+        except Exception:
+            pass
             
     except Exception as e:
         logger.warning(f"[semantic_cache] Chroma lookup fail: {e}")
+        try:
+            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="error").inc()
+            SEMANTIC_CACHE_LATENCY.labels(result="error").observe(time.time() - lookup_started_at)
+        except Exception:
+            pass
         return None
 
     return None
@@ -294,6 +346,10 @@ async def store_cache(query: str, answer: str, modality: str="text", image_b64: 
         "image_output_b64": None
     }
     _l1_cache.store(full_hash, l1_entry)
+    try:
+        L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
+    except Exception:
+        pass
 
     try:
         # Estratégia:

@@ -24,12 +24,20 @@ async def route_and_answer_internal_impl(
 ) -> Dict[str, Any]:
     """Execute the synchronous routing path using injected dependencies."""
     start_time = time.time()
+
+    def _observe_stage(stage: str, started_at: float) -> None:
+        try:
+            deps["ROUTER_STAGE_LATENCY"].labels(stage=stage).observe(time.time() - started_at)
+        except Exception:
+            pass
+
     modality = deps["normalize_modality"](modality, image_b64)
     max_tokens = max_tokens or deps["settings"].MAX_TOKENS_DEFAULT
     temperature = temperature or deps["settings"].TEMPERATURE_DEFAULT
 
     if use_cache:
         cached = None
+        cache_started_at = time.time()
         try:
             if deps["_dep_cache_breaker"].current_state != "open":
                 try:
@@ -48,11 +56,17 @@ async def route_and_answer_internal_impl(
             except Exception:
                 pass
             deps["_record_dependency_breaker_metrics"]()
+        finally:
+            _observe_stage("cache_lookup", cache_started_at)
 
         if cached:
             deps["logger"].info(f"[router] Cache HIT ({cached.get('similarity', 0):.2f})")
             try:
                 deps["ROUTER_ROUTE_COST"].labels(route_type="cache").inc(0.0)
+            except Exception:
+                pass
+            try:
+                deps["ROUTER_ATTEMPTS_PER_QUERY"].observe(1)
             except Exception:
                 pass
             return {
@@ -74,6 +88,7 @@ async def route_and_answer_internal_impl(
             }
 
     uncertainty_score = 0.5
+    precheck_started_at = time.time()
     try:
         if deps["_dep_uq_breaker"].current_state != "open":
             uncertainty_score = deps["_dep_uq_breaker"].call(deps["get_uncertainty_score"], query, modality)
@@ -85,6 +100,8 @@ async def route_and_answer_internal_impl(
             pass
         deps["_record_dependency_breaker_metrics"]()
         deps["logger"].warning(f"[router] UQ fail: {exc}")
+    finally:
+        _observe_stage("precheck", precheck_started_at)
 
     all_candidates = (
         deps["settings"].CANDIDATE_MODELS_LIST
@@ -127,6 +144,7 @@ async def route_and_answer_internal_impl(
         )
 
     if use_rag:
+        retrieval_started_at = time.time()
         try:
             rag_mode = rag_modality if not (image_b64 and modality != "text") else modality
             aug = await deps["build_augmented_prompt"](query, modality=rag_mode, image_b64=image_b64)
@@ -144,6 +162,8 @@ async def route_and_answer_internal_impl(
                 use_rag=True,
                 rag_text=None,
             )
+        finally:
+            _observe_stage("retrieval", retrieval_started_at)
     else:
         final_prompt = deps["build_final_prompt"](
             query=query,
@@ -170,12 +190,22 @@ async def route_and_answer_internal_impl(
                 max_tokens=max_tokens,
             )
 
+        provider_started_at = time.time()
         fallback_result = await deps["execute_with_fallback"](
             primary_model=chosen,
             execute_fn=_execute_provider,
             max_fallbacks=max_fallbacks,
         )
+        _observe_stage("provider_call", provider_started_at)
         if not fallback_result.success:
+            try:
+                for err in fallback_result.errors:
+                    deps["ROUTER_RETRY_TOTAL"].labels(
+                        model=fallback_result.model_used or chosen,
+                        reason=err.get("category", "provider_error"),
+                    ).inc()
+            except Exception:
+                pass
             if fallback_result.errors:
                 last = fallback_result.errors[-1]
                 raise deps["ProviderCallError"](
@@ -196,7 +226,22 @@ async def route_and_answer_internal_impl(
         fallback_used = len(fallback_result.models_tried) > 1
         fallback_models_tried = fallback_result.models_tried
         fallback_errors = fallback_result.errors
+        try:
+            retry_count = max(0, len(fallback_models_tried) - 1)
+            for err in fallback_errors:
+                deps["ROUTER_RETRY_TOTAL"].labels(
+                    model=chosen,
+                    reason=err.get("category", "provider_error"),
+                ).inc()
+            if fallback_used and len(fallback_models_tried) >= 2:
+                deps["FALLBACK_USED"].labels(
+                    first_model=fallback_models_tried[0],
+                    second_model=fallback_models_tried[1],
+                ).inc()
+        except Exception:
+            retry_count = max(0, len(fallback_models_tried) - 1)
     else:
+        provider_started_at = time.time()
         out, meta = await deps["call_model"](
             model=chosen,
             prompt=final_prompt,
@@ -205,9 +250,12 @@ async def route_and_answer_internal_impl(
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        _observe_stage("provider_call", provider_started_at)
+        retry_count = 0
 
     latency_s = round(time.time() - start_time, 3)
 
+    postprocess_started_at = time.time()
     try:
         p_tok, c_tok, total_cost, load_time_s, meta_safe = deps["parse_meta_cost"](
             meta=meta,
@@ -217,15 +265,29 @@ async def route_and_answer_internal_impl(
     except Exception as exc:
         deps["logger"].warning(f"[router] Metadata error: {exc}")
         p_tok, c_tok, total_cost, load_time_s, meta_safe = 0, 0, 0.0, 0.0, {}
+    finally:
+        _observe_stage("postprocess", postprocess_started_at)
 
     route_type = "fallback" if fallback_used else "direct"
     try:
         deps["ROUTER_ROUTE_COST"].labels(route_type=route_type).inc(float(total_cost))
     except Exception:
         pass
+    try:
+        deps["ROUTER_ATTEMPTS_PER_QUERY"].observe(max(1, retry_count + 1))
+    except Exception:
+        pass
+
+    answer_text = out if isinstance(out, str) else str(out)
+    if not answer_text.strip():
+        empty_reason = "thinking_only" if (meta_safe.get("reasoning") or meta.get("reasoning")) else "empty_content"
+        try:
+            deps["ROUTER_RESPONSE_EMPTY"].labels(model=chosen, reason=empty_reason).inc()
+        except Exception:
+            pass
 
     return {
-        "answer": out if isinstance(out, str) else str(out),
+        "answer": answer_text,
         "model": chosen,
         "modality": modality,
         "image_output_b64": meta_safe.get("image_output_b64"),

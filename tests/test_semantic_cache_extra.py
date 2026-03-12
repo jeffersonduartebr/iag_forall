@@ -14,6 +14,24 @@ import pytest
 from app import semantic_cache as sc
 
 
+class _Metric:
+    def __init__(self):
+        self.values = []
+
+    def labels(self, **kwargs):
+        self.values.append(("labels", kwargs))
+        return self
+
+    def inc(self, value=1):
+        self.values.append(("inc", value))
+
+    def set(self, value):
+        self.values.append(("set", value))
+
+    def observe(self, value):
+        self.values.append(("observe", value))
+
+
 @pytest.mark.asyncio
 async def test_make_embedding_and_normalize_paths(monkeypatch):
     """Testa make embedding and normalize paths."""
@@ -37,6 +55,17 @@ async def test_make_embedding_and_normalize_paths(monkeypatch):
 @pytest.mark.asyncio
 async def test_check_cache_branches(monkeypatch):
     """Testa check cache branches."""
+    metric_lookup = _Metric()
+    metric_latency = _Metric()
+    metric_l1_hits = _Metric()
+    metric_l1_misses = _Metric()
+    metric_l1_size = _Metric()
+    monkeypatch.setattr(sc, "SEMANTIC_CACHE_LOOKUP_TOTAL", metric_lookup)
+    monkeypatch.setattr(sc, "SEMANTIC_CACHE_LATENCY", metric_latency)
+    monkeypatch.setattr(sc, "L1_CACHE_HITS", metric_l1_hits)
+    monkeypatch.setattr(sc, "L1_CACHE_MISSES", metric_l1_misses)
+    monkeypatch.setattr(sc, "L1_CACHE_SIZE", metric_l1_size)
+
     class _L1:
         """Represent `_L1` within this module.
 
@@ -127,6 +156,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert out["text"] == "resp"
     assert out["model_used"] == "m"
     assert l1.saved
+    assert any(item[0] == "labels" and item[1]["result"] == "below_threshold" for item in metric_lookup.values)
+    assert any(item[0] == "labels" and item[1]["result"] == "empty_result" for item in metric_lookup.values)
+    assert any(item[0] == "observe" for item in metric_latency.values)
 
 
 def test_extract_first_result_guards_partial_payloads():

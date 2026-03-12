@@ -54,10 +54,19 @@ _rds = get_redis()
 
 # Metrics (safe import)
 try:
-    from .observability import VISUAL_QUERY_CACHE_HITS, VISUAL_QUERY_CACHE_MISSES
+    from .observability import (
+        VISUAL_QUERY_CACHE_HITS,
+        VISUAL_QUERY_CACHE_MISSES,
+        RETRIEVAL_DOCUMENTS_RETURNED,
+        RETRIEVAL_CONTEXT_TOKENS,
+        RETRIEVAL_SCORE,
+    )
 except ImportError:
     VISUAL_QUERY_CACHE_HITS = None
     VISUAL_QUERY_CACHE_MISSES = None
+    RETRIEVAL_DOCUMENTS_RETURNED = None
+    RETRIEVAL_CONTEXT_TOKENS = None
+    RETRIEVAL_SCORE = None
 
 
 def _hash_image(image_b64: str) -> str:
@@ -261,6 +270,14 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                 vector_doc_ids = ids
                 for i, doc_id in enumerate(ids):
                     vector_docs_map[doc_id] = docs[i]
+                try:
+                    distances = (res.get("distances") or [[]])[0]
+                    if distances:
+                        top_similarity = max(0.0, min(1.0, 1.0 - float(distances[0])))
+                        if RETRIEVAL_SCORE:
+                            RETRIEVAL_SCORE.labels(modality=rag_mode).observe(top_similarity)
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"[rag_local] Erro Vector Search: {e}")
 
@@ -294,6 +311,11 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     
     # Se não achou nada, retorna query original
     if not candidate_texts:
+        try:
+            if RETRIEVAL_DOCUMENTS_RETURNED:
+                RETRIEVAL_DOCUMENTS_RETURNED.labels(modality=rag_mode).observe(0)
+        except Exception:
+            pass
         return query
 
     # --- 4. Re-Ranking (Cross-Encoder) ---
@@ -305,6 +327,13 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         final_docs = candidate_texts[:k]
 
     context = "\n\n".join(final_docs)
+    try:
+        if RETRIEVAL_DOCUMENTS_RETURNED:
+            RETRIEVAL_DOCUMENTS_RETURNED.labels(modality=rag_mode).observe(len(final_docs))
+        if RETRIEVAL_CONTEXT_TOKENS:
+            RETRIEVAL_CONTEXT_TOKENS.labels(modality=rag_mode).observe(max(0, len(context) // 4))
+    except Exception:
+        pass
     logger.info(f"[rag_local] Hybrid RAG: {len(final_docs)} docs finais (Vector={len(vector_doc_ids)}, BM25={len(bm25_doc_ids)}).")
 
     return (

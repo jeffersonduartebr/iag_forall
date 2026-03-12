@@ -56,6 +56,21 @@ def _settings_map(monkeypatch, qr, mapping):
     monkeypatch.setattr(qr.settings, "get", lambda key, fallback=None: mapping.get(key, fallback))
 
 
+class _Metric:
+    def __init__(self):
+        self.values = []
+
+    def labels(self, **kwargs):
+        self.values.append(("labels", kwargs))
+        return self
+
+    def inc(self, value=1):
+        self.values.append(("inc", value))
+
+    def set(self, value):
+        self.values.append(("set", value))
+
+
 @pytest.mark.asyncio
 async def test_process_query_request_blocks_guardrails(monkeypatch):
     """Blocked input should short-circuit before routing."""
@@ -98,7 +113,13 @@ async def test_process_query_request_blocks_budget(monkeypatch):
 async def test_process_query_request_applies_policy_and_variant(monkeypatch):
     """Assigned experiments should override selected policy metadata."""
     from app.services import query_runtime as qr
+    outcome_metric = _Metric()
+    policy_counter = _Metric()
+    policy_gauge = _Metric()
 
+    monkeypatch.setattr(qr, "ROUTER_QUERY_OUTCOME", outcome_metric)
+    monkeypatch.setattr(qr, "QUERY_POLICY_APPLIED", policy_counter)
+    monkeypatch.setattr(qr, "POLICY_VERSION_ACTIVE", policy_gauge)
     monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
     monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: _allow_budget())
     monkeypatch.setattr(qr, "get_active_policy", lambda: {"version": "policy-v1"})
@@ -120,13 +141,18 @@ async def test_process_query_request_applies_policy_and_variant(monkeypatch):
     assert out["result"]["metadata"]["policy_version"] == "policy-v2"
     assert out["result"]["metadata"]["experiment_variant"]["name"] == "B"
     assert out["result"]["metadata"]["guardrail_output_tags"] == ["safe"]
+    assert any(item[0] == "inc" for item in policy_counter.values)
+    assert any(item[0] == "inc" for item in outcome_metric.values)
+    assert any(item[0] == "set" for item in policy_gauge.values)
 
 
 @pytest.mark.asyncio
 async def test_process_query_request_uses_first_image_for_vision(monkeypatch):
     """Image requests should switch modality and pass the first image to routing."""
     from app.services import query_runtime as qr
+    outcome_metric = _Metric()
 
+    monkeypatch.setattr(qr, "ROUTER_QUERY_OUTCOME", outcome_metric)
     captured = {}
     monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
     monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: _allow_budget())
@@ -146,6 +172,29 @@ async def test_process_query_request_uses_first_image_for_vision(monkeypatch):
     assert captured["modality"] == "vision"
     assert captured["image_b64"] == "img1"
     assert out["modality"] == "vision"
+    assert any(item[0] == "labels" and item[1]["outcome"] == "success" for item in outcome_metric.values)
+
+
+@pytest.mark.asyncio
+async def test_process_query_request_records_empty_answer_outcome(monkeypatch):
+    """Empty sanitized answers should be tracked as a distinct query outcome."""
+    from app.services import query_runtime as qr
+
+    outcome_metric = _Metric()
+    monkeypatch.setattr(qr, "ROUTER_QUERY_OUTCOME", outcome_metric)
+    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
+    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: _allow_budget())
+    monkeypatch.setattr(qr, "get_active_policy", lambda: None)
+    _settings_map(monkeypatch, qr, {"AB_TESTING_ENABLED": "0"})
+    monkeypatch.setattr(qr, "sanitize_output_guardrails", lambda answer: ("", []))
+
+    async def _route(**kwargs):
+        return _base_result()
+
+    monkeypatch.setattr(qr, "route_and_answer", _route)
+    await qr.process_query_request(_request())
+
+    assert any(item[0] == "labels" and item[1]["outcome"] == "empty_answer" for item in outcome_metric.values)
 
 
 def test_record_query_side_effects_dispatches_feedback_usage_and_experiment(monkeypatch):
