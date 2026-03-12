@@ -24,6 +24,28 @@ flowchart LR
 
 Nota: o diagrama mostra a ordem lógica principal; detalhes internos de cada algoritmo continuam nas seções abaixo.
 
+## Visão para Engenharia de IA
+Objetivo: destacar os mecanismos que afetam escolha de modelo, reward e aprendizagem online.
+
+```mermaid
+flowchart TD
+    A[Consulta]
+    B[Features de contexto]
+    C[UQ]
+    D[Top-K candidatos]
+    E[Bandit / política online]
+    F[Modelo escolhido]
+    G[Judge / heurística]
+    H[Reward]
+    I[Atualização EMA e bandit]
+
+    A --> B --> C --> D --> E --> F
+    F --> G --> H --> I
+    I --> E
+```
+
+Nota: este diagrama é voltado a engenharia de IA; ele foca aprendizagem e decisão adaptativa, não topologia de serviços.
+
 ## 1. Seleção de candidatos
 Arquivo principal: `app/app/router_strategy.py`
 

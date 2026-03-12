@@ -62,7 +62,63 @@ Mensagem principal:
 - a decisão pedagógica continua sendo humana;
 - o histórico de uso ajuda a melhorar sugestões futuras.
 
+### Limites e uso responsável
+Objetivo: deixar explícito que a resposta da IA precisa de revisão humana.
+
+```mermaid
+flowchart LR
+    A[Pessoa faz uma pergunta]
+    B[IA sugere uma resposta]
+    C[Pessoa revisa o conteúdo]
+    D[Pessoa ajusta ou descarta]
+    E[Uso responsável]
+
+    A --> B --> C --> D --> E
+```
+
 ## Documentação Técnica Detalhada
+
+## Visão para Desenvolvedores de TI
+Objetivo: mostrar os blocos operacionais da stack e suas responsabilidades.
+
+```mermaid
+flowchart TD
+    A[Cliente HTTP]
+    B[API FastAPI]
+    C[Serviços de roteamento]
+    D[Providers e Ollama]
+    E[Redis, MariaDB, ChromaDB]
+    F[Celery Worker]
+    G[Prometheus, Grafana, Loki]
+
+    A --> B --> C --> D
+    C --> E
+    B --> F
+    F --> E
+    B --> G
+    F --> G
+```
+
+Nota: este diagrama e para backend e operacao; ele prioriza componentes implantaveis e fluxos entre servicos.
+
+## Visão para Engenharia de IA
+Objetivo: mostrar o pipeline de decisão e atualização do roteador.
+
+```mermaid
+flowchart LR
+    A[Consulta]
+    B[Cache e RAG]
+    C[UQ]
+    D[Bandit]
+    E[Modelo escolhido]
+    F[Resposta]
+    G[Judge e reward]
+    H[Aprendizado online]
+
+    A --> B --> C --> D --> E --> F --> G --> H
+```
+
+Nota: este diagrama abstrai detalhes de container e infraestrutura para focar seleção, qualidade e feedback.
 
 ## Diagrama de componentes
 Objetivo: mostrar como os módulos centrais se conectam no caminho de decisão e operação.

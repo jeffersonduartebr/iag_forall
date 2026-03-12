@@ -51,6 +51,24 @@ Regra prática:
 - Se a dúvida for “onde alterar comportamento?”, vá para componentes.
 - Se a dúvida for “em que ordem isso acontece?”, vá para sequência.
 
+## Trilhas por perfil
+Objetivo: reduzir o tempo de onboarding escolhendo a trilha certa de diagramas.
+
+```mermaid
+flowchart TD
+    A[Qual seu perfil?]
+    B[Engenharia de IA]
+    C[Desenvolvimento de TI]
+    D[Leigo em IA]
+    E[ALGORITHMS + ARCHITECTURE]
+    F[README + ARCHITECTURE + CONFIGURATION]
+    G[README + ARCHITECTURE]
+
+    A --> B --> E
+    A --> C --> F
+    A --> D --> G
+```
+
 ## Dia 2 - API e contratos
 1. Leia `docs/API.md`.
 2. Leia `docs/FILE_CATALOG.md` e `docs/METHOD_CATALOG.md` para mapear arquivos e métodos.

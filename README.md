@@ -112,6 +112,70 @@ Leitura rápida:
 - “Em que ordem o fluxo acontece?” -> `docs/ARCHITECTURE.md`
 - “Quando preciso atualizar os diagramas?” -> `docs/DOCUMENTATION_WORKFLOW.md`
 
+## Escolha sua trilha
+Use a documentação conforme o seu perfil.
+
+### Para engenheiros de IA
+Objetivo: entender seleção de modelos, UQ, bandits, RAG e feedback.
+
+```mermaid
+flowchart LR
+    A[Consulta]
+    B[Seleção de candidatos]
+    C[UQ e bandit]
+    D[Cache e RAG]
+    E[Inferência]
+    F[Feedback e aprendizado]
+
+    A --> B --> C --> D --> E --> F
+```
+
+Leitura recomendada:
+- `docs/ALGORITHMS.md`
+- `docs/ARCHITECTURE.md`
+
+### Para desenvolvedores de TI
+Objetivo: entender serviços, módulos, persistência, filas e observabilidade.
+
+```mermaid
+flowchart TD
+    A[API FastAPI]
+    B[Serviços de roteamento]
+    C[Ollama e providers]
+    D[Redis, MariaDB, Chroma]
+    E[Celery Worker]
+    F[Prometheus, Grafana, Loki]
+
+    A --> B --> C
+    B --> D
+    A --> E
+    E --> D
+    A --> F
+    E --> F
+```
+
+Leitura recomendada:
+- `docs/ARCHITECTURE.md`
+- `docs/CONFIGURATION.md`
+- `docs/MODULE_INDEX.md`
+
+### Para público leigo em IA
+Objetivo: entender a IA como apoio e a revisão humana.
+
+```mermaid
+flowchart LR
+    A[Pessoa faz uma pergunta]
+    B[IA sugere uma resposta]
+    C[Pessoa revisa]
+    D[Pessoa decide como usar]
+
+    A --> B --> C --> D
+```
+
+Leitura recomendada:
+- `README.md`
+- `docs/ARCHITECTURE.md`
+
 ## Primeiros 30 minutos (onboarding rápido)
 1. Configure variáveis de ambiente:
 - Copie `.env.example` para `.env`.

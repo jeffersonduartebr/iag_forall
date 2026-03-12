@@ -26,6 +26,7 @@ celery_app = Celery("llm_router", include=["app.tasks"])
 celery_app.conf.update(
     broker_url=BROKER_URL,
     result_backend=RESULT_BACKEND,
+    broker_connection_retry_on_startup=True,
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],

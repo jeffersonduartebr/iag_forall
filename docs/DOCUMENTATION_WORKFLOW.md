@@ -55,6 +55,7 @@ python3 scripts/generate_docs_catalog.py
    - `sequenceDiagram` para fluxos síncronos ou assíncronos.
 5. Mantenha nomes fiéis ao código e à stack real (`router_core.py`, `providers_async.py`, `MariaDB`, `Redis`, `ChromaDB`), evitando caixas genéricas.
 6. Se o fluxo ficar grande demais, divida em dois diagramas por responsabilidade em vez de aumentar ramificações.
+7. Todo diagrama novo deve indicar o público-alvo principal: `engenharia de IA`, `desenvolvimento de TI` ou `público leigo em IA`.
 
 ## Critérios mínimos de qualidade de docstring
 1. Explicar responsabilidade do método e contexto de uso.
