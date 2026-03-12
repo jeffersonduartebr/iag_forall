@@ -1,0 +1,256 @@
+"""Fast-path routing implementation extracted from router_core."""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Dict
+
+
+async def route_and_answer_internal_impl(
+    *,
+    deps: Dict[str, Any],
+    query: str,
+    system_prompt: str,
+    use_rag: bool,
+    max_tokens: int | None,
+    temperature: float | None,
+    modality: str,
+    image_b64: str | None,
+    rag_modality: str,
+    use_cache: bool,
+) -> Dict[str, Any]:
+    """Execute the synchronous routing path using injected dependencies."""
+    start_time = time.time()
+    modality = deps["normalize_modality"](modality, image_b64)
+    max_tokens = max_tokens or deps["settings"].MAX_TOKENS_DEFAULT
+    temperature = temperature or deps["settings"].TEMPERATURE_DEFAULT
+
+    if use_cache:
+        cached = None
+        try:
+            if deps["_dep_cache_breaker"].current_state != "open":
+                try:
+                    cached = await deps["_dep_cache_breaker"].call_async(
+                        deps["check_cache"],
+                        query,
+                        modality=modality,
+                        image_b64=image_b64,
+                    )
+                except Exception:
+                    cached = await deps["check_cache"](query, modality=modality, image_b64=image_b64)
+            deps["_record_dependency_breaker_metrics"]()
+        except Exception:
+            try:
+                deps["DEPENDENCY_FAILURES"].labels(dependency="cache").inc()
+            except Exception:
+                pass
+            deps["_record_dependency_breaker_metrics"]()
+
+        if cached:
+            deps["logger"].info(f"[router] Cache HIT ({cached.get('similarity', 0):.2f})")
+            try:
+                deps["ROUTER_ROUTE_COST"].labels(route_type="cache").inc(0.0)
+            except Exception:
+                pass
+            return {
+                "model": "semantic_cache",
+                "modality": modality,
+                "answer": cached.get("text", ""),
+                "image_output_b64": cached.get("image_output_b64"),
+                "latency_s": round(time.time() - start_time, 3),
+                "cost_per_1k": 0.0,
+                "metadata": {"cached": True},
+                "route": {
+                    "chosen_model": "semantic_cache",
+                    "objectives": {"latency": 0, "cost": 0, "uncertainty": 0},
+                    "pareto_front": [],
+                    "explanation": "Cache",
+                    "fallback": {"used": False, "models_tried": ["semantic_cache"], "errors": []},
+                },
+                "candidates": [],
+            }
+
+    uncertainty_score = 0.5
+    try:
+        if deps["_dep_uq_breaker"].current_state != "open":
+            uncertainty_score = deps["_dep_uq_breaker"].call(deps["get_uncertainty_score"], query, modality)
+        deps["_record_dependency_breaker_metrics"]()
+    except Exception as exc:
+        try:
+            deps["DEPENDENCY_FAILURES"].labels(dependency="uq").inc()
+        except Exception:
+            pass
+        deps["_record_dependency_breaker_metrics"]()
+        deps["logger"].warning(f"[router] UQ fail: {exc}")
+
+    all_candidates = (
+        deps["settings"].CANDIDATE_MODELS_LIST
+        + deps["settings"].CANDIDATE_VISION_MODELS_LIST
+        + deps["settings"].CANDIDATE_MULTIMODAL_MODELS_LIST
+    )
+    valid_models = list(
+        set(
+            [
+                model
+                for model in all_candidates
+                if isinstance(model, str) and not any(model.startswith(prefix) for prefix in deps["BLOCKED_PREFIXES"])
+            ]
+        )
+    )
+
+    if not valid_models:
+        valid_models = ["ollama/phi4:latest"]
+    elif deps["_is_error_budget_exceeded"]():
+        local_models = [model for model in valid_models if model.startswith("ollama/")]
+        if local_models:
+            valid_models = local_models
+            deps["logger"].warning("[router] Error budget exceeded; forcing local-only candidate set")
+
+    current_weights = deps["get_dynamic_strategy_weights"](modality)
+    top2 = deps["choose_top2_models"](
+        candidates=valid_models,
+        weights=current_weights,
+        query_text=query,
+        modality=modality,
+        uncertainty_score=uncertainty_score,
+    )
+    chosen = deps["select_model"](top2, query, modality)
+    deps["logger"].info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | W: {current_weights}")
+
+    if chosen.startswith("ollama/"):
+        deps["asyncio"].create_task(
+            deps["asyncio"].to_thread(deps["_ensure_ollama_model"], chosen.replace("ollama/", ""))
+        )
+
+    if use_rag:
+        try:
+            rag_mode = rag_modality if not (image_b64 and modality != "text") else modality
+            aug = await deps["build_augmented_prompt"](query, modality=rag_mode, image_b64=image_b64)
+            final_prompt = deps["build_final_prompt"](
+                query=query,
+                system_prompt=system_prompt,
+                use_rag=True,
+                rag_text=aug,
+            )
+        except Exception as exc:
+            deps["logger"].warning(f"[router] RAG fail: {exc}")
+            final_prompt = deps["build_final_prompt"](
+                query=query,
+                system_prompt=system_prompt,
+                use_rag=True,
+                rag_text=None,
+            )
+    else:
+        final_prompt = deps["build_final_prompt"](
+            query=query,
+            system_prompt=system_prompt,
+            use_rag=False,
+            rag_text=None,
+        )
+
+    use_fallback_chain = deps["_safe_setting_bool"]("REQUEST_FALLBACK_ENABLED", False)
+    fallback_used = False
+    fallback_models_tried = [chosen]
+    fallback_errors = []
+
+    if use_fallback_chain:
+        max_fallbacks = deps["_safe_setting_int"]("REQUEST_MAX_FALLBACKS", 2)
+
+        async def _execute_provider(model_name: str):
+            return await deps["call_model"](
+                model=model_name,
+                prompt=final_prompt,
+                modality=modality,
+                image_b64=image_b64,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+        fallback_result = await deps["execute_with_fallback"](
+            primary_model=chosen,
+            execute_fn=_execute_provider,
+            max_fallbacks=max_fallbacks,
+        )
+        if not fallback_result.success:
+            if fallback_result.errors:
+                last = fallback_result.errors[-1]
+                raise deps["ProviderCallError"](
+                    model=fallback_result.model_used,
+                    message=last.get("error", "All fallback models failed"),
+                    category=last.get("category", "provider_unavailable"),
+                    retryable=True,
+                )
+            raise deps["ProviderCallError"](
+                model=chosen,
+                message="All fallback models failed",
+                category="provider_unavailable",
+                retryable=True,
+            )
+
+        out, meta = fallback_result.result
+        chosen = fallback_result.model_used
+        fallback_used = len(fallback_result.models_tried) > 1
+        fallback_models_tried = fallback_result.models_tried
+        fallback_errors = fallback_result.errors
+    else:
+        out, meta = await deps["call_model"](
+            model=chosen,
+            prompt=final_prompt,
+            modality=modality,
+            image_b64=image_b64,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    latency_s = round(time.time() - start_time, 3)
+
+    try:
+        p_tok, c_tok, total_cost, load_time_s, meta_safe = deps["parse_meta_cost"](
+            meta=meta,
+            chosen_model=chosen,
+            cost_lookup=deps["get_model_cost"],
+        )
+    except Exception as exc:
+        deps["logger"].warning(f"[router] Metadata error: {exc}")
+        p_tok, c_tok, total_cost, load_time_s, meta_safe = 0, 0, 0.0, 0.0, {}
+
+    route_type = "fallback" if fallback_used else "direct"
+    try:
+        deps["ROUTER_ROUTE_COST"].labels(route_type=route_type).inc(float(total_cost))
+    except Exception:
+        pass
+
+    return {
+        "answer": out if isinstance(out, str) else str(out),
+        "model": chosen,
+        "modality": modality,
+        "image_output_b64": meta_safe.get("image_output_b64"),
+        "latency_s": latency_s,
+        "load_time_s": load_time_s,
+        "cost_per_1k": total_cost,
+        "metadata": {
+            "raw_payload": meta_safe.get("raw_payload"),
+            "prompt_tokens": p_tok,
+            "completion_tokens": c_tok,
+            "load_time": load_time_s,
+            "uncertainty_score": uncertainty_score,
+        },
+        "route": {
+            "chosen_model": chosen,
+            "modality_selected": modality,
+            "is_multimodal_route": bool(image_b64),
+            "objectives": {
+                "latency": latency_s,
+                "cost": total_cost,
+                "uncertainty": uncertainty_score,
+            },
+            "pareto_front": [],
+            "explanation": f"Selected {chosen} (UQ={uncertainty_score:.2f})",
+            "fallback": {
+                "used": fallback_used,
+                "models_tried": fallback_models_tried,
+                "errors": fallback_errors,
+            },
+        },
+        "candidates": [],
+    }

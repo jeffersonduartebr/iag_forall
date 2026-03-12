@@ -120,10 +120,10 @@ def test_meta_strategy_and_combine(monkeypatch):
     """Testa meta strategy and combine."""
     from app import bandits
 
-    monkeypatch.setattr(bandits, "rds", _FakeRedis(b"thompson"))
+    monkeypatch.setattr(bandits, "_get_rds", lambda: _FakeRedis(b"thompson"))
     assert bandits._meta_choose_strategy() == "thompson"
 
-    monkeypatch.setattr(bandits, "rds", _FakeRedis(b"unknown"))
+    monkeypatch.setattr(bandits, "_get_rds", lambda: _FakeRedis(b"unknown"))
     assert bandits._meta_choose_strategy() == "ucb1"
 
     monkeypatch.setattr(bandits, "_choose_epsilon_greedy", lambda *_: "a")
@@ -190,11 +190,11 @@ def test_bandit_update_and_reward(monkeypatch):
     assert captured["global"]["m1"]["mean"] == pytest.approx(1.0)
 
     # _load_nsga_weights default path (no redis)
-    monkeypatch.setattr(bandits, "rds", None)
+    monkeypatch.setattr(bandits, "_get_rds", lambda: None)
     wq, wl, wc = bandits._load_nsga_weights()
     assert (wq + wl + wc) == pytest.approx(1.0)
 
-    monkeypatch.setattr(bandits, "rds", _FakeRedis('{"quality": 2, "latency": 1, "cost": 1}'))
+    monkeypatch.setattr(bandits, "_get_rds", lambda: _FakeRedis('{"quality": 2, "latency": 1, "cost": 1}'))
     wq, wl, wc = bandits._load_nsga_weights()
     assert wq == pytest.approx(0.5)
     assert wl == pytest.approx(0.25)

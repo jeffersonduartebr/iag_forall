@@ -8,16 +8,23 @@ Carrega configurações com fallback em camadas.
 from __future__ import annotations
 
 import os
-import json
 import time
 import logging
 import threading
-import redis
 from collections import OrderedDict
 from typing import Any, Dict, Optional, List
 
 from sqlalchemy import text
 from app.utils.redis_client import get_redis_async_safe, ensure_redis_connected
+from .config.settings_catalog import (
+    SETTING_METADATA,
+    SETTINGS_DEFAULTS,
+    is_known_setting,
+    is_runtime_mutable,
+    known_setting_keys,
+)
+from .config.settings_sources import decode_redis_value, resolve_setting_value
+from .config.settings_types import as_bool, as_float, as_int, as_list
 
 logger = logging.getLogger(__name__)
 
@@ -217,15 +224,7 @@ def _get_from_redis(key: str) -> Optional[str]:
     if not rds:
         return None
     try:
-        v = rds.get(f"{REDIS_PREFIX}{key}")
-        if v is None:
-            return None
-        if isinstance(v, bytes):
-            return v.decode()
-        if isinstance(v, (str, int, float, bool)):
-            return str(v)
-        # Ignore mocked/non-serializable Redis values in tests.
-        return None
+        return decode_redis_value(rds.get(f"{REDIS_PREFIX}{key}"))
     except Exception:
         pass
     return None
@@ -284,18 +283,7 @@ def _load_json_list(raw: Optional[str]) -> List[str]:
     Returns:
         Valor produzido pela execução.
     """
-    if raw is None:
-        return []
-    raw = raw.strip()
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return parsed
-    except Exception:
-        pass
-    return [x.strip() for x in raw.split(",") if x.strip()]
+    return as_list(raw)
 
 
 # ============================================================
@@ -305,153 +293,8 @@ def _load_json_list(raw: Optional[str]) -> List[str]:
 class DynamicSettings:
 
     """Define responsabilidades de estado e comportamento."""
-    DEFAULTS: Dict[str, str] = {
-        "MAX_TOKENS_DEFAULT": "2000",
-        "TEMPERATURE_DEFAULT": "0.55",
-        "BANDIT_EPSILON": "0.12",
-        "QUERY_LOG_RETENTION_DAYS": "7",
-
-        # Redis defaults
-        "REDIS_HOST": "redis",
-        "REDIS_PORT": "6379",
-        "REDIS_DB": "0",
-        "REDIS_PASSWORD": "",
-
-        # Embeddings base
-        "EMBED_MODEL": "nomic-embed-text",
-        "EMBED_PROVIDER": "ollama",
-        "EMBED_DEVICE": "cpu",
-        "EMBED_TEXT_MODEL": "nomic-embed-text",
-
-        # Embeddings multimodais e visão
-        "TEXT_EMBEDDING_MODEL": "nomic-embed-text",
-        "IMAGE_EMBEDDING_MODEL": "clip-vit-large-patch14",
-        "MULTIMODAL_EMBEDDING_MODEL": "gpt-4o-mini-embed",
-
-        # Centróides (router/bandit)
-        "CENTROIDS_DIM": "768",
-        "CENTROIDS_K": "20",
-        "CENTROIDS_MIN_SIM_CREATE": "0.35",
-        "CENTROIDS_ENABLE_ONLINE": "1",
-        "CENTROIDS_UPDATE_INTERVAL_S": "1800",
-        "CENTROIDS_MIN_RECORDS_FOR_TRAIN": "50",
-        "CENTROIDS_MAX_HISTORY": "50000",
-        "CENTROIDS_HOURLY_REFRESH_ENABLED": "1",
-        "CENTROIDS_MIN_LOG_ROWS_FOR_REFRESH": "50",
-
-        # Judges
-        "JUDGES_ENABLED": "1",
-        "JUDGES_MODE": "llm",
-        "JUDGES_LOCAL_MODEL": "ollama/phi4:latest",
-        "JUDGES_REMOTE_MODEL": "gpt-5-mini",
-        "JUDGES_TIMEOUT_S": "15",
-        "JUDGE_MIN_SAMPLE_RATE": "0.05", # <--- NOVO: Mínimo 5% de amostragem
-
-        # Ollama
-        "OLLAMA_BASE_URL": "http://ollama:11434",
-        "OLLAMA_HOST": "http://ollama:11434",
-        "OLLAMA_CONCURRENCY_LIMIT": "30",  # Quick Win #7: Configurable concurrency
-
-        # Listas multimodais
-        "CANDIDATE_MODELS_LIST": "[]",
-        "CANDIDATE_VISION_MODELS_LIST": "[]",
-        "CANDIDATE_MULTIMODAL_MODELS_LIST": "[]",
-        
-        # Modelos VLM padrão
-        "VLM_OLLAMA_MODELS": json.dumps([
-            "qwen3-vl:8b",
-            "gemma3:4b",
-            "llama3.2:3b",
-            "llama3:8b",
-            "llava:7b",
-            "llama3.2-vision:11b",
-            "llava-llama3:8b",
-            "granite3.2-vision:2b",
-        ]),
-        
-        # Cache & RAG
-        "CACHE_TTL_DAYS": "7",
-        "CACHE_THRESHOLD": "0.92",
-        "UNCERTAINTY_THRESHOLD": "0.7",
-        "RERANK_MODEL": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-        "RERANK_ENABLED": "1",
-        "RAG_DATA_DIR": "/app/data",
-
-        # Pesos NSGA-II Dinâmicos
-        "NSGA_W_QUALITY": "1.0",
-        "NSGA_W_LATENCY": "0.5",
-        "NSGA_W_COST": "100.0",
-        "NSGA_W_ALIGNMENT": "1.0",
-
-        # Phase 1: Monitoring
-        "NSGA_CONVERGENCE_HISTORY_SIZE": "20",
-        "CASCADE_WARNING_THRESHOLD": "0.3",
-        "CASCADE_CRITICAL_THRESHOLD": "0.5",
-
-        # Phase 2: Self-Tuning
-        "RISK_FACTOR_SOTA_HIGH_UQ": "1.3",
-        "RISK_FACTOR_LOCAL_HIGH_UQ": "0.6",
-        "RISK_FACTOR_LOCAL_LOW_UQ": "1.1",
-        "RISK_FACTOR_ADAPT_ENABLED": "0",
-        "RISK_FACTOR_ADAPT_RATE": "0.02",
-        "ADAPTIVE_TIMEOUT_ENABLED": "0",
-        "ADAPTIVE_TIMEOUT_MULTIPLIER": "2.0",
-        "ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER": "3.0",
-        "MIN_TIMEOUT": "30",
-        "MAX_TIMEOUT": "1200",
-        "META_OPT_ENABLED": "0",
-        "META_OPT_SCHEDULE_HOUR": "3",
-        "META_OPT_SCHEDULED_TRIALS": "20",
-
-        # Phase 3: Feedback
-        "DRIFT_THRESHOLD": "0.15",
-        "DRIFT_WINDOW_SIZE": "100",
-        "USER_FEEDBACK_WEIGHT": "0.7",
-
-        # Phase 4: A/B Testing
-        "AB_TESTING_ENABLED": "0",
-
-        # Request-level settings
-        "REQUEST_TIMEOUT_SECONDS": "120",
-        "REQUEST_DEDUP_ENABLED": "1",
-
-        # Circuit breaker settings
-        "CIRCUIT_BREAKER_FAIL_MAX": "5",
-        "CIRCUIT_BREAKER_RESET_TIMEOUT": "60",
-        "CIRCUIT_BREAKER_LOCAL_FAIL_MAX": "3",
-        "CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT": "30",
-
-        # Backpressure / concurrency control
-        "MAX_CONCURRENT_REQUESTS": "500",
-        "BACKPRESSURE_ENABLED": "1",
-
-        # Emergency fallback models (used when cascade failure detected)
-        "EMERGENCY_FALLBACK_MODELS": json.dumps([
-            "ollama/phi4:latest",
-            "ollama/gemma3:4b",
-            "ollama/llama3:8b",
-        ]),
-
-        # Phase 5: Autonomous Behavior - Adaptive Cache Threshold
-        "CACHE_THRESHOLD_MIN": "0.85",
-        "CACHE_THRESHOLD_MAX": "0.98",
-        "CACHE_HIT_RATE_TARGET": "0.20",
-        "CACHE_THRESHOLD_ADAPT_ENABLED": "0",
-
-        # Phase 5: Autonomous Behavior - Predictor Validation
-        "PREDICTOR_VALIDATION_ENABLED": "1",
-        "PREDICTOR_BRIER_SCORE_THRESHOLD": "0.25",
-        "PREDICTOR_CALIBRATION_WINDOW": "1000",
-
-        # Phase 5: Autonomous Behavior - UQ Calibration
-        "UQ_CALIBRATION_ENABLED": "1",
-        "UQ_QUALITY_GAP_RELAX": "0.5",
-        "UQ_QUALITY_GAP_TIGHTEN": "2.0",
-
-        # Phase 5: Autonomous Behavior - Judge Calibration
-        "JUDGE_CALIBRATION_ENABLED": "1",
-        "JUDGE_CACHE_AGREEMENT_TARGET": "0.7",
-    }
+    DEFAULTS: Dict[str, str] = SETTINGS_DEFAULTS
+    METADATA: Dict[str, Dict[str, str]] = SETTING_METADATA
 
     def get(self, key: str, fallback: Any = None) -> Any:
         """Executa a responsabilidade descrita por este método.
@@ -463,19 +306,37 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        cached = _lru.get(key)
-        if cached is not None:
-            return cached
-        v = _get_from_redis(key)
-        if v is None:
-            v = _get_from_db(key)
-        if v is None:
-            v = os.getenv(key)
-        if v is None:
-            v = self.DEFAULTS.get(key, fallback)
-        if v is not None:
-            _lru.set(key, v)
-        return v
+        return resolve_setting_value(
+            key=key,
+            fallback=fallback,
+            defaults=self.DEFAULTS,
+            cache_get=_lru.get,
+            cache_set=_lru.set,
+            redis_get=_get_from_redis,
+            db_get=_get_from_db,
+            env_get=os.getenv,
+        )
+
+    def _get_str(self, key: str, default: str = "") -> str:
+        """Get a setting coerced to string."""
+        value = self.get(key, default)
+        return default if value is None else str(value)
+
+    def _get_int(self, key: str, default: int) -> int:
+        """Get a setting coerced to int."""
+        return as_int(self.get(key, default), default)
+
+    def _get_float(self, key: str, default: float) -> float:
+        """Get a setting coerced to float."""
+        return as_float(self.get(key, default), default)
+
+    def _get_bool(self, key: str, default: bool = False) -> bool:
+        """Get a setting coerced to bool."""
+        return as_bool(self.get(key, "1" if default else "0"), default)
+
+    def _get_list(self, key: str, default: str = "[]") -> List[str]:
+        """Get a setting coerced to string list."""
+        return as_list(self.get(key, default))
 
     def set(self, key: str, value: str, actor: str = "system", source: str = "internal") -> None:
         """Executa a responsabilidade descrita por este método.
@@ -520,9 +381,9 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        keys = list(self.DEFAULTS.keys()) + [
-            "DB_HOST", "DB_USER", "DB_NAME", "DB_PORT", 
-            "OLLAMA_HOST", "OLLAMA_BASE_URL"
+        keys = known_setting_keys() if only_known else known_setting_keys() + [
+            "DB_HOST", "DB_USER", "DB_NAME", "DB_PORT",
+            "OLLAMA_HOST", "OLLAMA_BASE_URL",
         ]
         out = {}
         for k in keys:
@@ -531,6 +392,31 @@ class DynamicSettings:
             except Exception:
                 out[k] = None
         return out
+
+    def keys(self, domain: Optional[str] = None) -> List[str]:
+        """Return known setting keys, optionally filtered by catalog domain."""
+        if not domain:
+            return known_setting_keys()
+        return [key for key, meta in self.METADATA.items() if meta.get("domain") == domain]
+
+    def metadata(self, key: str) -> Dict[str, str]:
+        """Return catalog metadata for one known setting."""
+        return dict(self.METADATA.get(key, {}))
+
+    def can_update_runtime(self, key: str) -> bool:
+        """Return whether one setting can be updated dynamically via admin API."""
+        return is_runtime_mutable(key)
+
+    def validate_runtime_updates(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate an admin update payload against the runtime mutability catalog."""
+        unknown = [key for key in payload if not is_known_setting(key)]
+        restart_required = [key for key in payload if is_known_setting(key) and not is_runtime_mutable(key)]
+        runtime_safe = [key for key in payload if key not in unknown and key not in restart_required]
+        return {
+            "runtime_safe": runtime_safe,
+            "requires_restart": restart_required,
+            "unknown": unknown,
+        }
 
     # -------------------------
     # Propriedades Tipadas
@@ -542,7 +428,7 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        return _load_json_list(self.get("CANDIDATE_MODELS_LIST", "[]"))
+        return self._get_list("CANDIDATE_MODELS_LIST")
 
     @property
     def CANDIDATE_VISION_MODELS_LIST(self) -> List[str]:
@@ -551,7 +437,7 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        return _load_json_list(self.get("CANDIDATE_VISION_MODELS_LIST", "[]"))
+        return self._get_list("CANDIDATE_VISION_MODELS_LIST")
 
     @property
     def CANDIDATE_MULTIMODAL_MODELS_LIST(self) -> List[str]:
@@ -560,7 +446,7 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        return _load_json_list(self.get("CANDIDATE_MULTIMODAL_MODELS_LIST", "[]"))
+        return self._get_list("CANDIDATE_MULTIMODAL_MODELS_LIST")
 
     @property
     def VLM_OLLAMA_MODELS(self) -> List[str]:
@@ -569,7 +455,7 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        return _load_json_list(self.get("VLM_OLLAMA_MODELS", "[]"))
+        return self._get_list("VLM_OLLAMA_MODELS")
     
     @property
     def JUDGE_MODELS(self) -> List[str]:
@@ -578,7 +464,7 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        return _load_json_list(self.get("JUDGE_MODELS", "[]"))
+        return self._get_list("JUDGE_MODELS")
 
     # Embeddings
     @property
@@ -588,7 +474,7 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        return self.get("EMBED_TEXT_MODEL", "nomic-embed-text")
+        return self._get_str("EMBED_TEXT_MODEL", "nomic-embed-text")
 
     @property
     def TEXT_EMBEDDING_MODEL(self) -> str:
@@ -619,19 +505,19 @@ class DynamicSettings:
     @property
     def MAX_TOKENS_DEFAULT(self) -> int:
         """Obtém o valor da configuração `MAX_TOKENS_DEFAULT`."""
-        return int(self.get("MAX_TOKENS_DEFAULT", 2000))
+        return self._get_int("MAX_TOKENS_DEFAULT", 2000)
     @property
     def TEMPERATURE_DEFAULT(self) -> float:
         """Obtém o valor da configuração `TEMPERATURE_DEFAULT`."""
-        return float(self.get("TEMPERATURE_DEFAULT", 0.5))
+        return self._get_float("TEMPERATURE_DEFAULT", 0.5)
     @property
     def BANDIT_EPSILON(self) -> float:
         """Obtém o valor da configuração `BANDIT_EPSILON`."""
-        return float(self.get("BANDIT_EPSILON"))
+        return self._get_float("BANDIT_EPSILON", 0.12)
     @property
     def QUERY_LOG_RETENTION_DAYS(self) -> int:
         """Obtém o valor da configuração `QUERY_LOG_RETENTION_DAYS`."""
-        return int(self.get("QUERY_LOG_RETENTION_DAYS"))
+        return self._get_int("QUERY_LOG_RETENTION_DAYS", 7)
     
     # Banco / Infra
     @property
@@ -641,11 +527,11 @@ class DynamicSettings:
     @property
     def REDIS_PORT(self) -> int:
         """Obtém o valor da configuração `REDIS_PORT`."""
-        return int(self.get("REDIS_PORT"))
+        return self._get_int("REDIS_PORT", 6379)
     @property
     def REDIS_DB(self) -> int:
         """Obtém o valor da configuração `REDIS_DB`."""
-        return int(self.get("REDIS_DB"))
+        return self._get_int("REDIS_DB", 0)
     @property
     def REDIS_PASSWORD(self) -> str:
         """Obtém o valor da configuração `REDIS_PASSWORD`."""
@@ -658,7 +544,7 @@ class DynamicSettings:
     @property
     def DB_PORT(self) -> int:
         """Obtém o valor da configuração `DB_PORT`."""
-        return int(self.get("DB_PORT", str(DB_PORT_ENV)))
+        return self._get_int("DB_PORT", DB_PORT_ENV)
     @property
     def DB_USER(self) -> str:
         """Obtém o valor da configuração `DB_USER`."""
@@ -685,7 +571,7 @@ class DynamicSettings:
     @property
     def JUDGES_ENABLED(self) -> bool:
         """Obtém o valor da configuração `JUDGES_ENABLED`."""
-        return str(self.get("JUDGES_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("JUDGES_ENABLED", True)
     @property
     def JUDGES_MODE(self) -> str:
         """Obtém o valor da configuração `JUDGES_MODE`."""
@@ -701,11 +587,11 @@ class DynamicSettings:
     @property
     def JUDGES_TIMEOUT_S(self) -> int:
         """Obtém o valor da configuração `JUDGES_TIMEOUT_S`."""
-        return int(self.get("JUDGES_TIMEOUT_S"))
+        return self._get_int("JUDGES_TIMEOUT_S", 15)
     @property
     def JUDGE_MIN_SAMPLE_RATE(self) -> float:
         """Obtém o valor da configuração `JUDGE_MIN_SAMPLE_RATE`."""
-        return float(self.get("JUDGE_MIN_SAMPLE_RATE", 0.05))
+        return self._get_float("JUDGE_MIN_SAMPLE_RATE", 0.05)
 
     # Ollama
     @property
@@ -733,7 +619,7 @@ class DynamicSettings:
     @property
     def CENTROIDS_ENABLE_ONLINE(self) -> bool:
         """Obtém o valor da configuração `CENTROIDS_ENABLE_ONLINE`."""
-        return str(self.get("CENTROIDS_ENABLE_ONLINE")).strip() in ("1", "true", "True")
+        return self._get_bool("CENTROIDS_ENABLE_ONLINE", True)
     @property
     def CENTROIDS_UPDATE_INTERVAL_S(self) -> int:
         """Obtém o valor da configuração `CENTROIDS_UPDATE_INTERVAL_S`."""
@@ -825,7 +711,7 @@ class DynamicSettings:
     @property
     def RISK_FACTOR_ADAPT_ENABLED(self) -> bool:
         """Obtém o valor da configuração `RISK_FACTOR_ADAPT_ENABLED`."""
-        return str(self.get("RISK_FACTOR_ADAPT_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("RISK_FACTOR_ADAPT_ENABLED", False)
     @property
     def RISK_FACTOR_ADAPT_RATE(self) -> float:
         """Obtém o valor da configuração `RISK_FACTOR_ADAPT_RATE`."""
@@ -833,7 +719,7 @@ class DynamicSettings:
     @property
     def ADAPTIVE_TIMEOUT_ENABLED(self) -> bool:
         """Obtém o valor da configuração `ADAPTIVE_TIMEOUT_ENABLED`."""
-        return str(self.get("ADAPTIVE_TIMEOUT_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("ADAPTIVE_TIMEOUT_ENABLED", False)
     @property
     def ADAPTIVE_TIMEOUT_MULTIPLIER(self) -> float:
         """Obtém o valor da configuração `ADAPTIVE_TIMEOUT_MULTIPLIER`."""
@@ -853,7 +739,7 @@ class DynamicSettings:
     @property
     def META_OPT_ENABLED(self) -> bool:
         """Obtém o valor da configuração `META_OPT_ENABLED`."""
-        return str(self.get("META_OPT_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("META_OPT_ENABLED", False)
     @property
     def META_OPT_SCHEDULE_HOUR(self) -> int:
         """Obtém o valor da configuração `META_OPT_SCHEDULE_HOUR`."""
@@ -881,7 +767,7 @@ class DynamicSettings:
     @property
     def AB_TESTING_ENABLED(self) -> bool:
         """Obtém o valor da configuração `AB_TESTING_ENABLED`."""
-        return str(self.get("AB_TESTING_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("AB_TESTING_ENABLED", False)
 
     # Phase 5: Autonomous Behavior - Adaptive Cache Properties
     @property
@@ -899,13 +785,13 @@ class DynamicSettings:
     @property
     def CACHE_THRESHOLD_ADAPT_ENABLED(self) -> bool:
         """Obtém o valor da configuração `CACHE_THRESHOLD_ADAPT_ENABLED`."""
-        return str(self.get("CACHE_THRESHOLD_ADAPT_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("CACHE_THRESHOLD_ADAPT_ENABLED", False)
 
     # Phase 5: Autonomous Behavior - Predictor Validation Properties
     @property
     def PREDICTOR_VALIDATION_ENABLED(self) -> bool:
         """Obtém o valor da configuração `PREDICTOR_VALIDATION_ENABLED`."""
-        return str(self.get("PREDICTOR_VALIDATION_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("PREDICTOR_VALIDATION_ENABLED", True)
     @property
     def PREDICTOR_BRIER_SCORE_THRESHOLD(self) -> float:
         """Obtém o valor da configuração `PREDICTOR_BRIER_SCORE_THRESHOLD`."""
@@ -919,7 +805,7 @@ class DynamicSettings:
     @property
     def UQ_CALIBRATION_ENABLED(self) -> bool:
         """Obtém o valor da configuração `UQ_CALIBRATION_ENABLED`."""
-        return str(self.get("UQ_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("UQ_CALIBRATION_ENABLED", True)
     @property
     def UQ_QUALITY_GAP_RELAX(self) -> float:
         """Obtém o valor da configuração `UQ_QUALITY_GAP_RELAX`."""
@@ -933,7 +819,7 @@ class DynamicSettings:
     @property
     def JUDGE_CALIBRATION_ENABLED(self) -> bool:
         """Obtém o valor da configuração `JUDGE_CALIBRATION_ENABLED`."""
-        return str(self.get("JUDGE_CALIBRATION_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("JUDGE_CALIBRATION_ENABLED", True)
     @property
     def JUDGE_CACHE_AGREEMENT_TARGET(self) -> float:
         """Obtém o valor da configuração `JUDGE_CACHE_AGREEMENT_TARGET`."""
@@ -965,7 +851,7 @@ class DynamicSettings:
     @property
     def BACKPRESSURE_ENABLED(self) -> bool:
         """Obtém o valor da configuração `BACKPRESSURE_ENABLED`."""
-        return str(self.get("BACKPRESSURE_ENABLED")).strip() in ("1", "true", "True")
+        return self._get_bool("BACKPRESSURE_ENABLED", True)
 
     # Emergency Fallback Models
     @property
@@ -975,7 +861,7 @@ class DynamicSettings:
         Returns:
             Valor produzido pela execução.
         """
-        return _load_json_list(self.get("EMERGENCY_FALLBACK_MODELS", "[]"))
+        return self._get_list("EMERGENCY_FALLBACK_MODELS")
 
 
 settings = DynamicSettings()
@@ -1050,8 +936,8 @@ def validate_critical_settings(settings_obj: Optional[Any] = None) -> List[str]:
         return default
 
     try:
-        min_timeout = int(_read("MIN_TIMEOUT", 30))
-        max_timeout = int(_read("MAX_TIMEOUT", 1200))
+        min_timeout = as_int(_read("MIN_TIMEOUT", 30), 30)
+        max_timeout = as_int(_read("MAX_TIMEOUT", 1200), 1200)
         if min_timeout <= 0:
             errors.append("MIN_TIMEOUT must be > 0")
         if max_timeout <= 0:
@@ -1062,9 +948,9 @@ def validate_critical_settings(settings_obj: Optional[Any] = None) -> List[str]:
         errors.append("Timeout settings are invalid")
 
     try:
-        cq = float(_read("NSGA_W_QUALITY", 1.0))
-        cl = float(_read("NSGA_W_LATENCY", 0.5))
-        cc = float(_read("NSGA_W_COST", 100.0))
+        cq = as_float(_read("NSGA_W_QUALITY", 1.0), 1.0)
+        cl = as_float(_read("NSGA_W_LATENCY", 0.5), 0.5)
+        cc = as_float(_read("NSGA_W_COST", 100.0), 100.0)
         if cq < 0 or cl < 0 or cc < 0:
             errors.append("NSGA weights must be non-negative")
         if (cq + cl + cc) <= 0:

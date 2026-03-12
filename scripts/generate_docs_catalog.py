@@ -115,6 +115,9 @@ def iter_python_files(roots: List[Path]) -> Iterable[Path]:
         for path in sorted(root.rglob("*.py")):
             if any(part in excluded_dir_names for part in path.parts):
                 continue
+            # Skip legacy compatibility modules from the primary catalogs.
+            if path.name.startswith("00"):
+                continue
             if path in seen:
                 continue
             seen.add(path)

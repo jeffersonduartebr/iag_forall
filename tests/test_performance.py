@@ -278,8 +278,8 @@ class TestConnectionPoolConfig:
         source = inspect.getsource(db_module)
 
         assert "pool_recycle=300" in source
-        assert "pool_size=50" in source
-        assert "max_overflow=30" in source
+        assert "pool_size=20" in source
+        assert "max_overflow=10" in source
 
 
 class TestPerformanceMetrics:

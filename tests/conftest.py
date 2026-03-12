@@ -18,6 +18,12 @@ try:
 except ImportError:
     pass  # Ignora se não conseguir importar
 
+
+def pytest_configure(config):
+    """Register shared custom markers even when pytest.ini is not mounted."""
+    config.addinivalue_line("markers", "integration: tests that require external services or credentials")
+    config.addinivalue_line("markers", "slow: long-running tests")
+
 @pytest.fixture(autouse=True)
 def mock_dependencies(monkeypatch):
     """

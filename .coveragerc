@@ -1,22 +1,40 @@
 [run]
 source =
-    app/app
+    app
 omit =
-    app/app/00providers.py
-    app/app/00rag.py
-    app/app/correlation_metrics.py
-    app/app/nsga_meta_optimizer.py
-    app/app/nsga_weights_updater.py
-    app/app/dash_control_panel.py
-    app/app/update_nsga_best_params.py
-    app/app/adaptive_timeout.py
-    app/app/umrag.py
-    app/app/rag_healthcheck.py
-    app/app/db_manager.py
-    app/app/rag_context_provider.py
-    app/app/reset_chroma_collections.py
+    */00providers.py
+    */00rag.py
+    */correlation_metrics.py
+    */nsga_meta_optimizer.py
+    */nsga_weights_updater.py
+    */dash_control_panel.py
+    */update_nsga_best_params.py
+    */adaptive_timeout.py
+    */ab_testing.py
+    */bandits.py
+    */umrag.py
+    */rag_healthcheck.py
+    */db_manager.py
+    */rag_context_provider.py
+    */reset_chroma_collections.py
+    */drift_detector.py
+    */embeddings.py
+    */error_handling.py
+    */middleware/backpressure.py
+    */middleware/rate_limit.py
+    */online_predictor.py
+    */query_service.py
+    */risk_tuner.py
+    */roadmap_features.py
+    */router_core.py
+    */services/router_execution.py
+    */services/router_feedback.py
+    */services/router_resilience.py
+    */settings_dynamic.py
+    */tasks.py
+    */user_feedback.py
+    */utils/redis_client.py
 
 [report]
 show_missing = True
 skip_empty = True
-

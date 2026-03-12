@@ -26,6 +26,7 @@ flowchart LR
 2. Contratos HTTP em `docs/API.md`.
 3. Configuração de runtime em `docs/CONFIGURATION.md`.
 4. Arquitetura e módulos em `docs/ARCHITECTURE.md` e `docs/MODULE_INDEX.md`.
+5. Arquivos com prefixo `00*` não devem ser tratados como fonte de verdade do runtime atual, exceto quando houver migração/compatibilidade explicitamente documentada.
 
 ## Catálogos automáticos
 Gerados pelo script `scripts/generate_docs_catalog.py`:

@@ -65,14 +65,14 @@ def test_refresh_pricing_redis_hit_and_fallback(monkeypatch):
             self.writes.append(("del", key))
 
     hit = _R(payload=json.dumps({"x": {"in": 1.0, "out": 2.0}}))
-    monkeypatch.setattr(pr, "_rds", hit)
+    monkeypatch.setattr(pr, "_get_rds", lambda: hit)
     pr._PRICING_CACHE = {}
     pr._LAST_UPDATE = 0
     pr._refresh_pricing()
     assert pr._PRICING_CACHE["x"]["in"] == 1.0
 
     miss = _R(payload=None)
-    monkeypatch.setattr(pr, "_rds", miss)
+    monkeypatch.setattr(pr, "_get_rds", lambda: miss)
     monkeypatch.setattr(pr, "_refresh_pricing_from_db", lambda: {"dbm": {"in": 0.5, "out": 0.6}})
     pr._refresh_pricing()
     assert pr._PRICING_CACHE["dbm"]["out"] == 0.6

@@ -108,21 +108,22 @@ class TestRateLimitChaos:
     @pytest.mark.asyncio
     async def test_rate_limit_exceeded(self):
         """Rate limiter should block requests over threshold."""
+        from app.middleware import rate_limit
         from app.middleware.rate_limit import RateLimitStore
 
-        store = RateLimitStore()
-        client_ip = "192.168.1.100"
-        max_requests = 5
-        window = 60
+        with patch.object(rate_limit, "_get_redis", return_value=None):
+            store = RateLimitStore()
+            store._use_redis = False
+            client_ip = "192.168.1.100"
+            max_requests = 5
+            window = 60
 
-        # Make requests up to limit
-        for _ in range(max_requests):
+            for _ in range(max_requests):
+                limited = await store.is_rate_limited(client_ip, max_requests, window)
+                assert not limited
+
             limited = await store.is_rate_limited(client_ip, max_requests, window)
-            assert not limited
-
-        # Next request should be limited
-        limited = await store.is_rate_limited(client_ip, max_requests, window)
-        assert limited
+            assert limited
 
     @pytest.mark.asyncio
     async def test_rate_limit_window_expiry(self):
@@ -150,26 +151,29 @@ class TestRateLimitChaos:
     @pytest.mark.asyncio
     async def test_rate_limit_cleanup(self):
         """Cleanup should remove old entries to prevent memory bloat."""
+        from app.middleware import rate_limit
         from app.middleware.rate_limit import RateLimitStore
 
-        store = RateLimitStore()
+        with patch.object(rate_limit, "_get_redis", return_value=None):
+            store = RateLimitStore()
+            store._use_redis = False
 
-        # Add some entries
-        for i in range(100):
-            await store.is_rate_limited(f"192.168.1.{i}", 1000, 60)
+            # Add some entries
+            for i in range(100):
+                await store.is_rate_limited(f"192.168.1.{i}", 1000, 60)
 
-        assert len(store._memory_store) == 100
+            assert len(store._memory_store) == 100
 
-        # Manually set old timestamps (simulating old entries)
-        old_time = time.time() - 7200  # 2 hours ago
-        for ip in list(store._memory_store.keys())[:50]:
-            store._memory_store[ip] = [old_time]
+            # Manually set old timestamps (simulating old entries)
+            old_time = time.time() - 7200  # 2 hours ago
+            for ip in list(store._memory_store.keys())[:50]:
+                store._memory_store[ip] = [old_time]
 
-        # Run cleanup
-        await store.cleanup()
+            # Run cleanup
+            await store.cleanup()
 
-        # Old entries should be removed
-        assert len(store._memory_store) == 50
+            # Old entries should be removed
+            assert len(store._memory_store) == 50
 
 
 class TestTimeoutChaos:
@@ -389,7 +393,10 @@ class TestHealthCheckChaos:
             mock_ollama.return_value = ComponentHealth(name="ollama", healthy=True, latency_ms=10.0)
             mock_cb.return_value = ComponentHealth(name="circuit_breakers", healthy=True)
 
-            result = await get_full_health_check()
+            from app.health import invalidate_health_cache
+
+            invalidate_health_cache()
+            result = await get_full_health_check(force_refresh=True)
 
             # Should report degraded (not all healthy, but not all unhealthy)
             assert result["status"] == "degraded"

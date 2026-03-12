@@ -84,4 +84,11 @@ flowchart TD
 | `utils/*` | Funções utilitárias transversais | Não concentrar regra de negócio aqui |
 
 ## Legado/experimental
-Arquivos com prefixo `00*`, dashboards e módulos experimentais existem no repositório. Para manutenção de produção, priorize os módulos listados acima.
+Arquivos com prefixo `00*`, dashboards e módulos experimentais existem no repositório.
+
+Regra prática:
+- `providers_async.py` é a fonte de verdade para integração com providers.
+- `rag_local.py`, `semantic_cache.py` e `vectorstore.py` são a fonte de verdade para RAG e recuperação.
+- Arquivos `00*` devem ser tratados como legado/compatibilidade e não entram mais no catálogo principal gerado.
+
+Para manutenção de produção, priorize os módulos listados acima.

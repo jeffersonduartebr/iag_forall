@@ -22,6 +22,7 @@ import base64
 import json
 import traceback
 import re
+import warnings
 from types import SimpleNamespace
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
@@ -50,15 +51,17 @@ except ImportError:
     AsyncAnthropic = None
 
 try:
-    import google.generativeai as genai
-    from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
-except ImportError:
-    genai = None
-
-try:
     from google import genai as google_genai
 except ImportError:
     google_genai = None
+
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        import google.generativeai as genai
+    from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
+except ImportError:
+    genai = None
 
 from pydantic import BaseModel
 

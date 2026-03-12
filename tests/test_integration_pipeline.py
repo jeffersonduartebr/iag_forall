@@ -11,6 +11,7 @@ Tests end-to-end request flow through the API including:
 
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 
@@ -23,35 +24,43 @@ def client():
          patch("app.main._ensure_model_metrics_table"), \
          patch("app.main.preload_ollama_models", new_callable=AsyncMock), \
          patch("app.main.vs_add_document", new_callable=AsyncMock), \
-         patch("app.main.route_and_answer", new_callable=AsyncMock) as mock_route:
+         patch("app.main.record_query_side_effects"), \
+         patch("app.main.process_query_request", new_callable=AsyncMock) as mock_process:
 
         # Default mock response
-        mock_route.return_value = {
-            "answer": "Test answer",
-            "model": "ollama/phi4:latest",
+        mock_process.return_value = {
+            "result": {
+                "answer": "Test answer",
+                "model": "ollama/phi4:latest",
+                "modality": "text",
+                "image_output_b64": None,
+                "latency_s": 1.0,
+                "cost_per_1k": 0.001,
+                "metadata": {
+                    "raw_payload": "{}",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "load_time": 0.5,
+                },
+                "route": {
+                    "chosen_model": "ollama/phi4:latest",
+                    "modality_selected": "text",
+                    "is_multimodal_route": False,
+                    "objectives": {"latency": 1.0, "cost": 0.001, "uncertainty": 0.5},
+                    "pareto_front": [],
+                    "explanation": "Selected via bandit",
+                    "fallback": {"used": False, "models_tried": [], "errors": []},
+                },
+                "candidates": [],
+            },
+            "image_input": None,
+            "selected_policy": None,
+            "assigned_variant": None,
             "modality": "text",
-            "image_output_b64": None,
-            "latency_s": 1.0,
-            "cost_per_1k": 0.001,
-            "metadata": {
-                "raw_payload": "{}",
-                "prompt_tokens": 10,
-                "completion_tokens": 20,
-                "load_time": 0.5
-            },
-            "route": {
-                "chosen_model": "ollama/phi4:latest",
-                "modality_selected": "text",
-                "is_multimodal_route": False,
-                "objectives": {"latency": 1.0, "cost": 0.001, "uncertainty": 0.5},
-                "pareto_front": [],
-                "explanation": "Selected via bandit"
-            },
-            "candidates": []
         }
 
         from app.main import app
-        yield TestClient(app), mock_route
+        yield TestClient(app), mock_process
 
 
 class TestQueryEndpoint:
@@ -121,22 +130,29 @@ class TestQueryEndpoint:
         test_client, mock_route = client
 
         mock_route.return_value = {
-            "answer": "Vision answer",
-            "model": "ollama/llava:latest",
-            "modality": "vision",
-            "image_output_b64": None,
-            "latency_s": 2.0,
-            "cost_per_1k": 0.005,
-            "metadata": {"raw_payload": "{}", "prompt_tokens": 100, "completion_tokens": 50, "load_time": 0.0},
-            "route": {
-                "chosen_model": "ollama/llava:latest",
-                "modality_selected": "vision",
-                "is_multimodal_route": True,
-                "objectives": {},
-                "pareto_front": [],
-                "explanation": ""
+            "result": {
+                "answer": "Vision answer",
+                "model": "ollama/llava:latest",
+                "modality": "vision",
+                "image_output_b64": None,
+                "latency_s": 2.0,
+                "cost_per_1k": 0.005,
+                "metadata": {"raw_payload": "{}", "prompt_tokens": 100, "completion_tokens": 50, "load_time": 0.0},
+                "route": {
+                    "chosen_model": "ollama/llava:latest",
+                    "modality_selected": "vision",
+                    "is_multimodal_route": True,
+                    "objectives": {},
+                    "pareto_front": [],
+                    "explanation": "",
+                    "fallback": {"used": False, "models_tried": [], "errors": []},
+                },
+                "candidates": [],
             },
-            "candidates": []
+            "image_input": "base64encodedimage",
+            "selected_policy": None,
+            "assigned_variant": None,
+            "modality": "vision",
         }
 
         response = test_client.post(
@@ -165,8 +181,8 @@ class TestQueryEndpoint:
 
         assert response.status_code == 200
         # Verify route_and_answer was called with use_rag=True
-        call_kwargs = mock_route.call_args[1]
-        assert call_kwargs.get("use_rag") == True
+        call_args = mock_route.call_args[0][0]
+        assert call_args.enable_rag_for_answer is True
 
 
 class TestHealthEndpoint:
@@ -207,7 +223,7 @@ class TestErrorHandling:
     def test_router_error_returns_500(self, client):
         """When router fails, should return 500."""
         test_client, mock_route = client
-        mock_route.side_effect = Exception("Internal router error")
+        mock_route.side_effect = HTTPException(status_code=500, detail="Internal router error")
 
         response = test_client.post(
             "/query",

@@ -12,18 +12,34 @@ from app import providers_async as pa
 
 def test_timeout_quality_tokens_and_factory(monkeypatch):
     """Testa timeout quality tokens and factory."""
-    monkeypatch.setattr(pa, "ADAPTIVE_TIMEOUT_ENABLED", True)
-    monkeypatch.setattr(pa, "BASE_TIMEOUT", 10)
-    monkeypatch.setattr(pa, "MAX_TIMEOUT", 1000)
-    monkeypatch.setattr(pa, "TIMEOUT_MULTIPLIER", 2.0)
-    monkeypatch.setattr(pa, "REASONING_MULTIPLIER", 3.0)
+    monkeypatch.setattr(
+        pa,
+        "_runtime_provider_settings",
+        lambda: {
+            "adaptive_timeout_enabled": True,
+            "base_timeout": 10,
+            "max_timeout": 1000,
+            "timeout_multiplier": 2.0,
+            "reasoning_multiplier": 3.0,
+        },
+    )
 
     assert pa._get_adaptive_timeout("deepseek-r1") == 30
     assert pa._get_adaptive_timeout("llama-70b") == 20
     assert pa._get_adaptive_timeout("model-x") == 15
 
-    monkeypatch.setattr(pa, "ADAPTIVE_TIMEOUT_ENABLED", False)
-    assert pa._get_adaptive_timeout("any") == pa.MAX_TIMEOUT
+    monkeypatch.setattr(
+        pa,
+        "_runtime_provider_settings",
+        lambda: {
+            "adaptive_timeout_enabled": False,
+            "base_timeout": 10,
+            "max_timeout": 1000,
+            "timeout_multiplier": 2.0,
+            "reasoning_multiplier": 3.0,
+        },
+    )
+    assert pa._get_adaptive_timeout("any") == 1000
 
     assert pa.heuristic_quality_estimate("") == 0.0
     assert pa.heuristic_quality_estimate("texto. " * 50) > 4.0
