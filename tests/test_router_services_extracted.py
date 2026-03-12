@@ -352,6 +352,94 @@ async def test_router_execution_tracks_empty_answer_reason():
 
 
 @pytest.mark.asyncio
+async def test_router_execution_skips_rag_for_simple_low_uq_query():
+    """Simple low-uncertainty text queries should bypass retrieval even when use_rag is requested."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+    deps["settings"] = SimpleNamespace(
+        MAX_TOKENS_DEFAULT=128,
+        TEMPERATURE_DEFAULT=0.3,
+        CANDIDATE_MODELS_LIST=["ollama/phi4:latest"],
+        CANDIDATE_VISION_MODELS_LIST=[],
+        CANDIDATE_MULTIMODAL_MODELS_LIST=[],
+        get=lambda key, default=None: {"RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1"}.get(key, default),
+    )
+    deps["get_uncertainty_score"] = lambda query, modality: 0.1
+    deps["select_model"] = lambda models, query, modality: "ollama/phi4:latest"
+    rag_called = {"value": False}
+
+    async def _rag(*args, **kwargs):
+        rag_called["value"] = True
+        return "context"
+
+    async def _call_model(**kwargs):
+        return ("direct-answer", {"prompt_tokens": 2, "completion_tokens": 1, "cost_per_1k": 0.1})
+
+    deps["build_augmented_prompt"] = _rag
+    deps["call_model"] = _call_model
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="Quanto é 2+2?",
+        system_prompt="SYS",
+        use_rag=True,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+    )
+
+    assert out["answer"] == "direct-answer"
+    assert rag_called["value"] is False
+
+
+@pytest.mark.asyncio
+async def test_router_execution_keeps_rag_for_high_uq_query():
+    """Higher-uncertainty text queries should still execute retrieval when RAG is enabled."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+    deps["settings"] = SimpleNamespace(
+        MAX_TOKENS_DEFAULT=128,
+        TEMPERATURE_DEFAULT=0.3,
+        CANDIDATE_MODELS_LIST=["ollama/phi4:latest"],
+        CANDIDATE_VISION_MODELS_LIST=[],
+        CANDIDATE_MULTIMODAL_MODELS_LIST=[],
+        get=lambda key, default=None: {"RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1"}.get(key, default),
+    )
+    deps["get_uncertainty_score"] = lambda query, modality: 0.8
+    deps["select_model"] = lambda models, query, modality: "ollama/phi4:latest"
+    rag_called = {"value": False}
+
+    async def _rag(*args, **kwargs):
+        rag_called["value"] = True
+        return "context"
+
+    async def _call_model(**kwargs):
+        return ("rag-answer", {"prompt_tokens": 2, "completion_tokens": 1, "cost_per_1k": 0.1})
+
+    deps["build_augmented_prompt"] = _rag
+    deps["call_model"] = _call_model
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="Explique passo a passo por que a resposta faz sentido.",
+        system_prompt="SYS",
+        use_rag=True,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+    )
+
+    assert out["answer"] == "rag-answer"
+    assert rag_called["value"] is True
+
+
+@pytest.mark.asyncio
 async def test_router_execution_covers_execute_provider_and_empty_fallback_errors():
     """Fallback execution should invoke execute_fn and handle empty error lists."""
     deps = _deps_for_execution()

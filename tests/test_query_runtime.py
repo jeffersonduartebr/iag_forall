@@ -71,6 +71,79 @@ class _Metric:
         self.values.append(("set", value))
 
 
+def test_classify_query_workload_recognizes_fast_and_heavy_paths():
+    """Workload classification should distinguish simple, retrieval-heavy, reasoning, and vision traffic."""
+    from app.services import query_runtime as qr
+
+    assert qr.classify_query_workload(_request(query="Quanto é 2+2?"), modality="text", image_input=None) == "simple_text"
+    assert (
+        qr.classify_query_workload(
+            _request(query="Cite a policy e o documento de referência sobre avaliação escolar."),
+            modality="text",
+            image_input=None,
+        )
+        == "retrieval_heavy"
+    )
+    assert (
+        qr.classify_query_workload(
+            _request(query="Explique passo a passo como resolver uma equação do segundo grau."),
+            modality="text",
+            image_input=None,
+        )
+        == "reasoning"
+    )
+    assert qr.classify_query_workload(_request(query="O que há na imagem?"), modality="vision", image_input="img") == "vision"
+
+
+def test_apply_query_runtime_profile_bypasses_rag_for_simple_text(monkeypatch):
+    """Simple text traffic should use the fast path when performance mode and bypass are enabled."""
+    from app.services import query_runtime as qr
+
+    _settings_map(
+        monkeypatch,
+        qr,
+        {
+            "ROUTER_PERF_MODE": "1",
+            "ROUTER_SIMPLE_QUERY_MAX_TOKENS": "128",
+            "RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1",
+        },
+    )
+    profile = qr.apply_query_runtime_profile(
+        _request(query="Quanto é 2+2?", enable_rag_for_answer=True, max_tokens=600),
+        modality="text",
+        image_input=None,
+    )
+
+    assert profile["workload_class"] == "simple_text"
+    assert profile["perf_mode_enabled"] is True
+    assert profile["use_rag"] is False
+    assert profile["max_tokens"] == 128
+
+
+def test_apply_query_runtime_profile_keeps_vision_rag(monkeypatch):
+    """Vision traffic should not silently lose retrieval just because simple-query bypass is enabled."""
+    from app.services import query_runtime as qr
+
+    _settings_map(
+        monkeypatch,
+        qr,
+        {
+            "ROUTER_PERF_MODE": "1",
+            "ROUTER_SIMPLE_QUERY_MAX_TOKENS": "64",
+            "RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1",
+        },
+    )
+    profile = qr.apply_query_runtime_profile(
+        _request(query="O que aparece aqui?", enable_rag_for_image=True, max_tokens=256),
+        modality="vision",
+        image_input="img",
+    )
+
+    assert profile["workload_class"] == "vision"
+    assert profile["use_rag"] is True
+    assert profile["max_tokens"] == 256
+
+
 @pytest.mark.asyncio
 async def test_process_query_request_blocks_guardrails(monkeypatch):
     """Blocked input should short-circuit before routing."""
@@ -230,6 +303,28 @@ def test_record_query_side_effects_dispatches_feedback_usage_and_experiment(monk
     assert calls["delay"]["image_b64"] == "img"
     assert calls["usage"] == ("school-1", 0.01, 11, 7, 1)
     assert len(calls["metrics"]) == 3
+
+
+def test_record_query_side_effects_perf_mode_skips_heavy_payload_and_ab_metrics(monkeypatch):
+    """Performance mode should keep async feedback lean and suppress experiment accounting work."""
+    from app.services import query_runtime as qr
+
+    calls = {"delay": None, "metrics": []}
+    monkeypatch.setattr(qr.task_process_feedback, "delay", lambda **kwargs: calls.__setitem__("delay", kwargs))
+    monkeypatch.setattr(qr, "record_tenant_usage", lambda *args, **kwargs: None)
+    _settings_map(monkeypatch, qr, {"AB_TESTING_ENABLED": "1", "ROUTER_PERF_MODE": "1"})
+    monkeypatch.setattr(
+        qr,
+        "get_ab_test_manager",
+        lambda: SimpleNamespace(record_result=lambda *args: calls["metrics"].append(args)),
+    )
+
+    result = _base_result()
+    result["metadata"]["experiment_variant"] = {"name": "B"}
+    qr.record_query_side_effects(_request(experiment_id="exp-1"), result, None)
+
+    assert "raw_payload" not in calls["delay"]["raw_payload"]
+    assert calls["metrics"] == []
 
 
 def test_record_query_side_effects_tolerates_feedback_failures(monkeypatch):

@@ -69,34 +69,30 @@ The constructor keeps setup local to the object so callers can use it without ad
         Returns:
             True if slot acquired, False if at capacity
         """
-        # Non-blocking check
-        if self._semaphore.locked() and self._current_count >= self._max_concurrent:
-            return False
-
         try:
-            # Try to acquire without blocking
-            acquired = self._semaphore.locked()
-            if not acquired:
-                await asyncio.wait_for(self._semaphore.acquire(), timeout=0.001)
-                async with self._count_lock:
-                    self._current_count += 1
-                    BACKPRESSURE_QUEUE_SIZE.set(self._current_count)
+            async with self._count_lock:
+                available_slots = int(getattr(self._semaphore, "_value", 0))
+                if available_slots <= 0 or self._current_count >= self._max_concurrent:
+                    return False
+                self._semaphore._value = available_slots - 1
+                self._current_count += 1
+                BACKPRESSURE_QUEUE_SIZE.set(self._current_count)
                 return True
-            return False
-        except asyncio.TimeoutError:
-            return False
         except Exception:
             return True  # On error, allow request through
 
     async def release(self):
         """Release a processing slot."""
         try:
-            self._semaphore.release()
             async with self._count_lock:
+                if self._current_count <= 0:
+                    return
                 self._current_count = max(0, self._current_count - 1)
+                current_slots = int(getattr(self._semaphore, "_value", 0))
+                if current_slots < self._max_concurrent:
+                    self._semaphore._value = current_slots + 1
                 BACKPRESSURE_QUEUE_SIZE.set(self._current_count)
-        except ValueError:
-            # Semaphore released too many times
+        except Exception:
             pass
 
     @property

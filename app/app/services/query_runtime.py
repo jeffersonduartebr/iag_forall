@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any, Dict
 
@@ -27,6 +28,77 @@ from ..tasks import task_process_feedback
 check_tenant_budget = check_runtime_budget
 get_active_policy = get_runtime_active_policy
 record_tenant_usage = record_runtime_usage
+
+_REASONING_HINTS = (
+    "step by step",
+    "passo a passo",
+    "prove",
+    "derive",
+    "demonstre",
+    "justify",
+    "explique detalhadamente",
+    "chain of thought",
+)
+_RETRIEVAL_HINTS = (
+    "according to",
+    "de acordo com",
+    "cite",
+    "reference",
+    "document",
+    "manual",
+    "policy",
+    "regulation",
+    "source",
+    "baseado no material",
+)
+
+
+def classify_query_workload(req: Any, modality: str, image_input: str | None) -> str:
+    """Classify a request into a small set of performance-relevant workload classes."""
+    if image_input or modality in {"vision", "multimodal"}:
+        return "vision"
+
+    query = str(getattr(req, "query", "") or "").strip()
+    lowered = query.lower()
+
+    if any(hint in lowered for hint in _RETRIEVAL_HINTS):
+        return "retrieval_heavy"
+    if any(hint in lowered for hint in _REASONING_HINTS):
+        return "reasoning"
+
+    token_count = len(re.findall(r"\w+", query))
+    if token_count <= 18 and len(query) <= 140 and "?" in query:
+        return "simple_text"
+    if token_count <= 12 and len(query) <= 100:
+        return "simple_text"
+    return "reasoning"
+
+
+def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None) -> Dict[str, Any]:
+    """Derive execution knobs for one request without mutating the incoming request object."""
+    workload = classify_query_workload(req, modality=modality, image_input=image_input)
+    perf_mode_enabled = str(settings.get("ROUTER_PERF_MODE", "0")).strip() == "1"
+    simple_query_cap = int(settings.get("ROUTER_SIMPLE_QUERY_MAX_TOKENS", settings.MAX_TOKENS_DEFAULT))
+    rag_simple_bypass = str(settings.get("RAG_SIMPLE_QUERY_BYPASS_ENABLED", "1")).strip() == "1"
+
+    use_rag = bool(req.enable_rag_for_answer or req.enable_rag_for_image)
+    effective_max_tokens = req.max_tokens or settings.MAX_TOKENS_DEFAULT
+
+    if perf_mode_enabled and workload == "simple_text":
+        effective_max_tokens = min(int(effective_max_tokens), max(32, simple_query_cap))
+
+    if workload == "simple_text" and rag_simple_bypass:
+        use_rag = False
+
+    if modality in {"vision", "multimodal"} or image_input:
+        use_rag = bool(req.enable_rag_for_answer or req.enable_rag_for_image)
+
+    return {
+        "workload_class": workload,
+        "perf_mode_enabled": perf_mode_enabled,
+        "use_rag": use_rag,
+        "max_tokens": effective_max_tokens,
+    }
 
 
 async def process_query_request(req: Any) -> Dict[str, Any]:
@@ -78,6 +150,8 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     if image_input and modality == "text":
         modality = "vision"
 
+    runtime_profile = apply_query_runtime_profile(req, modality=modality, image_input=image_input)
+
     selected_policy = req.policy_version
     active_policy = get_active_policy()
     if not selected_policy and active_policy:
@@ -113,8 +187,8 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
         result = await route_and_answer(
             query=req.query,
             system_prompt=req.system_prompt or "",
-            use_rag=bool(req.enable_rag_for_answer or req.enable_rag_for_image),
-            max_tokens=req.max_tokens or settings.MAX_TOKENS_DEFAULT,
+            use_rag=runtime_profile["use_rag"],
+            max_tokens=runtime_profile["max_tokens"],
             temperature=req.temperature or settings.TEMPERATURE_DEFAULT,
             modality=modality,
             image_b64=image_input,
@@ -174,6 +248,8 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     metadata["experiment_id"] = req.experiment_id
     metadata["experiment_variant"] = assigned_variant
     metadata["tenant_id"] = req.tenant_id
+    metadata["workload_class"] = runtime_profile["workload_class"]
+    metadata["perf_mode_enabled"] = runtime_profile["perf_mode_enabled"]
 
     chosen_model = result.get("model", "unknown")
     if selected_policy:
@@ -214,12 +290,14 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     completion_tokens = metadata.get("completion_tokens", 0)
     raw_payload_str = metadata.get("raw_payload")
     uncertainty_score = metadata.get("uncertainty_score", 0.5)
+    perf_mode_enabled = str(settings.get("ROUTER_PERF_MODE", "0")).strip() == "1"
 
     combined_payload = {
-        "raw_payload": raw_payload_str,
         "uncertainty_score": uncertainty_score,
         "queue_enqueued_at": time.time(),
     }
+    if not perf_mode_enabled and raw_payload_str:
+        combined_payload["raw_payload"] = raw_payload_str
 
     try:
         task_process_feedback.delay(
@@ -248,7 +326,7 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     except Exception as exc:
         logger.warning(f"[query] Failed to record tenant usage: {exc}")
 
-    if req.experiment_id and settings.AB_TESTING_ENABLED:
+    if req.experiment_id and settings.AB_TESTING_ENABLED and not perf_mode_enabled:
         try:
             manager = get_ab_test_manager()
             variant = (metadata.get("experiment_variant") or {}).get("name")

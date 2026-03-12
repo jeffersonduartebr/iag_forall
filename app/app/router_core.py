@@ -25,7 +25,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 # --- Módulos Internos ---
-from .providers_async import call_model, _ensure_ollama_model, ProviderCallError
+from .providers_async import (
+    call_model,
+    _ensure_ollama_model,
+    ProviderCallError,
+    apply_ollama_performance_preferences,
+)
 from .router_strategy import choose_top2_models
 from .semantic_cache import check_cache, store_cache
 from .settings_dynamic import settings
@@ -452,6 +457,7 @@ async def _route_and_answer_internal(
             "get_dynamic_strategy_weights": get_dynamic_strategy_weights,
             "choose_top2_models": choose_top2_models,
             "select_model": select_model,
+            "apply_ollama_performance_preferences": apply_ollama_performance_preferences,
             "_ensure_ollama_model": _ensure_ollama_model,
             "build_augmented_prompt": build_augmented_prompt,
             "build_final_prompt": build_final_prompt,

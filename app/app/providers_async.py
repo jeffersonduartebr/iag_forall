@@ -27,7 +27,7 @@ import warnings
 import subprocess
 from types import SimpleNamespace
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 # Bibliotecas de Resiliência e HTTP Async
 import httpx
@@ -296,6 +296,10 @@ DEFAULT_OLLAMA_CONCURRENCY_STEP_UP = 1
 DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN = 1
 DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS = 3
 DEFAULT_OLLAMA_GPU_INDEX = 0
+DEFAULT_OLLAMA_WARM_MODELS: List[str] = []
+DEFAULT_OLLAMA_WARMUP_GENERATE_ENABLED = True
+DEFAULT_OLLAMA_LOAD_PENALTY_ENABLED = True
+DEFAULT_OLLAMA_ROUTE_CANDIDATE_LIMIT = 3
 DEFAULT_ADAPTIVE_TIMEOUT_ENABLED = True
 DEFAULT_BASE_TIMEOUT = 60
 DEFAULT_MAX_TIMEOUT = 1200
@@ -331,6 +335,10 @@ def _runtime_provider_settings() -> Dict[str, Any]:
         "ollama_concurrency_step_down": DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN,
         "ollama_concurrency_stable_windows": DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS,
         "ollama_gpu_index": DEFAULT_OLLAMA_GPU_INDEX,
+        "ollama_warm_models": list(DEFAULT_OLLAMA_WARM_MODELS),
+        "ollama_warmup_generate_enabled": DEFAULT_OLLAMA_WARMUP_GENERATE_ENABLED,
+        "ollama_load_penalty_enabled": DEFAULT_OLLAMA_LOAD_PENALTY_ENABLED,
+        "ollama_route_candidate_limit": DEFAULT_OLLAMA_ROUTE_CANDIDATE_LIMIT,
         "adaptive_timeout_enabled": DEFAULT_ADAPTIVE_TIMEOUT_ENABLED,
         "base_timeout": DEFAULT_BASE_TIMEOUT,
         "max_timeout": DEFAULT_MAX_TIMEOUT,
@@ -351,6 +359,24 @@ def _runtime_provider_settings() -> Dict[str, Any]:
         out["ollama_concurrency_step_down"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_STEP_DOWN", str(DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN))))
         out["ollama_concurrency_stable_windows"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_STABLE_WINDOWS", str(DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS))))
         out["ollama_gpu_index"] = max(0, int(dynamic_settings.get("OLLAMA_GPU_INDEX", str(DEFAULT_OLLAMA_GPU_INDEX))))
+        warm_models_raw = dynamic_settings.get("OLLAMA_WARM_MODELS", "[]")
+        if isinstance(warm_models_raw, str):
+            try:
+                parsed_warm_models = json.loads(warm_models_raw)
+            except Exception:
+                parsed_warm_models = [item.strip() for item in warm_models_raw.split(",") if item.strip()]
+        elif isinstance(warm_models_raw, (list, tuple, set)):
+            parsed_warm_models = list(warm_models_raw)
+        else:
+            parsed_warm_models = []
+        out["ollama_warm_models"] = [
+            (str(model).strip() if str(model).strip().startswith("ollama/") else f"ollama/{str(model).strip()}")
+            for model in parsed_warm_models
+            if str(model).strip()
+        ]
+        out["ollama_warmup_generate_enabled"] = str(dynamic_settings.get("OLLAMA_WARMUP_GENERATE_ENABLED", "1")).strip() in ("1", "true", "True")
+        out["ollama_load_penalty_enabled"] = str(dynamic_settings.get("OLLAMA_LOAD_PENALTY_ENABLED", "1")).strip() in ("1", "true", "True")
+        out["ollama_route_candidate_limit"] = max(2, int(dynamic_settings.get("OLLAMA_ROUTE_CANDIDATE_LIMIT", str(DEFAULT_OLLAMA_ROUTE_CANDIDATE_LIMIT))))
         out["adaptive_timeout_enabled"] = str(dynamic_settings.get("ADAPTIVE_TIMEOUT_ENABLED", "1")).strip() in ("1", "true", "True")
         out["base_timeout"] = max(1, int(dynamic_settings.get("MIN_TIMEOUT", str(DEFAULT_BASE_TIMEOUT))))
         out["max_timeout"] = max(out["base_timeout"], int(dynamic_settings.get("MAX_TIMEOUT", str(DEFAULT_MAX_TIMEOUT))))
@@ -545,6 +571,122 @@ class OllamaConcurrencyController:
 
 
 _ollama_concurrency_controller = OllamaConcurrencyController()
+_ollama_runtime_state: Dict[str, Dict[str, Any]] = {}
+
+
+def _normalize_ollama_model_name(model_name: str) -> str:
+    """Return one canonical Ollama model label with the `ollama/` namespace."""
+    cleaned = str(model_name or "").strip()
+    if not cleaned:
+        return "ollama/unknown"
+    return cleaned if cleaned.startswith("ollama/") else f"ollama/{cleaned}"
+
+
+def _ensure_ollama_runtime_entry(model_name: str) -> Dict[str, Any]:
+    """Return mutable runtime state for one Ollama model, creating defaults on first use."""
+    normalized = _normalize_ollama_model_name(model_name)
+    return _ollama_runtime_state.setdefault(
+        normalized,
+        {
+            "loaded": False,
+            "inflight": 0,
+            "last_load_seconds": 0.0,
+            "last_used_at": 0.0,
+        },
+    )
+
+
+def _mark_ollama_model_state(model_name: str, *, loaded: bool | None = None, load_seconds: float | None = None, inflight_delta: int = 0) -> None:
+    """Update one Ollama model runtime snapshot used for routing preferences."""
+    state = _ensure_ollama_runtime_entry(model_name)
+    if loaded is not None:
+        state["loaded"] = bool(loaded)
+    if load_seconds is not None:
+        state["last_load_seconds"] = max(0.0, float(load_seconds))
+    if inflight_delta:
+        state["inflight"] = max(0, int(state.get("inflight", 0)) + inflight_delta)
+    state["last_used_at"] = time.time()
+
+
+def get_configured_ollama_warm_models() -> List[str]:
+    """Return the configured warm-model list normalized to the Ollama namespace."""
+    cfg = _runtime_provider_settings()
+    return list(cfg.get("ollama_warm_models", []) or [])
+
+
+def apply_ollama_performance_preferences(candidates: List[str]) -> List[str]:
+    """Reorder and trim local candidates so routing prefers warm, less-saturated Ollama models."""
+    cfg = _runtime_provider_settings()
+    if not bool(cfg["ollama_load_penalty_enabled"]):
+        return list(candidates)
+
+    local_candidates = [candidate for candidate in candidates if str(candidate).startswith("ollama/")]
+    if len(local_candidates) <= 1:
+        return list(candidates)
+
+    warm_set = set(get_configured_ollama_warm_models())
+    route_limit = max(2, int(cfg["ollama_route_candidate_limit"]))
+    current_limit = max(1, int(_ollama_concurrency_controller.get_effective_limit()))
+
+    def _score(candidate: str) -> tuple[float, int]:
+        state = _ensure_ollama_runtime_entry(candidate)
+        inflight = int(state.get("inflight", 0))
+        loaded = bool(state.get("loaded", False))
+        last_load_seconds = float(state.get("last_load_seconds", 0.0) or 0.0)
+        penalty = 0.0
+        if not loaded:
+            penalty += 5.0
+        if candidate not in warm_set:
+            penalty += 0.5
+        penalty += float(inflight) * 2.0
+        if inflight >= max(1, current_limit - 1):
+            penalty += 3.0
+        penalty += min(3.0, last_load_seconds / 5.0)
+        return penalty, candidates.index(candidate)
+
+    preferred_locals = sorted(local_candidates, key=_score)[: min(route_limit, len(local_candidates))]
+    remaining = [candidate for candidate in candidates if not candidate.startswith("ollama/")]
+    return preferred_locals + remaining
+
+
+async def warm_ollama_model_runtime(model_name: str) -> bool:
+    """Issue a tiny generate request so one local model is resident before user traffic arrives."""
+    normalized = _normalize_ollama_model_name(model_name)
+    short_name = normalized.split("/", 1)[1]
+    try:
+        client = await get_http_client()
+        started_at = time.time()
+        resp = await client.post(
+            f"{OLLAMA_HOST}/api/generate",
+            json={
+                "model": short_name,
+                "prompt": "Reply only with OK.",
+                "stream": False,
+                "think": False,
+                "keep_alive": "15m",
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 4,
+                    "num_ctx": 512,
+                },
+            },
+            timeout=max(30.0, _get_adaptive_timeout(short_name)),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        load_seconds = float(data.get("load_duration", 0) or 0.0) / 1_000_000_000.0
+        _mark_ollama_model_state(normalized, loaded=True, load_seconds=load_seconds)
+        try:
+            OLLAMA_MODEL_LOADED.labels(model=short_name).set(1)
+            if load_seconds > 0:
+                OLLAMA_MODEL_LOAD_SECONDS.labels(model=short_name).observe(load_seconds)
+        except Exception:
+            pass
+        logger.info("[ollama] Warmed model %s in %.3fs", normalized, time.time() - started_at)
+        return True
+    except Exception as exc:
+        logger.warning("[ollama] Failed to warm model %s: %s", normalized, exc)
+        return False
 
 
 async def start_provider_runtime_services() -> None:
@@ -655,6 +797,8 @@ class BaseProvider(ABC):
         wait_started_at = time.time()
         await self.semaphore.acquire()
         waited = time.time() - wait_started_at
+        if self.name == "ollama":
+            _mark_ollama_model_state(model, inflight_delta=1)
         try:
             PROVIDER_QUEUE_WAIT.labels(model=model).observe(waited)
             PROVIDER_INFLIGHT_REQUESTS.labels(model=model).inc()
@@ -666,6 +810,8 @@ class BaseProvider(ABC):
         try:
             self.semaphore.release()
         finally:
+            if self.name == "ollama":
+                _mark_ollama_model_state(model, inflight_delta=-1)
             try:
                 PROVIDER_INFLIGHT_REQUESTS.labels(model=model).dec()
             except Exception:
@@ -1033,6 +1179,7 @@ class OllamaProvider(BaseProvider):
                 OLLAMA_MODEL_LOADED.labels(model=model).set(1)
             except Exception:
                 pass
+            _mark_ollama_model_state(model, loaded=True, load_seconds=load_sec)
 
             return LLMResponse(
                 text=text_out,

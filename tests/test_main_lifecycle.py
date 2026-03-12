@@ -18,6 +18,13 @@ async def test_preload_ollama_models_download_flow(monkeypatch):
 
     monkeypatch.setattr(main, "VLM_OLLAMA_MODELS", [])
     monkeypatch.setattr(main.settings, "get", lambda k, d=None: "nomic-ai/nomic-embed-text-v1.5" if k == "EMBED_TEXT_MODEL" else d)
+    monkeypatch.setattr(main, "get_configured_ollama_warm_models", lambda: ["ollama/gemma3:4b"])
+    warmed = []
+    async def _warm(model):
+        warmed.append(model)
+        return True
+
+    monkeypatch.setattr(main, "warm_ollama_model_runtime", _warm)
 
     class _Resp:
         def __init__(self, status_code=200, payload=None):
@@ -60,6 +67,7 @@ async def test_preload_ollama_models_download_flow(monkeypatch):
 
     monkeypatch.setattr(main.httpx, "AsyncClient", _Client)
     await main.preload_ollama_models()
+    assert warmed == ["ollama/gemma3:4b"]
 
 
 @pytest.mark.asyncio
@@ -71,7 +79,18 @@ async def test_preload_ollama_models_skips_available_and_handles_lookup_error(mo
     monkeypatch.setenv("JUDGE_MODELS", "[]")
     monkeypatch.setenv("OLLAMA_MODEL", "ollama/gemma3:4b")
     monkeypatch.setattr(main, "VLM_OLLAMA_MODELS", ["llava:7b"])
-    monkeypatch.setattr(main.settings, "get", lambda k, d=None: "ollama/custom-embed" if k == "EMBED_TEXT_MODEL" else d)
+    monkeypatch.setattr(
+        main.settings,
+        "get",
+        lambda k, d=None: {"EMBED_TEXT_MODEL": "ollama/custom-embed", "OLLAMA_WARMUP_GENERATE_ENABLED": "1"}.get(k, d),
+    )
+    monkeypatch.setattr(main, "get_configured_ollama_warm_models", lambda: [])
+    warmed = []
+    async def _warm(model):
+        warmed.append(model)
+        return True
+
+    monkeypatch.setattr(main, "warm_ollama_model_runtime", _warm)
 
     class _Resp:
         def raise_for_status(self):
@@ -117,6 +136,7 @@ async def test_preload_ollama_models_skips_available_and_handles_lookup_error(mo
     monkeypatch.setattr(main.httpx, "AsyncClient", _Client)
     await main.preload_ollama_models()
     assert calls["stream"] >= 1
+    assert warmed
 
 
 def test_metrics_endpoint_wraps_prometheus_payload(monkeypatch):

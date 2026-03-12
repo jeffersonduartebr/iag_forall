@@ -113,7 +113,16 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(rl.sparse_index, "search", lambda q, top_k=20: [("d2", 0.9), ("d3", 0.7)])
     monkeypatch.setattr(rl.sparse_index, "get_text", lambda did: {"d2": "doc2", "d3": "doc3"}.get(did, ""))
     monkeypatch.setattr(rl, "rerank_documents", lambda q, docs, k: docs[:k])
-    monkeypatch.setattr(rl.settings, "get", lambda key, default=None: "1" if key == "RERANK_ENABLED" else default, raising=False)
+    monkeypatch.setattr(
+        rl.settings,
+        "get",
+        lambda key, default=None: {
+            "RERANK_ENABLED": "1",
+            "RAG_RERANK_MIN_CANDIDATES": "2",
+            "RAG_CONTEXT_TOKEN_BUDGET": "200",
+        }.get(key, default),
+        raising=False,
+    )
 
     prompt = await rl.build_augmented_prompt("como arrumar?", modality="text", image_b64=None, k=2)
     assert "CONTEXTO RECUPERADO" in prompt
@@ -166,3 +175,45 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert (await rl.health())["status"] == "ok"
     monkeypatch.setattr(rl, "health_async", _health_fail)
     assert (await rl.health())["status"] == "fail"
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_skips_rerank_and_trims_context(monkeypatch):
+    """RAG should skip rerank for tiny candidate sets and trim context to the configured token budget."""
+    async def _emb(*a, **k):
+        return [0.1, 0.2]
+
+    async def _query(**kwargs):
+        return {
+            "ids": [["d1", "d2"]],
+            "documents": [["A" * 320, "B" * 320]],
+            "distances": [[0.1, 0.2]],
+        }
+
+    rerank_calls = {"count": 0}
+
+    def _rerank(query, docs, k):
+        rerank_calls["count"] += 1
+        return docs[:k]
+
+    monkeypatch.setattr(rl, "_compute_embedding", _emb)
+    monkeypatch.setattr(rl, "query_embedding", _query)
+    monkeypatch.setattr(rl.sparse_index, "search", lambda q, top_k=20: [])
+    monkeypatch.setattr(rl.sparse_index, "get_text", lambda did: "")
+    monkeypatch.setattr(rl, "rerank_documents", _rerank)
+    monkeypatch.setattr(
+        rl.settings,
+        "get",
+        lambda key, default=None: {
+            "RERANK_ENABLED": "1",
+            "RAG_RERANK_MIN_CANDIDATES": "3",
+            "RAG_CONTEXT_TOKEN_BUDGET": "40",
+        }.get(key, default),
+        raising=False,
+    )
+
+    prompt = await rl.build_augmented_prompt("Explique a fotossíntese.", modality="text", image_b64=None, k=2)
+
+    assert rerank_calls["count"] == 0
+    assert "CONTEXTO RECUPERADO" in prompt
+    assert len(prompt) < 420

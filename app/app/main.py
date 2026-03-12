@@ -71,7 +71,13 @@ from .observability import (
     TOKENS_OUTPUT_TOTAL,
 )
 from .router_core import start_background_services, stop_background_services
-from .providers_async import close_http_client, start_provider_runtime_services, stop_provider_runtime_services
+from .providers_async import (
+    close_http_client,
+    start_provider_runtime_services,
+    stop_provider_runtime_services,
+    get_configured_ollama_warm_models,
+    warm_ollama_model_runtime,
+)
 from .utils.redis_client import get_redis, close_redis
 from .db import close_engine
 from .routers import rag_router
@@ -201,7 +207,8 @@ async def preload_ollama_models():
         main_model = os.getenv("OLLAMA_MODEL", "")
         embed_model = settings.get("EMBED_TEXT_MODEL", "all-minilm")
 
-        all_models = []
+        configured_warm_models = get_configured_ollama_warm_models()
+        all_models = list(configured_warm_models)
         for raw in (candidates_raw, judges_raw):
             try:
                 parsed = json.loads(raw)
@@ -225,7 +232,7 @@ async def preload_ollama_models():
         all_models.append("ollama/all-minilm")
 
         all_models = [m.strip() for m in all_models if m.strip().startswith("ollama/")]
-        all_models = list(set(all_models))
+        all_models = list(dict.fromkeys(all_models))
 
         if not all_models:
             return
@@ -261,6 +268,14 @@ async def preload_ollama_models():
                 logger.info(f"[ollama-preload] '{name}' OK.")
             except Exception as e:
                 logger.error(f"[ollama-preload] Falha ao baixar '{name}': {e}")
+
+        if str(settings.get("OLLAMA_WARMUP_GENERATE_ENABLED", "1")).strip() == "1":
+            warm_targets = configured_warm_models or all_models[: max(1, min(3, len(all_models)))]
+            for model in warm_targets:
+                try:
+                    await warm_ollama_model_runtime(model)
+                except Exception as e:
+                    logger.warning(f"[ollama-preload] Falha ao aquecer runtime '{model}': {e}")
 
         logger.info("[ollama-preload] Concluído.")
     except Exception as e:

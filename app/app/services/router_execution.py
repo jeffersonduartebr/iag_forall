@@ -9,6 +9,40 @@ from typing import Any, Dict
 from app.model_registry import filter_configured_model_names
 
 
+def _setting_value(settings: Any, key: str, default: Any) -> Any:
+    """Return one setting from either the dynamic settings facade or a simple stub object."""
+    getter = getattr(settings, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    return getattr(settings, key, default)
+
+
+def _should_bypass_rag(
+    *,
+    deps: Dict[str, Any],
+    query: str,
+    modality: str,
+    image_b64: str | None,
+    use_rag: bool,
+    uncertainty_score: float,
+) -> bool:
+    """Return whether retrieval should be skipped for the current request."""
+    if not use_rag:
+        return True
+    if image_b64 or modality in {"vision", "multimodal"}:
+        return False
+    if str(_setting_value(deps["settings"], "RAG_SIMPLE_QUERY_BYPASS_ENABLED", "1")).strip() != "1":
+        return False
+
+    query_text = str(query or "").strip()
+    token_count = len(query_text.split())
+    if uncertainty_score > 0.45:
+        return False
+    if token_count <= 18 and len(query_text) <= 140:
+        return True
+    return False
+
+
 async def route_and_answer_internal_impl(
     *,
     deps: Dict[str, Any],
@@ -118,6 +152,11 @@ async def route_and_answer_internal_impl(
         )
     )
     valid_models = filter_configured_model_names(valid_models)
+    if "apply_ollama_performance_preferences" in deps:
+        try:
+            valid_models = deps["apply_ollama_performance_preferences"](valid_models)
+        except Exception as exc:
+            deps["logger"].warning(f"[router] Failed to apply Ollama performance preferences: {exc}")
 
     if not valid_models:
         valid_models = ["ollama/phi4:latest"]
@@ -143,7 +182,16 @@ async def route_and_answer_internal_impl(
             deps["asyncio"].to_thread(deps["_ensure_ollama_model"], chosen.replace("ollama/", ""))
         )
 
-    if use_rag:
+    should_skip_rag = _should_bypass_rag(
+        deps=deps,
+        query=query,
+        modality=modality,
+        image_b64=image_b64,
+        use_rag=use_rag,
+        uncertainty_score=float(uncertainty_score or 0.0),
+    )
+
+    if not should_skip_rag:
         retrieval_started_at = time.time()
         try:
             rag_mode = rag_modality if not (image_b64 and modality != "text") else modality

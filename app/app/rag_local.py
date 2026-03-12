@@ -1,13 +1,6 @@
 # -*- coding: utf-8 -*-
 # Objective: Application runtime code for rag local.
-"""
-rag_local.py — RAG Multimodal Unificado (Com suporte Imagem -> Texto)
----------------------------------------------------------------------
-Implementa a lógica de recuperação de contexto, incluindo a estratégia
-de "Visual Query Generation" para RAG baseado em imagem.
-
-Quick Win #5: Added Redis cache for visual query descriptions.
-"""
+"""Hybrid local RAG helpers for text, vision, and multimodal retrieval flows."""
 
 from __future__ import annotations
 import logging
@@ -67,6 +60,48 @@ except ImportError:
     RETRIEVAL_DOCUMENTS_RETURNED = None
     RETRIEVAL_CONTEXT_TOKENS = None
     RETRIEVAL_SCORE = None
+
+
+def _get_int_setting(key: str, default: int) -> int:
+    """Read one integer setting with a defensive fallback for malformed values."""
+    try:
+        value = settings.get(key, default)
+        return int(value if value is not None else default)
+    except Exception:
+        return int(default)
+
+
+def _is_enabled(key: str, default: str = "1") -> bool:
+    """Read one boolean-like flag from settings using the project's string convention."""
+    try:
+        return str(settings.get(key, default)).strip() == "1"
+    except Exception:
+        return str(default).strip() == "1"
+
+
+def _trim_context_to_budget(documents: List[str], token_budget: int) -> List[str]:
+    """Trim retrieved documents so the assembled context stays within a soft token budget."""
+    if token_budget <= 0:
+        return list(documents)
+
+    budget_chars = token_budget * 4
+    total_chars = 0
+    trimmed: List[str] = []
+    for document in documents:
+        if not document:
+            continue
+        remaining = budget_chars - total_chars
+        if remaining <= 0:
+            break
+        if len(document) <= remaining:
+            trimmed.append(document)
+            total_chars += len(document)
+            continue
+        shortened = document[:remaining].rstrip()
+        if shortened:
+            trimmed.append(shortened)
+        break
+    return trimmed
 
 
 def _hash_image(image_b64: str) -> str:
@@ -319,13 +354,17 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         return query
 
     # --- 4. Re-Ranking (Cross-Encoder) ---
-    # Pega os Top-N da fusão e reordena com precisão máxima
-    if str(settings.get("RERANK_ENABLED", "1")) == "1":
-        # Re-rankeia os top 10 candidatos da fusão
-        final_docs = await asyncio.to_thread(rerank_documents, query, candidate_texts[:5], k)
+    rerank_enabled = _is_enabled("RERANK_ENABLED", "1")
+    rerank_min_candidates = max(1, _get_int_setting("RAG_RERANK_MIN_CANDIDATES", 3))
+    rerank_candidates = candidate_texts[: max(k, 5)]
+
+    if rerank_enabled and len(rerank_candidates) >= rerank_min_candidates:
+        final_docs = await asyncio.to_thread(rerank_documents, query, rerank_candidates, k)
     else:
         final_docs = candidate_texts[:k]
 
+    context_token_budget = _get_int_setting("RAG_CONTEXT_TOKEN_BUDGET", 1200)
+    final_docs = _trim_context_to_budget(final_docs, context_token_budget)
     context = "\n\n".join(final_docs)
     try:
         if RETRIEVAL_DOCUMENTS_RETURNED:

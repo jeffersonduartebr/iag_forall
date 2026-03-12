@@ -336,7 +336,69 @@ class TestOllamaProvider:
                 await controller.force_refresh()
                 assert controller.get_effective_limit() == 4
                 await controller.force_refresh()
-                assert controller.get_effective_limit() == 5
+        assert controller.get_effective_limit() == 5
+
+    def test_apply_ollama_performance_preferences_prefers_loaded_models(self):
+        """Routing preferences should trim cold local candidates when warm alternatives exist."""
+        from app import providers_async as pa
+
+        pa._ollama_runtime_state.clear()
+        pa._mark_ollama_model_state("ollama/gemma3:4b", loaded=True, load_seconds=0.2)
+        pa._mark_ollama_model_state("ollama/qwen3.5:4b", loaded=False, load_seconds=12.0)
+        pa._mark_ollama_model_state("ollama/ministral-3:3b", loaded=True, load_seconds=0.4, inflight_delta=2)
+
+        with patch.object(
+            pa,
+            "_runtime_provider_settings",
+            return_value={
+                "ollama_concurrency_limit": 5,
+                "ollama_dynamic_concurrency_enabled": False,
+                "ollama_concurrency_min": 1,
+                "ollama_concurrency_max": 5,
+                "ollama_vram_target_utilization": 0.72,
+                "ollama_vram_high_watermark": 0.82,
+                "ollama_vram_low_watermark": 0.55,
+                "ollama_vram_poll_interval_seconds": 5,
+                "ollama_concurrency_step_up": 1,
+                "ollama_concurrency_step_down": 1,
+                "ollama_concurrency_stable_windows": 3,
+                "ollama_gpu_index": 0,
+                "ollama_warm_models": ["ollama/gemma3:4b"],
+                "ollama_warmup_generate_enabled": True,
+                "ollama_load_penalty_enabled": True,
+                "ollama_route_candidate_limit": 2,
+                "adaptive_timeout_enabled": True,
+                "base_timeout": 60,
+                "max_timeout": 1200,
+                "timeout_multiplier": 2.0,
+                "reasoning_multiplier": 3.0,
+            },
+        ):
+            preferred = pa.apply_ollama_performance_preferences(
+                ["ollama/qwen3.5:4b", "ollama/gemma3:4b", "ollama/ministral-3:3b", "openai/gpt-4o"]
+            )
+
+        assert preferred[0] == "ollama/gemma3:4b"
+        assert "ollama/qwen3.5:4b" not in preferred[:2]
+        assert "openai/gpt-4o" in preferred
+
+    @pytest.mark.asyncio
+    async def test_warm_ollama_model_runtime_marks_loaded_state(self):
+        """Warmup requests should mark the local model as resident after a successful ping generation."""
+        mock_http_client = AsyncMock()
+        mock_response_obj = MagicMock()
+        mock_response_obj.json.return_value = {"response": "OK", "load_duration": 500_000_000}
+        mock_response_obj.raise_for_status = MagicMock()
+        mock_http_client.post.return_value = mock_response_obj
+
+        with patch("app.providers_async.get_http_client", AsyncMock(return_value=mock_http_client)):
+            from app import providers_async as pa
+
+            pa._ollama_runtime_state.clear()
+            warmed = await pa.warm_ollama_model_runtime("ollama/gemma3:4b")
+
+        assert warmed is True
+        assert pa._ollama_runtime_state["ollama/gemma3:4b"]["loaded"] is True
 
     @pytest.mark.asyncio
     async def test_dynamic_controller_falls_back_when_telemetry_fails(self):
