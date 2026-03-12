@@ -32,6 +32,7 @@ from .settings_dynamic import settings
 from .providers_async import call_model
 from .vectorstore import query_embedding
 from .embeddings import embed_text
+from .model_registry import filter_configured_model_names, is_model_configured
 
 import asyncio
 
@@ -151,7 +152,7 @@ MIN_FITNESS = _safe_setting_float("JUDGES_MIN_FITNESS", 0.30)
 CONSIST_WINDOW_MIN = _safe_setting_int("JUDGES_WINDOW_MIN", 180)
 
 # Meta-Juiz preferencial (deve ser um modelo forte)
-META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "openai/gpt-5.1"))
+META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "ollama/phi4:latest"))
 
 # Aumentado para permitir CoT (Raciocínio)
 MAX_TOKENS_JUDGE = 512 
@@ -161,7 +162,7 @@ W_FIT = _safe_setting_float("JUDGES_WEIGHT_FITNESS", 0.6)
 W_QC = _safe_setting_float("JUDGES_WEIGHT_QC", 0.4)
 EPSILON_RANDOM = _safe_setting_float("JUDGES_EPSILON", 0.10)
 
-IMAGE_DESC_MODEL_HINT = str(settings.get("IMAGE_DESC_MODEL", "openai/gpt-4o-mini"))
+IMAGE_DESC_MODEL_HINT = str(settings.get("IMAGE_DESC_MODEL", "ollama/qwen3-vl:8b"))
 
 VISION_VLM_CANDIDATES: List[str] = list(
     getattr(settings, "CANDIDATE_VISION_MODELS_LIST", [])
@@ -169,6 +170,47 @@ VISION_VLM_CANDIDATES: List[str] = list(
 MULTIMODAL_VLM_CANDIDATES: List[str] = list(
     getattr(settings, "CANDIDATE_MULTIMODAL_MODELS_LIST", [])
 )
+
+
+def _configured_local_fallback() -> str:
+    """Return a stable local fallback model for judge-related paths."""
+    preferred = [
+        getattr(settings, "JUDGES_LOCAL_MODEL", None),
+        "ollama/phi4:latest",
+        "ollama/qwen3:14b",
+        "ollama/gemma3:4b",
+    ]
+    candidates = [model for model in preferred if isinstance(model, str) and model]
+    filtered = filter_configured_model_names(candidates)
+    return filtered[0] if filtered else "ollama/phi4:latest"
+
+
+def _resolve_meta_judge_model() -> str:
+    """Resolve the configured meta-judge model with a local fallback."""
+    if is_model_configured(META_JUDGE_HINT):
+        return META_JUDGE_HINT
+    return _configured_local_fallback()
+
+
+def _resolve_image_desc_model() -> str:
+    """Resolve the configured vision model with a local fallback."""
+    candidates = []
+    if IMAGE_DESC_MODEL_HINT:
+        candidates.append(IMAGE_DESC_MODEL_HINT)
+    candidates.extend(VISION_VLM_CANDIDATES)
+    candidates.extend(MULTIMODAL_VLM_CANDIDATES)
+    filtered = filter_configured_model_names(
+        [model for model in candidates if isinstance(model, str) and model]
+    )
+    return filtered[0] if filtered else "ollama/qwen3-vl:8b"
+
+
+def _resolve_judge_models() -> List[str]:
+    """Resolve judge models to the subset configured for the current environment."""
+    configured = filter_configured_model_names(
+        [model for model in (getattr(settings, "JUDGE_MODELS", []) or []) if isinstance(model, str) and model]
+    )
+    return configured or [_configured_local_fallback()]
 
 
 # ============================================================
@@ -451,8 +493,9 @@ async def _describe_image_if_needed(image_b64: Optional[str], modality: str) -> 
         return ""
 
     candidates = []
-    if IMAGE_DESC_MODEL_HINT:
-        candidates.append(IMAGE_DESC_MODEL_HINT)
+    image_desc_model = _resolve_image_desc_model()
+    if image_desc_model:
+        candidates.append(image_desc_model)
     candidates.extend(VISION_VLM_CANDIDATES)
     candidates.extend(MULTIMODAL_VLM_CANDIDATES)
 
@@ -516,7 +559,7 @@ async def _meta_evaluate_binary(query, answer, conflicting_verdicts, base_prompt
     Meta-Juiz para desempate binário.
     Acionado quando há conflito direto (0 vs 10).
     """
-    meta_model = META_JUDGE_HINT
+    meta_model = _resolve_meta_judge_model()
     
     v1_model, v1_score = conflicting_verdicts[0]
     v2_model, v2_score = conflicting_verdicts[1]
@@ -614,7 +657,7 @@ CORRECT ou INCORRECT
 </verdict>
 """
 
-    judge_models_all = getattr(settings, "JUDGE_MODELS", []) or ["openai/gpt-5.1"]
+    judge_models_all = _resolve_judge_models()
     stats = _load_judge_stats(CONSIST_WINDOW_MIN)
     selected = _choose_two(judge_models_all, stats)
 

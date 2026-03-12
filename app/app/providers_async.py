@@ -68,6 +68,7 @@ from pydantic import BaseModel
 # Utilitários de Precisão
 from app.utils.token_utils import count_tokens
 from app.utils.pricing import get_model_cost
+from app.model_registry import is_provider_configured
 
 # Observabilidade
 from app.observability import (
@@ -266,7 +267,7 @@ if genai and GEMINI_API_KEY:
 REASONING_MODEL_KEYWORDS = ["phi4", "reasoning", "deepseek-r1", "cot", "math"]
 
 # Quick Win #6 & #7: defaults + runtime-reload settings
-DEFAULT_OLLAMA_CONCURRENCY_LIMIT = 30
+DEFAULT_OLLAMA_CONCURRENCY_LIMIT = 5
 DEFAULT_ADAPTIVE_TIMEOUT_ENABLED = True
 DEFAULT_BASE_TIMEOUT = 60
 DEFAULT_MAX_TIMEOUT = 1200
@@ -676,6 +677,10 @@ class OllamaProvider(BaseProvider):
                     "model": model,
                     "prompt": final_prompt,
                     "stream": False,
+                    # Avoid empty final answers on models that support a separate
+                    # thinking channel (for example qwen3.5) unless we explicitly
+                    # want reasoning output.
+                    "think": is_reasoning_model,
                     "options": {
                         "temperature": kwargs.get("temperature", 0.5),
                         "num_predict": kwargs.get("max_tokens", 512),
@@ -699,6 +704,7 @@ class OllamaProvider(BaseProvider):
                 data = resp.json()
 
                 raw_text = data.get("response", "").strip()
+                raw_thinking = data.get("thinking", "").strip()
                 
                 # --- EXTRAÇÃO DE REASONING (THINKING) ---
                 # Modelos como Phi-4 e DeepSeek-R1 retornam o raciocínio dentro de <think>...</think>
@@ -711,6 +717,8 @@ class OllamaProvider(BaseProvider):
                     reasoning = think_match.group(1).strip()
                     # Remove o pensamento da resposta final para o usuário
                     text_out = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+                elif raw_thinking:
+                    reasoning = raw_thinking
                 
                 # --- EXTRAÇÃO DE LOAD TIME ---
                 load_ns = data.get("load_duration", 0)
@@ -765,7 +773,9 @@ class ProviderFactory:
     def get_provider(cls, model_name: str) -> BaseProvider:
         """Obtém provider."""
         prefix = model_name.split("/")[0] if "/" in model_name else "ollama"
-        
+        if not is_provider_configured(prefix):
+            raise RuntimeError(f"Provider '{prefix}' is not configured in the environment")
+
         if prefix not in cls._instances:
             if prefix == "openai": cls._instances[prefix] = OpenAIProvider()
             elif prefix == "anthropic": cls._instances[prefix] = AnthropicProvider()

@@ -107,7 +107,7 @@ class TestProviderFactory:
         """Factory should raise ValueError for unknown namespace."""
         from app.providers_async import ProviderFactory
 
-        with pytest.raises(ValueError, match="Namespace desconhecido"):
+        with pytest.raises(RuntimeError, match="not configured in the environment"):
             ProviderFactory.get_provider("unknown_provider/model")
 
 
@@ -182,6 +182,71 @@ class TestOllamaProvider:
 
             assert result.reasoning == "This is my reasoning process"
             assert result.text == "Final answer here"
+
+    @pytest.mark.asyncio
+    async def test_ollama_provider_disables_thinking_for_non_reasoning_models(self):
+        """OllamaProvider should send think=false for non-reasoning models."""
+        mock_response = {
+            "response": "4",
+            "prompt_eval_count": 10,
+            "eval_count": 2,
+            "load_duration": 0,
+        }
+
+        mock_http_client = AsyncMock()
+        mock_response_obj = MagicMock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = MagicMock()
+        mock_http_client.post.return_value = mock_response_obj
+
+        with patch("app.providers_async.get_http_client", AsyncMock(return_value=mock_http_client)):
+            from app.providers_async import OllamaProvider, local_breaker
+
+            provider = OllamaProvider()
+            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+
+            result = await provider.generate(
+                prompt="Quanto e 2+2?",
+                model="qwen3.5:2b",
+                max_tokens=64,
+            )
+
+            sent_payload = mock_http_client.post.await_args.kwargs["json"]
+            assert sent_payload["think"] is False
+            assert result.text == "4"
+            assert result.reasoning is None
+
+    @pytest.mark.asyncio
+    async def test_ollama_provider_captures_separate_thinking_field(self):
+        """OllamaProvider should keep separate thinking in reasoning metadata only."""
+        mock_response = {
+            "response": "Resposta final",
+            "thinking": "Etapas internas de raciocinio",
+            "prompt_eval_count": 10,
+            "eval_count": 8,
+            "load_duration": 0,
+        }
+
+        mock_http_client = AsyncMock()
+        mock_response_obj = MagicMock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = MagicMock()
+        mock_http_client.post.return_value = mock_response_obj
+
+        with patch("app.providers_async.get_http_client", AsyncMock(return_value=mock_http_client)):
+            from app.providers_async import OllamaProvider, local_breaker
+
+            provider = OllamaProvider()
+            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+
+            result = await provider.generate(
+                prompt="Explique em uma frase.",
+                model="qwen3.5:2b",
+                max_tokens=64,
+            )
+
+            assert result.text == "Resposta final"
+            assert result.reasoning == "Etapas internas de raciocinio"
 
 
 class TestCallModelWrapper:

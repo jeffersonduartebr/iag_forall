@@ -237,11 +237,12 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
+    gpus: all
 
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
       - OLLAMA_KEEP_ALIVE=30m
-      - OLLAMA_NUM_PARALLEL=16
+      - OLLAMA_NUM_PARALLEL=5
       - OLLAMA_METRICS=true
       - OLLAMA_FLASH_ATTENTION=1   # Aceleração massiva para placas RTX
       - OLLAMA_KV_CACHE_TYPE=q8_0  # Comprime o contexto (cache) para caber mais
@@ -249,20 +250,8 @@ services:
       - OLLAMA_MAX_LOADED_MODELS=3
       - OLLAMA_NUM_THREADS=8
 
-    ports:
-      - "11434:11434"
-
     volumes:
       - ./ollama_data:/root/.ollama
-      - ./app/data/vertex_api.json:/app/keys/vertex_api.json:ro
-
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
     depends_on:
       mariadb:

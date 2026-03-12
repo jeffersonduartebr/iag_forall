@@ -1,6 +1,9 @@
 """Módulo `tests/locustfile.py`: descreve responsabilidades e integrações deste arquivo."""
 
 from locust import HttpUser, task, between
+from locust import events
+from gevent.lock import Semaphore
+import os
 import random
 
 # ==========================================================
@@ -2772,3 +2775,84 @@ class APIVersionUser(HttpUser):
     def v1_health(self):
         """Test v1 health endpoint."""
         self.client.get("/v1/health")
+
+
+EXACT_QUERY_TARGET = int(os.getenv("EXACT_QUERY_TARGET", "100"))
+_exact_query_lock = Semaphore()
+_exact_queries_issued = 0
+_exact_queries_completed = 0
+_exact_response_samples = []
+_exact_report_printed = False
+_exact_prompt_bank = [
+    "Explique em uma frase o que e fotossintese.",
+    "Explique em uma frase o que e a Revolucao Francesa.",
+    "Explique em uma frase o que e a agua potavel.",
+    "Explique em uma frase o que e a biodiversidade.",
+    "Explique em uma frase o que e a energia solar.",
+]
+
+
+class ExactHundredQueriesUser(HttpUser):
+    """Runs exactly 100 /query requests with a maximum of two concurrent users."""
+    wait_time = lambda self: 0
+    host = "http://llm_router_api:8000"
+    weight = 1
+
+    @task
+    def run_exact_queries(self):
+        """Reserve and execute one query until the global target is reached."""
+        global _exact_queries_issued, _exact_queries_completed
+
+        with _exact_query_lock:
+            if _exact_queries_issued >= EXACT_QUERY_TARGET:
+                if _exact_queries_completed >= EXACT_QUERY_TARGET and self.environment.runner:
+                    self.environment.runner.quit()
+                return
+            index = _exact_queries_issued
+            _exact_queries_issued += 1
+
+        query_text = _exact_prompt_bank[index % len(_exact_prompt_bank)]
+        payload = {
+            "query": query_text,
+            "enable_rag_for_answer": False,
+            "max_tokens": 64,
+            "temperature": 0.1,
+            "timeout_seconds": 30,
+        }
+
+        with self.client.post("/query", json=payload, name="/query", catch_response=True) as response:
+            body = response.text[:220] if response.text else ""
+            if response.status_code >= 400:
+                response.failure(f"HTTP {response.status_code}: {body}")
+            else:
+                response.success()
+
+            with _exact_query_lock:
+                _exact_queries_completed += 1
+                if len(_exact_response_samples) < 5:
+                    _exact_response_samples.append(
+                        {
+                            "status": response.status_code,
+                            "query": query_text[:80],
+                            "body": body,
+                        }
+                    )
+                should_stop = _exact_queries_completed >= EXACT_QUERY_TARGET
+
+        if should_stop and self.environment.runner:
+            self.environment.runner.quit()
+
+
+@events.quitting.add_listener
+def _report_exact_query_samples(environment, **_kwargs):
+    """Print a small sample of responses from the exact-100 run."""
+    global _exact_report_printed
+    if _exact_report_printed or not _exact_response_samples:
+        return
+    _exact_report_printed = True
+    print("[ExactHundredQueriesUser] response samples:")
+    for idx, sample in enumerate(_exact_response_samples, start=1):
+        print(
+            f"[ExactHundredQueriesUser] sample#{idx} status={sample['status']} "
+            f"query={sample['query']!r} body={sample['body']!r}"
+        )

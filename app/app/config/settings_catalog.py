@@ -29,7 +29,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "EMBED_TEXT_MODEL": "nomic-embed-text",
         "TEXT_EMBEDDING_MODEL": "nomic-embed-text",
         "IMAGE_EMBEDDING_MODEL": "clip-vit-large-patch14",
-        "MULTIMODAL_EMBEDDING_MODEL": "gpt-4o-mini-embed",
+        "MULTIMODAL_EMBEDDING_MODEL": "clip-vit-large-patch14",
     },
     "centroids": {
         "CENTROIDS_DIM": "768",
@@ -46,7 +46,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "JUDGES_ENABLED": "1",
         "JUDGES_MODE": "llm",
         "JUDGES_LOCAL_MODEL": "ollama/phi4:latest",
-        "JUDGES_REMOTE_MODEL": "gpt-5-mini",
+        "JUDGES_REMOTE_MODEL": "ollama/phi4:latest",
         "JUDGES_TIMEOUT_S": "15",
         "JUDGE_MIN_SAMPLE_RATE": "0.05",
         "JUDGE_CALIBRATION_ENABLED": "1",
@@ -56,7 +56,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
     "providers": {
         "OLLAMA_BASE_URL": "http://ollama:11434",
         "OLLAMA_HOST": "http://ollama:11434",
-        "OLLAMA_CONCURRENCY_LIMIT": "30",
+        "OLLAMA_CONCURRENCY_LIMIT": "5",
         "CANDIDATE_MODELS_LIST": "[]",
         "CANDIDATE_VISION_MODELS_LIST": "[]",
         "CANDIDATE_MULTIMODAL_MODELS_LIST": "[]",

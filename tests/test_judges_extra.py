@@ -63,9 +63,10 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
         return "descrição curta", {}
 
     monkeypatch.setattr(judges, "call_model", _call_model)
-    monkeypatch.setattr(judges, "IMAGE_DESC_MODEL_HINT", "openai/gpt-4o-mini")
-    monkeypatch.setattr(judges, "VISION_VLM_CANDIDATES", ["openai/gpt-4o-mini"])
+    monkeypatch.setattr(judges, "IMAGE_DESC_MODEL_HINT", "ollama/qwen3-vl:8b")
+    monkeypatch.setattr(judges, "VISION_VLM_CANDIDATES", ["ollama/qwen3-vl:8b"])
     monkeypatch.setattr(judges, "MULTIMODAL_VLM_CANDIDATES", [])
+    monkeypatch.setattr(judges, "filter_configured_model_names", lambda models: list(models))
     desc = await judges._describe_image_if_needed("img", "vision")
     assert desc == "descrição curta"
 
@@ -74,6 +75,7 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
         return "<verdict>CORRECT</verdict>", {}
 
     monkeypatch.setattr(judges, "call_model", _meta)
+    monkeypatch.setattr(judges, "is_model_configured", lambda model: True)
     m = await judges._meta_evaluate_binary("q", "a", [("j1", 0.0), ("j2", 10.0)], "prompt", reference=None)
     assert m == 10.0
 
@@ -197,3 +199,26 @@ def test_judge_calibration_functions(monkeypatch):
     assert "j1" in metrics
     res = judges.calibrate_judges()
     assert res["status"] == "ok"
+
+
+def test_judge_runtime_model_resolution(monkeypatch):
+    """Testa resolução de modelos de juiz com fallback local."""
+    monkeypatch.setattr(judges, "META_JUDGE_HINT", "openai/gpt-5.1")
+    monkeypatch.setattr(judges, "IMAGE_DESC_MODEL_HINT", "openai/gpt-4o-mini")
+    monkeypatch.setattr(judges, "VISION_VLM_CANDIDATES", ["ollama/qwen3-vl:8b"])
+    monkeypatch.setattr(judges, "MULTIMODAL_VLM_CANDIDATES", [])
+    monkeypatch.setattr(
+        judges,
+        "settings",
+        SimpleNamespace(JUDGE_MODELS=["openai/gpt-5.1"], JUDGES_LOCAL_MODEL="ollama/phi4:latest"),
+    )
+    monkeypatch.setattr(
+        judges,
+        "filter_configured_model_names",
+        lambda models: [model for model in models if model.startswith("ollama/")],
+    )
+    monkeypatch.setattr(judges, "is_model_configured", lambda model: model.startswith("ollama/"))
+
+    assert judges._resolve_meta_judge_model() == "ollama/phi4:latest"
+    assert judges._resolve_image_desc_model() == "ollama/qwen3-vl:8b"
+    assert judges._resolve_judge_models() == ["ollama/phi4:latest"]

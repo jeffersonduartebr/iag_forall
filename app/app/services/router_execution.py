@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
+from app.model_registry import filter_configured_model_names
+
 
 async def route_and_answer_internal_impl(
     *,
@@ -97,6 +99,7 @@ async def route_and_answer_internal_impl(
             ]
         )
     )
+    valid_models = filter_configured_model_names(valid_models)
 
     if not valid_models:
         valid_models = ["ollama/phi4:latest"]

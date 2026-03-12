@@ -26,11 +26,6 @@ omit =
     */query_service.py
     */risk_tuner.py
     */roadmap_features.py
-    */router_core.py
-    */services/router_execution.py
-    */services/router_feedback.py
-    */services/router_resilience.py
-    */settings_dynamic.py
     */tasks.py
     */user_feedback.py
     */utils/redis_client.py

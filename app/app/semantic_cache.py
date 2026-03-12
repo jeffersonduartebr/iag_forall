@@ -53,6 +53,36 @@ def _normalize_modality(mod: str) -> str:
     return "text"
 
 
+def _extract_first_result(results: Dict[str, Any]) -> tuple[Optional[float], Optional[Dict[str, Any]]]:
+    """
+    Safely extract the first Chroma match.
+
+    Chroma may return top-level keys with nested empty lists, which previously caused
+    `list index out of range` during cache lookup.
+    """
+    if not isinstance(results, dict):
+        return None, None
+
+    documents = results.get("documents") or []
+    distances = results.get("distances") or []
+    metadatas = results.get("metadatas") or []
+
+    if not documents or not documents[0]:
+        return None, None
+    if not distances or not distances[0]:
+        return None, None
+    if not metadatas or not metadatas[0]:
+        return None, None
+
+    distance = distances[0][0]
+    metadata = metadatas[0][0]
+
+    if distance is None or not isinstance(metadata, dict):
+        return None, None
+
+    return float(distance), metadata
+
+
 # ==============================================================================
 # L1 Cache: Thread-safe TTL Cache (Replaces broken lru_cache implementation)
 # ==============================================================================
@@ -178,12 +208,15 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
             n_results=1
         )
         
-        if not results or not results.get("documents"):
+        if not results:
+            return None
+
+        distance, meta = _extract_first_result(results)
+        if distance is None or meta is None:
             return None
 
         # Chroma retorna 'distances' (Cosine Distance).
         # Similarity = 1 - Distance.
-        distance = results["distances"][0][0]
         similarity = 1.0 - distance
 
         # Use dynamic threshold (Phase 5)
@@ -191,7 +224,6 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
         if similarity >= threshold:
             # O texto do documento é a Query original
             # A resposta está no metadata
-            meta = results["metadatas"][0][0]
             answer_text = meta.get("answer_payload", "")
             
             if not answer_text:

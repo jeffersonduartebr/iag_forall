@@ -61,6 +61,13 @@ async def test_check_cache_branches(monkeypatch):
     monkeypatch.setattr(sc, "query_embedding", _nodoc)
     assert await sc.check_cache("q") is None
 
+    async def _empty_nested(**kwargs):
+        """Executa empty nested."""
+        return {"documents": [[]], "distances": [[]], "metadatas": [[]]}
+
+    monkeypatch.setattr(sc, "query_embedding", _empty_nested)
+    assert await sc.check_cache("q") is None
+
     # similarity below threshold
     fake_settings = SimpleNamespace(get=lambda k, d=None: 0.95 if k == "CACHE_THRESHOLD" else d)
     monkeypatch.setattr(sc, "settings", fake_settings)
@@ -94,6 +101,15 @@ async def test_check_cache_branches(monkeypatch):
     assert out["text"] == "resp"
     assert out["model_used"] == "m"
     assert l1.saved
+
+
+def test_extract_first_result_guards_partial_payloads():
+    """Testa extração defensiva do primeiro resultado do Chroma."""
+    assert sc._extract_first_result({}) == (None, None)
+    assert sc._extract_first_result({"documents": [[]], "distances": [[0.1]], "metadatas": [[{}]]}) == (None, None)
+    assert sc._extract_first_result({"documents": [["q"]], "distances": [[]], "metadatas": [[{}]]}) == (None, None)
+    assert sc._extract_first_result({"documents": [["q"]], "distances": [[0.1]], "metadatas": [[]]}) == (None, None)
+    assert sc._extract_first_result({"documents": [["q"]], "distances": [[0.1]], "metadatas": [[{"a": 1}]]}) == (0.1, {"a": 1})
 
 
 @pytest.mark.asyncio

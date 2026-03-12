@@ -47,9 +47,10 @@ def test_registry_get_list_and_filters():
     local_models = registry.get_local_models()
     assert local_models
     assert all(m.provider == mr.Provider.OLLAMA for m in local_models)
+    assert all(m.provider == mr.Provider.OLLAMA for m in all_models)
 
 
-def test_registry_get_or_default_and_fallback_chain():
+def test_registry_get_or_default_and_fallback_chain(monkeypatch):
     """Testa registry get or default and fallback chain."""
     registry = _fresh_registry()
 
@@ -80,6 +81,25 @@ def test_registry_get_or_default_and_fallback_chain():
     registry.register(c)
 
     chain = registry.get_fallback_chain("openai/chain-a", max_depth=5)
+    assert chain == []
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    registry = _fresh_registry()
+    a = mr.ModelConfig(
+        name="chain-a",
+        provider=mr.Provider.OPENAI,
+        fallback_models=["openai/chain-b"],
+    )
+    b = mr.ModelConfig(
+        name="chain-b",
+        provider=mr.Provider.OPENAI,
+        fallback_models=["openai/chain-a", "openai/chain-c"],
+    )
+    c = mr.ModelConfig(name="chain-c", provider=mr.Provider.OPENAI)
+    registry.register(a)
+    registry.register(b)
+    registry.register(c)
+    chain = registry.get_fallback_chain("openai/chain-a", max_depth=5)
     names = [m.full_name for m in chain]
     assert names == ["openai/chain-b", "openai/chain-c"]
 
@@ -90,9 +110,9 @@ def test_registry_cheapest_and_convenience_helpers():
 
     cheapest_text = registry.get_cheapest_model(capability=mr.Capability.TEXT)
     assert cheapest_text is not None
-    assert cheapest_text.cost_per_1k_output > 0
+    assert cheapest_text.provider == mr.Provider.OLLAMA
 
-    assert registry.get_cheapest_model(capability=mr.Capability.FUNCTION_CALLING) is not None
+    assert registry.get_cheapest_model(capability=mr.Capability.FUNCTION_CALLING) is None
     assert registry.get_cheapest_model(capability=mr.Capability("text")) is not None
 
     # Empty registry branch
@@ -103,3 +123,22 @@ def test_registry_cheapest_and_convenience_helpers():
     cfg = mr.get_model_config("gpt-4o")
     assert cfg is not None
     assert cfg.full_name == "openai/gpt-4o"
+
+
+def test_registry_provider_gating(monkeypatch):
+    """Testa que provedores sem credenciais saem da elegibilidade do runtime."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    registry = _fresh_registry()
+
+    assert registry.is_provider_configured(mr.Provider.OLLAMA) is True
+    assert registry.is_provider_configured(mr.Provider.OPENAI) is False
+    assert registry.is_model_configured("openai/gpt-4o") is False
+    assert registry.filter_configured_model_names(["openai/gpt-4o", "ollama/phi4:latest"]) == ["ollama/phi4:latest"]
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    registry = _fresh_registry()
+    runtime_models = registry.list_models()
+    assert any(model.full_name == "openai/gpt-4o" for model in runtime_models)
+    assert registry.is_model_configured("openai/gpt-4o") is True

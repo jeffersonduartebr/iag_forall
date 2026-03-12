@@ -50,12 +50,17 @@ def test_timeout_quality_tokens_and_factory(monkeypatch):
     monkeypatch.setattr(pa, "AnthropicProvider", lambda: "anthropic-provider")
     monkeypatch.setattr(pa, "GeminiProvider", lambda: "gemini-provider")
     monkeypatch.setattr(pa, "OllamaProvider", lambda: "ollama-provider")
+    monkeypatch.setattr(pa, "is_provider_configured", lambda prefix: prefix != "xpto")
     monkeypatch.setattr(pa.ProviderFactory, "_instances", {})
     assert pa.ProviderFactory.get_provider("openai/gpt-4o") == "openai-provider"
     assert pa.ProviderFactory.get_provider("ollama/phi4:latest") == "ollama-provider"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeError):
         pa.ProviderFactory.get_provider("xpto/model")
+
+    monkeypatch.setattr(pa, "is_provider_configured", lambda prefix: prefix == "ollama")
+    with pytest.raises(RuntimeError):
+        pa.ProviderFactory.get_provider("openai/gpt-4o")
 
 
 @pytest.mark.asyncio

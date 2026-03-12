@@ -159,7 +159,7 @@ PRICING_REDIS_TTL: int = int(os.getenv("PRICING_REDIS_TTL", "3600"))
 # ==============================================================================
 
 # Ollama concurrency limit
-OLLAMA_CONCURRENCY_LIMIT: int = int(os.getenv("OLLAMA_CONCURRENCY_LIMIT", "30"))
+OLLAMA_CONCURRENCY_LIMIT: int = int(os.getenv("OLLAMA_CONCURRENCY_LIMIT", "5"))
 
 # Ollama model pull timeout in seconds
 OLLAMA_PULL_TIMEOUT: int = int(os.getenv("OLLAMA_PULL_TIMEOUT", "900"))

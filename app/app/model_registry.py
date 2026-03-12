@@ -20,6 +20,12 @@ from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
+_PROVIDER_ENV_KEYS = {
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "gemini": ("GEMINI_API_KEY",),
+}
+
 
 # ==============================================================================
 # Enums
@@ -372,6 +378,36 @@ class ModelRegistry:
 
         logger.info(f"[ModelRegistry] Initialized with {len(self._models)} models")
 
+    @staticmethod
+    def is_provider_configured(provider: Provider | str) -> bool:
+        """Return whether one provider is configured for runtime use."""
+        provider_value = provider.value if isinstance(provider, Provider) else str(provider)
+        if provider_value == Provider.OLLAMA.value:
+            return True
+
+        env_keys = _PROVIDER_ENV_KEYS.get(provider_value, ())
+        return any(os.getenv(key, "").strip() for key in env_keys)
+
+    def is_model_configured(self, model_name: str) -> bool:
+        """Return whether a model can be used with the current environment."""
+        config = self.get(model_name)
+        if config is not None:
+            return self.is_provider_configured(config.provider)
+
+        if "/" not in model_name:
+            return True
+
+        prefix = model_name.split("/", 1)[0]
+        try:
+            provider = Provider(prefix)
+        except ValueError:
+            return False
+        return self.is_provider_configured(provider)
+
+    def filter_configured_model_names(self, model_names: List[str]) -> List[str]:
+        """Keep model names whose provider is configured in the environment."""
+        return [name for name in model_names if self.is_model_configured(name)]
+
     def register(self, config: ModelConfig) -> None:
         """Register a model configuration."""
         full_name = config.full_name
@@ -412,7 +448,12 @@ class ModelRegistry:
             default_timeout=60,
         )
 
-    def list_models(self, provider: Optional[Provider] = None, capability: Optional[Capability] = None) -> List[ModelConfig]:
+    def list_models(
+        self,
+        provider: Optional[Provider] = None,
+        capability: Optional[Capability] = None,
+        configured_only: bool = True,
+    ) -> List[ModelConfig]:
         """
         List all registered models, optionally filtered.
 
@@ -435,6 +476,8 @@ class ModelRegistry:
             if provider and config.provider != provider:
                 continue
             if capability and capability not in config.capabilities:
+                continue
+            if configured_only and not self.is_provider_configured(config.provider):
                 continue
 
             models.append(config)
@@ -467,7 +510,7 @@ class ModelRegistry:
                     if fallback not in visited:
                         visited.add(fallback)
                         fallback_config = self.get(fallback)
-                        if fallback_config:
+                        if fallback_config and self.is_model_configured(fallback):
                             chain.append(fallback_config)
                             next_models.append(fallback)
 
@@ -517,3 +560,18 @@ def get_model_registry() -> ModelRegistry:
 def get_model_config(model_name: str) -> Optional[ModelConfig]:
     """Get model configuration by name."""
     return get_model_registry().get(model_name)
+
+
+def is_provider_configured(provider: Provider | str) -> bool:
+    """Return whether one provider is configured for runtime use."""
+    return get_model_registry().is_provider_configured(provider)
+
+
+def is_model_configured(model_name: str) -> bool:
+    """Return whether one model can be used with the current environment."""
+    return get_model_registry().is_model_configured(model_name)
+
+
+def filter_configured_model_names(model_names: List[str]) -> List[str]:
+    """Keep only model names whose provider is configured for runtime use."""
+    return get_model_registry().filter_configured_model_names(model_names)
