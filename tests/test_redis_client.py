@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for redis client behavior and regressions.
 """
 test_redis_client.py — Tests for Redis Client Module
 ------------------------------------------------------

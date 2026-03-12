@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Package initialization and import surface for config.
 """
 Configuration modules for the LLM Router application.
 """

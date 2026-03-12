@@ -1,3 +1,4 @@
+# Objective: Service-layer helpers for governance runtime.
 """Thin runtime-facing adapter over roadmap/governance helpers."""
 
 from __future__ import annotations

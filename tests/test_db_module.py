@@ -1,4 +1,10 @@
-"""Módulo `tests/test_db_module.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for db module behavior and regressions.
+"""Test coverage for db module behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 
@@ -21,54 +27,82 @@ def test_engine_singleton_close_and_lazy(monkeypatch):
     db._engine_initialized = False
 
     class _Conn:
-        """Classe `_Conn`: concentra responsabilidades de test db module."""
+        """Represent `_Conn` within this module.
+
+The class groups the state and behavior required for Conn."""
         def __enter__(self):
-            """Executa enter."""
+            """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self
 
         def __exit__(self, exc_type, exc, tb):
-            """Executa exit."""
+            """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return False
 
         def execute(self, *_a, **_k):
-            """Executa execute."""
+            """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
     class _Pool:
-        """Classe `_Pool`: concentra responsabilidades de test db module."""
+        """Represent `_Pool` within this module.
+
+The class groups the state and behavior required for Pool."""
         def size(self):
-            """Executa size."""
+            """Execute the size routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return 5
 
         def checkedin(self):
-            """Executa checkedin."""
+            """Execute the checkedin routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return 3
 
         def checkedout(self):
-            """Executa checkedout."""
+            """Execute the checkedout routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return 2
 
         def overflow(self):
-            """Executa overflow."""
+            """Execute the overflow routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return 0
 
         def invalidatedcount(self):
-            """Executa invalidatedcount."""
+            """Execute the invalidatedcount routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return 0
 
     class _Engine:
-        """Classe `_Engine`: concentra responsabilidades de test db module."""
+        """Represent `_Engine` within this module.
+
+The class groups the state and behavior required for Engine."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.pool = _Pool()
             self.disposed = False
 
         def connect(self):
-            """Executa connect."""
+            """Execute the connect routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _Conn()
 
         def dispose(self):
-            """Executa dispose."""
+            """Execute the dispose routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.disposed = True
 
     eng = _Engine()

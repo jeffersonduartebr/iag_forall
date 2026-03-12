@@ -1,3 +1,4 @@
+# Objective: Test coverage for main lifecycle behavior and regressions.
 """Tests for app lifecycle and operational routes after router extraction."""
 
 from types import SimpleNamespace

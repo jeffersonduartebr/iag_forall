@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
-"""
-vectorstore.py — RAG Multimodal com Versionamento e Auto-Healing
-----------------------------------------------------------------------
-Gerencia a persistência de embeddings no ChromaDB.
+# Objective: Application runtime code for vectorstore.
+"""Manage ChromaDB storage for retrieval and semantic-cache workloads.
 
-Funcionalidades:
-- Versionamento de coleção por modelo (evita mistura de dimensões).
-- Auto-Healing: Reseta a coleção se detectar conflito de dimensão.
-- Integração com Sparse Index (BM25) para Busca Híbrida.
+This module centralizes vector-store responsibilities for the application:
+
+- mapping modalities to the correct collection names
+- versioning collections by embedding model to avoid dimension conflicts
+- inserting and querying embeddings through ChromaDB
+- auto-healing collections when incompatible dimensions are detected
+- coordinating hybrid retrieval with the sparse index
+
+Both the RAG pipeline and the semantic cache rely on this module to provide a
+stable persistence and query surface.
 """
 
 from __future__ import annotations
@@ -51,10 +55,7 @@ VALID_MODALITIES = {"text", "vision", "multimodal", "image", "cache"}
 
 
 def _sanitize_model_name(model_name: str) -> str:
-    """
-    Transforma 'nomic-ai/nomic-embed-text-v1.5' em 'nomic_ai_nomic_embed_text_v1_5'.
-    Usado para sufixar a coleção.
-    """
+    """Normalize a model name so it can be embedded safely into a collection ID."""
     if not model_name:
         return "default"
     # Remove caracteres especiais e substitui por underscore
@@ -64,10 +65,7 @@ def _sanitize_model_name(model_name: str) -> str:
 
 
 def _get_versioned_collection_name(base_name: str, modality: str) -> str:
-    """
-    Gera o nome da coleção atrelado ao modelo configurado no settings.
-    Ex: text_embeddings_nomic_embed_text_v1_5
-    """
+    """Return the collection name bound to the embedding model active for a modality."""
     if modality == "text" or modality == "cache":
         model = settings.EMBED_TEXT_MODEL or "default_text"
     elif modality == "vision":
@@ -83,7 +81,7 @@ def _get_versioned_collection_name(base_name: str, modality: str) -> str:
 # Conexão com ChromaDB
 # ============================================================
 def _connect_local():
-    """Inicializa cliente persistente do ChromaDB."""
+    """Create the persistent ChromaDB client used by local runtime paths."""
     try:
         os.makedirs(CHROMA_PATH, exist_ok=True)
         logger.info(f"[vectorstore] Inicializando ChromaDB em {CHROMA_PATH}")
@@ -117,7 +115,7 @@ def get_chroma_client():
 # Helpers Internos
 # ============================================================
 def _ensure_list_of_floats(vec):
-    """Converte embedding para list[float]."""
+    """Normalize an embedding value into the float list shape required by Chroma."""
     if isinstance(vec, np.ndarray):
         return vec.astype(float).ravel().tolist()
     if isinstance(vec, (list, tuple)):
@@ -126,12 +124,12 @@ def _ensure_list_of_floats(vec):
 
 
 def _safe_metadata(meta):
-    """Executa safe metadata."""
+    """Return metadata in dictionary form, falling back to a minimal default."""
     return meta if isinstance(meta, dict) else {"source": "router"}
 
 
 def _normalize_modality(modality: Optional[str]) -> str:
-    """Executa normalize modality."""
+    """Normalize a caller-supplied modality into one supported by the vector store."""
     if not modality:
         return "text"
     m = modality.lower().strip()
@@ -141,7 +139,7 @@ def _normalize_modality(modality: Optional[str]) -> str:
 
 
 def _collection_for_modality(modality: str) -> str:
-    """Retorna o nome versionado da coleção baseado na modalidade."""
+    """Resolve the versioned collection name associated with one modality."""
     m = _normalize_modality(modality)
     if m == "cache":
         return _get_versioned_collection_name(BASE_CACHE_COLLECTION, "text")
@@ -157,7 +155,7 @@ def _collection_for_modality(modality: str) -> str:
 # ============================================================
 
 def _get_or_create_sync(name: str, metadata: Optional[Dict] = None):
-    """Wrapper síncrono para o client do Chroma."""
+    """Synchronously fetch or create one Chroma collection."""
     return get_chroma_client().get_or_create_collection(name=name, metadata=metadata)
 
 
@@ -186,7 +184,7 @@ async def get_or_create_collection_async(name: str, metadata: Optional[Dict] = N
 # Inicialização Padrão
 # ============================================================
 def init_vectorstore():
-    """Cria coleções versionadas no boot."""
+    """Create the active versioned collections during application bootstrap."""
     try:
         # Gera nomes dinâmicos baseados no .env atual
         txt_col = _get_versioned_collection_name(BASE_TEXT_COLLECTION, "text")
@@ -215,7 +213,7 @@ def _insert_embedding_sync(
     embedding: List[float],
     metadata: Optional[Dict[str, Any]],
 ):
-    """Executa insert embedding sync."""
+    """Insert one embedding into Chroma with automatic recovery from dimension drift."""
     try:
         col = get_chroma_client().get_or_create_collection(
             name=collection_name,
@@ -257,7 +255,13 @@ async def add_document(
     image_b64: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ):
-    """Insere documento multimodal completo na coleção versionada correta E no índice BM25."""
+    """Embed and persist one document into the collection that matches the modality.
+
+    The helper resolves the correct embedding path, computes the target
+    collection name, stores the dense vector in Chroma, and mirrors the text
+    payload into the sparse index when the modality participates in hybrid
+    retrieval.
+    """
     modality = _normalize_modality(modality)
 
     # --- 1. Processamento Vetorial (ChromaDB) ---
@@ -296,7 +300,7 @@ async def add_document(
 # Consulta (Com Auto-Healing)
 # ============================================================
 def _query_embedding_sync(collection_name: str, embedding, n_results: int):
-    """Executa query embedding sync."""
+    """Run one synchronous Chroma similarity query with auto-healing behavior."""
     try:
         col = get_chroma_client().get_or_create_collection(name=collection_name)
         return col.query(

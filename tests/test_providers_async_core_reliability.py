@@ -1,4 +1,10 @@
-"""Módulo `tests/test_providers_async_core_reliability.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for providers async core reliability behavior and regressions.
+"""Test coverage for providers async core reliability behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import asyncio
 from types import SimpleNamespace
@@ -11,7 +17,9 @@ from app import providers_async as pa
 
 
 def _close_breakers():
-    """Executa close breakers."""
+    """Execute the close breakers routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     pa.cloud_breaker._state = pybreaker.CircuitClosedState(pa.cloud_breaker)
     pa.local_breaker._state = pybreaker.CircuitClosedState(pa.local_breaker)
 
@@ -22,13 +30,19 @@ async def test_openai_provider_generate_success_with_reasoning_model(monkeypatch
     _close_breakers()
 
     class _Create:
-        """Classe `_Create`: concentra responsabilidades de test providers async core reliability."""
+        """Represent `_Create` within this module.
+
+The class groups the state and behavior required for Create."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.calls = []
 
         async def create(self, **kwargs):
-            """Executa create."""
+            """Execute the create routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.calls.append(kwargs)
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content="ok-openai"))],
@@ -59,9 +73,13 @@ async def test_anthropic_provider_generate_success(monkeypatch):
     _close_breakers()
 
     class _Messages:
-        """Classe `_Messages`: concentra responsabilidades de test providers async core reliability."""
+        """Represent `_Messages` within this module.
+
+The class groups the state and behavior required for Messages."""
         async def create(self, **kwargs):
-            """Executa create."""
+            """Execute the create routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return SimpleNamespace(
                 content=[SimpleNamespace(text="ok-anthropic")],
                 usage=SimpleNamespace(input_tokens=7, output_tokens=9),
@@ -85,13 +103,19 @@ async def test_gemini_provider_generate_success(monkeypatch):
     _close_breakers()
 
     class _GModel:
-        """Classe `_GModel`: concentra responsabilidades de test providers async core reliability."""
+        """Represent `_GModel` within this module.
+
+The class groups the state and behavior required for GModel."""
         def __init__(self, name):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.name = name
 
         def generate_content(self, parts, generation_config=None):
-            """Executa generate content."""
+            """Execute the generate content routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return SimpleNamespace(text="ok-gemini")
 
     monkeypatch.setattr(pa, "genai", SimpleNamespace(GenerativeModel=_GModel))
@@ -111,14 +135,20 @@ async def test_gemini_provider_generate_success(monkeypatch):
 async def test_close_http_client_and_render_metrics(monkeypatch):
     """Testa close http client and render metrics."""
     class _Client:
-        """Classe `_Client`: concentra responsabilidades de test providers async core reliability."""
+        """Represent `_Client` within this module.
+
+The class groups the state and behavior required for Client."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.is_closed = False
             self.closed = False
 
         async def close(self):
-            """Executa close."""
+            """Execute the close routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.closed = True
             self.is_closed = True
 
@@ -134,18 +164,26 @@ async def test_close_http_client_and_render_metrics(monkeypatch):
 def test_ensure_ollama_model_sync_paths(monkeypatch):
     """Testa ensure ollama model sync paths."""
     class _Resp:
-        """Classe `_Resp`: concentra responsabilidades de test providers async core reliability."""
+        """Represent `_Resp` within this module.
+
+The class groups the state and behavior required for Resp."""
         def __init__(self, code=200, payload=None):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.status_code = code
             self._payload = payload or {}
 
         def json(self):
-            """Executa json."""
+            """Execute the json routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self._payload
 
         def iter_lines(self):
-            """Executa iter lines."""
+            """Execute the iter lines routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             yield b"line"
 
     # already installed
@@ -176,9 +214,13 @@ def test_ensure_ollama_model_sync_paths(monkeypatch):
 async def test_call_model_error_categories_timeout_and_unavailable(monkeypatch):
     """Testa call model error categories timeout and unavailable."""
     class _PTimeout:
-        """Classe `_PTimeout`: concentra responsabilidades de test providers async core reliability."""
+        """Represent `_PTimeout` within this module.
+
+The class groups the state and behavior required for PTimeout."""
         async def generate(self, **kwargs):
-            """Executa generate."""
+            """Execute the generate routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise asyncio.TimeoutError("timeout")
 
     monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda model: _PTimeout())
@@ -187,9 +229,13 @@ async def test_call_model_error_categories_timeout_and_unavailable(monkeypatch):
     assert exc1.value.category == "provider_timeout"
 
     class _PUnavailable:
-        """Classe `_PUnavailable`: concentra responsabilidades de test providers async core reliability."""
+        """Represent `_PUnavailable` within this module.
+
+The class groups the state and behavior required for PUnavailable."""
         async def generate(self, **kwargs):
-            """Executa generate."""
+            """Execute the generate routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("down")
 
     monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda model: _PUnavailable())

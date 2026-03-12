@@ -1,4 +1,10 @@
-"""Módulo `tests/test_health_components.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for health components behavior and regressions.
+"""Test coverage for health components behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import sys
 from types import SimpleNamespace
@@ -9,19 +15,27 @@ from app import health
 
 
 class _Response:
-    """Classe `_Response`: concentra responsabilidades de test health components."""
+    """Represent `_Response` within this module.
+
+The class groups the state and behavior required for Response."""
     def __init__(self, data=None, fail=False):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self._data = data or {}
         self._fail = fail
 
     def raise_for_status(self):
-        """Executa raise for status."""
+        """Execute the raise for status routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if self._fail:
             raise RuntimeError("bad status")
 
     def json(self):
-        """Executa json."""
+        """Execute the json routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return self._data
 
 
@@ -34,25 +48,39 @@ async def test_component_health_checks_success_paths(monkeypatch):
     )
 
     class _DBConn:
-        """Classe `_DBConn`: concentra responsabilidades de test health components."""
+        """Represent `_DBConn` within this module.
+
+The class groups the state and behavior required for DBConn."""
         def execute(self, _):
-            """Executa execute."""
+            """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
     class _DBCtx:
-        """Classe `_DBCtx`: concentra responsabilidades de test health components."""
+        """Represent `_DBCtx` within this module.
+
+The class groups the state and behavior required for DBCtx."""
         def __enter__(self):
-            """Executa enter."""
+            """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _DBConn()
 
         def __exit__(self, exc_type, exc, tb):
-            """Executa exit."""
+            """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return False
 
     class _Engine:
-        """Classe `_Engine`: concentra responsabilidades de test health components."""
+        """Represent `_Engine` within this module.
+
+The class groups the state and behavior required for Engine."""
         def connect(self):
-            """Executa connect."""
+            """Execute the connect routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _DBCtx()
 
     fake_sqlalchemy = SimpleNamespace(create_engine=lambda *a, **k: _Engine(), text=lambda q: q)
@@ -64,21 +92,31 @@ async def test_component_health_checks_success_paths(monkeypatch):
     monkeypatch.setitem(sys.modules, "chromadb", fake_chromadb)
 
     class _AsyncClient:
-        """Classe `_AsyncClient`: concentra responsabilidades de test health components."""
+        """Represent `_AsyncClient` within this module.
+
+The class groups the state and behavior required for AsyncClient."""
         def __init__(self, timeout):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.timeout = timeout
 
         async def __aenter__(self):
-            """Executa aenter."""
+            """Execute the aenter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self
 
         async def __aexit__(self, exc_type, exc, tb):
-            """Executa aexit."""
+            """Execute the aexit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return False
 
         async def get(self, _url):
-            """Executa get."""
+            """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _Response({"models": [{"name": "m1"}, {"name": "m2"}]})
 
     monkeypatch.setattr(health.httpx, "AsyncClient", _AsyncClient)
@@ -107,21 +145,31 @@ async def test_component_health_error_paths_and_cache(monkeypatch):
     assert redis.healthy is False
 
     class _BadAsyncClient:
-        """Classe `_BadAsyncClient`: concentra responsabilidades de test health components."""
+        """Represent `_BadAsyncClient` within this module.
+
+The class groups the state and behavior required for BadAsyncClient."""
         def __init__(self, timeout):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.timeout = timeout
 
         async def __aenter__(self):
-            """Executa aenter."""
+            """Execute the aenter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self
 
         async def __aexit__(self, exc_type, exc, tb):
-            """Executa aexit."""
+            """Execute the aexit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return False
 
         async def get(self, _url):
-            """Executa get."""
+            """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _Response(fail=True)
 
     monkeypatch.setattr(health.httpx, "AsyncClient", _BadAsyncClient)
@@ -129,7 +177,9 @@ async def test_component_health_error_paths_and_cache(monkeypatch):
     assert ollama.healthy is False
 
     async def _ok(name, healthy=True):
-        """Executa ok."""
+        """Execute the ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return health.ComponentHealth(name=name, healthy=healthy)
 
     monkeypatch.setattr(health, "check_redis_health", lambda: _ok("redis", True))

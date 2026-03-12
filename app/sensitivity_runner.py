@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for sensitivity runner.
 """
 sensitivity_runner.py — Sensitivity Analysis for Thesis (ROBUST FIXED)
 ----------------------------------------------------------------------
@@ -30,7 +31,9 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("sensitivity")
 
 def run_benchmark_iteration(threshold):
-    """Executa benchmark iteration."""
+    """Run benchmark iteration.
+
+This function coordinates the main execution path for that step."""
     logger.info(f"\n⚙️  Testing UNCERTAINTY_THRESHOLD = {threshold}...")
     
     # 1. Limpeza Crítica: Remove checkpoint anterior
@@ -102,7 +105,9 @@ def run_benchmark_iteration(threshold):
     }
 
 def plot_sensitivity(results):
-    """Executa plot sensitivity."""
+    """Execute the plot sensitivity routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if not results:
         logger.error("❌ No valid results to plot.")
         return

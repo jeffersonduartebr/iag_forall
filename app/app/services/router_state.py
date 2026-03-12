@@ -1,3 +1,4 @@
+# Objective: Service-layer helpers for router state.
 """State helpers for router EMA caches and batch persistence."""
 
 from __future__ import annotations

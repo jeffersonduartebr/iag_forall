@@ -1,3 +1,4 @@
+# Objective: Configuration support code for settings types.
 """Typed coercion helpers for dynamic settings."""
 
 from __future__ import annotations

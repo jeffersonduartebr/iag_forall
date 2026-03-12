@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Objective: Maintenance and automation script for generate docs catalog.
 """Generate file and method documentation catalogs for the project.
 
 Outputs:

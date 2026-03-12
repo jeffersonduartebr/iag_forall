@@ -1,4 +1,10 @@
-"""Módulo `tests/test_coverage_boosters.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for coverage boosters behavior and regressions.
+"""Test coverage for coverage boosters behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import asyncio
 from types import SimpleNamespace
@@ -21,18 +27,26 @@ def test_uncertainty_helpers_and_paths(monkeypatch):
     assert uq.get_uncertainty_score("hello", modality="text") == 1.0
 
     class _R:
-        """Classe `_R`: concentra responsabilidades de test coverage boosters."""
+        """Represent `_R` within this module.
+
+The class groups the state and behavior required for R."""
         def get(self, _):
-            """Executa get."""
+            """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
     monkeypatch.setattr(uq, "get_redis", lambda: _R())
     assert uq.get_uncertainty_score("hello", modality="text") == 1.0
 
     class _R2:
-        """Classe `_R2`: concentra responsabilidades de test coverage boosters."""
+        """Represent `_R2` within this module.
+
+The class groups the state and behavior required for R2."""
         def get(self, _):
-            """Executa get."""
+            """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return '[{"vec":[1.0,0.0,0.0]}]'
 
     monkeypatch.setattr(uq, "get_redis", lambda: _R2())
@@ -53,28 +67,42 @@ def test_query_service_helpers_and_insert(monkeypatch):
     assert qs._safe_json({"a": 1}) == '{"a": 1}'
 
     class _Conn:
-        """Classe `_Conn`: concentra responsabilidades de test coverage boosters."""
+        """Represent `_Conn` within this module.
+
+The class groups the state and behavior required for Conn."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.executed = []
 
         def execute(self, stmt, params=None):
-            """Executa execute."""
+            """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.executed.append((str(stmt), params))
             return SimpleNamespace(rowcount=1)
 
     class _Ctx:
-        """Classe `_Ctx`: concentra responsabilidades de test coverage boosters."""
+        """Represent `_Ctx` within this module.
+
+The class groups the state and behavior required for Ctx."""
         def __init__(self, conn):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.conn = conn
 
         def __enter__(self):
-            """Executa enter."""
+            """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self.conn
 
         def __exit__(self, exc_type, exc, tb):
-            """Executa exit."""
+            """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return False
 
     conn = _Conn()

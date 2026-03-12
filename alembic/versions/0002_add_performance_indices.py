@@ -1,3 +1,4 @@
+# Objective: Alembic migration that applies the 0002 add performance indices schema change.
 """Add performance indices for frequently queried tables
 
 Revision ID: 0002_add_performance_indices
@@ -27,7 +28,9 @@ def upgrade() -> None:
     conn = op.get_bind()
 
     def _table_exists(table_name: str) -> bool:
-        """Executa table exists."""
+        """Execute the table exists routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         query = sa.text(
             """
             SELECT 1
@@ -39,7 +42,9 @@ def upgrade() -> None:
         return conn.execute(query, {"table_name": table_name}).scalar() is not None
 
     def _index_exists(table_name: str, index_name: str) -> bool:
-        """Executa index exists."""
+        """Execute the index exists routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         query = sa.text(
             """
             SELECT 1
@@ -53,7 +58,9 @@ def upgrade() -> None:
         return conn.execute(query, {"table_name": table_name, "index_name": index_name}).scalar() is not None
 
     def _create_index_if_needed(table_name: str, index_name: str, columns: str) -> None:
-        """Executa create index if needed."""
+        """Execute the create index if needed routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if _table_exists(table_name) and not _index_exists(table_name, index_name):
             op.execute(sa.text(f"CREATE INDEX {index_name} ON {table_name} ({columns})"))
 
@@ -70,7 +77,9 @@ def downgrade() -> None:
     conn = op.get_bind()
 
     def _table_exists(table_name: str) -> bool:
-        """Executa table exists."""
+        """Execute the table exists routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         query = sa.text(
             """
             SELECT 1
@@ -82,7 +91,9 @@ def downgrade() -> None:
         return conn.execute(query, {"table_name": table_name}).scalar() is not None
 
     def _index_exists(table_name: str, index_name: str) -> bool:
-        """Executa index exists."""
+        """Execute the index exists routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         query = sa.text(
             """
             SELECT 1
@@ -96,7 +107,9 @@ def downgrade() -> None:
         return conn.execute(query, {"table_name": table_name, "index_name": index_name}).scalar() is not None
 
     def _drop_index_if_needed(table_name: str, index_name: str) -> None:
-        """Executa drop index if needed."""
+        """Execute the drop index if needed routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if _table_exists(table_name) and _index_exists(table_name, index_name):
             op.execute(sa.text(f"DROP INDEX {index_name} ON {table_name}"))
 

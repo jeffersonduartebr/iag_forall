@@ -1,16 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-semantic_cache.py — Cache Semântico via ChromaDB (Rápido)
----------------------------------------------------------
-Substitui a busca linear no MariaDB por busca ANN no ChromaDB.
+# Objective: Application runtime code for semantic cache.
+"""Application runtime code for semantic cache.
 
-L1 Cache: Thread-safe in-memory TTL cache for exact-match queries
-L2 Cache: ChromaDB semantic search for similar queries
-
-Phase 5: Autonomous Behavior
-- Adaptive cache threshold based on hit rate
-- P-controller for automatic threshold tuning
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
 """
+
 
 from __future__ import annotations
 import hashlib
@@ -39,12 +34,17 @@ def get_cache_threshold() -> float:
 
 
 def _compute_sha256(text: str) -> str:
-    """Executa compute sha256."""
+    """Return a stable SHA-256 digest used for exact-match cache keys."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _normalize_modality(mod: str) -> str:
-    """Executa normalize modality."""
+    """Normalize cache modality names to the set recognized by the runtime.
+
+    The semantic cache stores text, vision, and multimodal entries in separate
+    logical spaces. This helper collapses user-facing aliases into the canonical
+    modality names expected by the embedding and vector-store layers.
+    """
     mod = mod.lower().strip()
     if mod in ("vision", "image"):
         return "vision"
@@ -97,7 +97,12 @@ class L1Cache:
     """
 
     def __init__(self, maxsize: int = 1024, ttl_seconds: int = 300):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Create an in-memory exact-match cache with TTL and LRU eviction.
+
+        Args:
+            maxsize: Maximum number of entries kept in memory.
+            ttl_seconds: Time-to-live for each cached entry.
+        """
         self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self._lock = threading.Lock()
         self._maxsize = maxsize
@@ -166,8 +171,13 @@ class L1Cache:
 _l1_cache = L1Cache(maxsize=20000, ttl_seconds=600)
 
 async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
-    # Reutiliza lógica de embeddings
-    """Executa make embedding."""
+    """Build the embedding vector used for semantic cache lookup.
+
+    The function delegates to the shared embedding helpers and selects the
+    appropriate embedding path for text-only, vision-only, or multimodal
+    requests. Failures are converted into ``None`` so cache lookup can degrade
+    gracefully without breaking the main request path.
+    """
     try:
         if modality == "text":
             return await asyncio.to_thread(embed_text, query)
@@ -182,7 +192,15 @@ async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
 
 async def check_cache(query: str, modality: str="text", image_b64: str=None) -> Optional[Dict]:
     """
-    Verifica se existe uma resposta similar no ChromaDB.
+    Look for a reusable answer in the exact-match or semantic cache layers.
+
+    The cache lookup happens in two stages:
+
+    1. L1 exact-match cache in memory for the fastest repeated requests.
+    2. L2 semantic search in ChromaDB using query embeddings.
+
+    A hit returns a response payload shaped like the provider output expected by
+    the router. A miss returns ``None`` and allows normal inference to continue.
     """
     modality = _normalize_modality(modality)
     

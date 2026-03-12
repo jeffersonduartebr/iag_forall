@@ -1,4 +1,10 @@
-"""Módulo `tests/test_metrics_collector.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for metrics collector behavior and regressions.
+"""Test coverage for metrics collector behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 
@@ -6,29 +12,43 @@ from app import metrics_collector as mc
 
 
 class _Conn:
-    """Classe `_Conn`: concentra responsabilidades de test metrics collector."""
+    """Represent `_Conn` within this module.
+
+The class groups the state and behavior required for Conn."""
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self.calls = []
 
     def execute(self, stmt, params=None):
-        """Executa execute."""
+        """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         self.calls.append((str(stmt), params))
         return SimpleNamespace(rowcount=1)
 
 
 class _Ctx:
-    """Classe `_Ctx`: concentra responsabilidades de test metrics collector."""
+    """Represent `_Ctx` within this module.
+
+The class groups the state and behavior required for Ctx."""
     def __init__(self, conn):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self.conn = conn
 
     def __enter__(self):
-        """Executa enter."""
+        """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return self.conn
 
     def __exit__(self, exc_type, exc, tb):
-        """Executa exit."""
+        """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return False
 
 
@@ -64,7 +84,9 @@ def test_ensure_table_and_persist_sample_success(monkeypatch):
 def test_persist_sample_swallows_exceptions(monkeypatch):
     """Testa persist sample swallows exceptions."""
     def _boom():
-        """Executa boom."""
+        """Execute the boom routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         raise RuntimeError("db down")
 
     monkeypatch.setattr(mc, "_ensure_model_metrics_table", _boom)

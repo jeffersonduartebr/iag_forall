@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Utility helpers for redis client.
 """
 redis_client.py — Redis Client with Connection Pooling
 -------------------------------------------------------

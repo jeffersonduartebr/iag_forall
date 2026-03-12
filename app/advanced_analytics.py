@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for advanced analytics.
 """
 advanced_analytics.py — Advanced Scientific Validation for Thesis
 -----------------------------------------------------------------
@@ -42,7 +43,9 @@ def load_latest_data():
 # 1. REGRET ANALYSIS
 # ==============================================================================
 def analyze_regret(df):
-    """Executa analyze regret."""
+    """Execute the analyze regret routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     logger.info("📉 Calculating Cumulative Regret...")
     
     # Filtra apenas as linhas do Router
@@ -108,7 +111,9 @@ def analyze_regret(df):
 # 2. SHAP EXPLAINABILITY
 # ==============================================================================
 def analyze_shap(df):
-    """Executa analyze shap."""
+    """Execute the analyze shap routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if not SHAP_AVAILABLE:
         logger.warning("⚠️ SHAP library not installed. Skipping explainability analysis.")
         return
@@ -164,7 +169,9 @@ def analyze_shap(df):
 # 3. DATA DECONTAMINATION (N-GRAM)
 # ==============================================================================
 def analyze_decontamination(df):
-    """Executa analyze decontamination."""
+    """Execute the analyze decontamination routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     logger.info("🔍 Running N-Gram Decontamination Check...")
     
     # Simula um corpus de treino (ex: Common Crawl sample)
@@ -172,7 +179,9 @@ def analyze_decontamination(df):
     dummy_training_corpus = "The capital of France is Paris. Photosynthesis is the process used by plants. " * 1000
     
     def get_ngrams(text, n=13):
-        """Obtém ngrams."""
+        """Return ngrams.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
         words = text.split()
         return set([" ".join(words[i:i+n]) for i in range(len(words)-n+1)])
     

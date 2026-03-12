@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for rag local.
 """
 rag_local.py — RAG Multimodal Unificado (Com suporte Imagem -> Texto)
 ---------------------------------------------------------------------
@@ -68,7 +69,9 @@ def _hash_image(image_b64: str) -> str:
 # ================================================================
 
 def _auto_modality(requested: Optional[str], image_b64: Optional[str]) -> str:
-    """Executa auto modality."""
+    """Execute the auto modality routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     req = (requested or "text").lower().strip()
 
     if image_b64 and req == "multimodal":
@@ -229,7 +232,9 @@ async def build_augmented_prompt(
     image_b64: Optional[str] = None,
     k: int = 3,
 ) -> str:
-    """Executa build augmented prompt."""
+    """Execute the build augmented prompt routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     query = (query or "").strip()
     if not query and not image_b64:
         return ""
@@ -323,7 +328,9 @@ async def add_document_local(
     modality: str = "text",
     image_b64: Optional[str] = None,
 ) -> bool:
-    """Executa add document local."""
+    """Execute the add document local routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         await add_document(
             modality=modality,
@@ -343,7 +350,9 @@ async def add_document_local(
 # ================================================================
 
 async def health() -> Dict[str, Any]:
-    """Executa health."""
+    """Execute the health routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         chroma_ok = await health_async()
     except Exception:

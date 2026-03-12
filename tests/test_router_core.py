@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for router core behavior and regressions.
 """
 test_router_core.py — Unit tests for router_core.py
 ----------------------------------------------------

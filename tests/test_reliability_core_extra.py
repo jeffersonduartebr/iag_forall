@@ -1,4 +1,10 @@
-"""Módulo `tests/test_reliability_core_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for reliability core extra behavior and regressions.
+"""Test coverage for reliability core extra behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 
@@ -51,23 +57,33 @@ async def test_request_deduplicator_compute_cleanup_and_stats():
 async def test_execute_with_fallback_success_and_fail(monkeypatch):
     """Testa execute with fallback success and fail."""
     class _Breaker:
-        """Classe `_Breaker`: concentra responsabilidades de test reliability core extra."""
+        """Represent `_Breaker` within this module.
+
+The class groups the state and behavior required for Breaker."""
         async def call_async(self, fn, model):
-            """Executa call async."""
+            """Execute the call async routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return await fn(model)
 
     class _Manager:
-        """Classe `_Manager`: concentra responsabilidades de test reliability core extra."""
+        """Represent `_Manager` within this module.
+
+The class groups the state and behavior required for Manager."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.avail = {"primary/m": False, "fb/ok": True, "fb/fail": True}
 
         def is_available(self, model):
-            """Indica se available."""
+            """Return whether available is true for the current input or runtime state."""
             return self.avail.get(model, True)
 
         def get_breaker(self, model):
-            """Obtém breaker."""
+            """Return breaker.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
             return _Breaker()
 
     monkeypatch.setattr(rel, "get_circuit_breaker_manager", lambda: _Manager())
@@ -78,7 +94,9 @@ async def test_execute_with_fallback_success_and_fail(monkeypatch):
     )
 
     async def _exec_ok(model):
-        """Executa exec ok."""
+        """Execute the exec ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return f"ok-{model}"
 
     r1 = await rel.execute_with_fallback("primary/m", _exec_ok, max_fallbacks=2)
@@ -98,7 +116,9 @@ async def test_execute_with_fallback_success_and_fail(monkeypatch):
     )
 
     async def _exec_fail(model):
-        """Executa exec fail."""
+        """Execute the exec fail routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         raise RuntimeError("boom")
 
     r2 = await rel.execute_with_fallback("primary/m", _exec_fail, max_fallbacks=2)

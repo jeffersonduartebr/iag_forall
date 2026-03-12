@@ -1,4 +1,10 @@
-"""Módulo `tests/test_judges_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for judges extra behavior and regressions.
+"""Test coverage for judges extra behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 
@@ -50,7 +56,9 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
     monkeypatch.setattr(judges, "embed_text", lambda q: [0.1])
 
     async def _query_embedding(coll, vec, n_results=5):
-        """Executa query embedding."""
+        """Execute the query embedding routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {"documents": [["doc1", "doc2"]]}
 
     monkeypatch.setattr(judges, "query_embedding", _query_embedding)
@@ -59,7 +67,9 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
     assert isinstance(ctx, str)
 
     async def _call_model(**kwargs):
-        """Executa call model."""
+        """Execute the call model routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "descrição curta", {}
 
     monkeypatch.setattr(judges, "call_model", _call_model)
@@ -71,7 +81,9 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
     assert desc == "descrição curta"
 
     async def _meta(**kwargs):
-        """Executa meta."""
+        """Execute the meta routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "<verdict>CORRECT</verdict>", {}
 
     monkeypatch.setattr(judges, "call_model", _meta)
@@ -91,7 +103,9 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
     calls = {"n": 0}
 
     async def _judge_call(**kwargs):
-        """Executa judge call."""
+        """Execute the judge call routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         calls["n"] += 1
         if kwargs["model"] == "j1":
             return "<verdict>CORRECT</verdict>", {"latency": 1.0, "cost_per_1k": 0.01}
@@ -101,15 +115,21 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
     monkeypatch.setattr(judges, "_persist_judge_metrics", lambda **k: None)
     monkeypatch.setattr(judges, "_persist_judge_log", lambda **k: None)
     async def _get_rag_context(q):
-        """Executa get rag context."""
+        """Execute the get rag context routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return ""
 
     async def _describe(*args, **kwargs):
-        """Executa describe."""
+        """Execute the describe routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return ""
 
     async def _meta(*args, **kwargs):
-        """Executa meta."""
+        """Execute the meta routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return 10.0
 
     monkeypatch.setattr(judges, "get_rag_context", _get_rag_context)
@@ -123,7 +143,9 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
     assert calls["n"] == 2
 
     async def _llm_score(**kwargs):
-        """Executa llm score."""
+        """Execute the llm score routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return 0.8
 
     monkeypatch.setattr(judges, "llm_based_score", _llm_score)
@@ -139,43 +161,71 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
 def test_judge_calibration_functions(monkeypatch):
     """Testa judge calibration functions."""
     class _Conn:
-        """Classe `_Conn`: concentra responsabilidades de test judges extra."""
+        """Represent `_Conn` within this module.
+
+The class groups the state and behavior required for Conn."""
         def execute(self, *_a, **_k):
-            """Executa execute."""
+            """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
     class _Ctx:
-        """Classe `_Ctx`: concentra responsabilidades de test judges extra."""
+        """Represent `_Ctx` within this module.
+
+The class groups the state and behavior required for Ctx."""
         def __enter__(self):
-            """Executa enter."""
+            """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _Conn()
 
         def __exit__(self, exc_type, exc, tb):
-            """Executa exit."""
+            """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return False
 
     class _Engine:
-        """Classe `_Engine`: concentra responsabilidades de test judges extra."""
+        """Represent `_Engine` within this module.
+
+The class groups the state and behavior required for Engine."""
         def begin(self):
-            """Executa begin."""
+            """Execute the begin routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _Ctx()
 
         def connect(self):
-            """Executa connect."""
+            """Execute the connect routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             class _C(_Ctx):
-                """Classe `_C`: concentra responsabilidades de test judges extra."""
+                """Represent `_C` within this module.
+
+The class groups the state and behavior required for C."""
                 def __enter__(self):
-                    """Executa enter."""
+                    """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
                     class _Result:
-                        """Classe `_Result`: concentra responsabilidades de test judges extra."""
+                        """Represent `_Result` within this module.
+
+The class groups the state and behavior required for Result."""
                         def fetchall(self):
-                            """Executa fetchall."""
+                            """Execute the fetchall routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
                             return [("j1", 10, 8.0, 4, 6, 5)]
 
                     class _Conn2:
-                        """Classe `_Conn2`: concentra responsabilidades de test judges extra."""
+                        """Represent `_Conn2` within this module.
+
+The class groups the state and behavior required for Conn2."""
                         def execute(self, *_a, **_k):
-                            """Executa execute."""
+                            """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
                             return _Result()
 
                     return _Conn2()

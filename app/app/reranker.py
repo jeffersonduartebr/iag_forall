@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for reranker.
 """
 reranker.py — Módulo de Re-Ranking (Cross-Encoder)
 --------------------------------------------------
@@ -28,7 +29,9 @@ _RERANKER_INSTANCE = None
 DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 def get_reranker_model():
-    """Obtém reranker model."""
+    """Return reranker model.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
     global _RERANKER_INSTANCE
     if _RERANKER_INSTANCE is None and CE_AVAILABLE:
         model_name = settings.get("RERANK_MODEL", DEFAULT_RERANK_MODEL)

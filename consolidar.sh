@@ -1,4 +1,5 @@
 #!/bin/bash
+# Objective: Shell utility for consolidar.
 
 # Nome do arquivo de saída
 OUTPUT="consolidado.txt"

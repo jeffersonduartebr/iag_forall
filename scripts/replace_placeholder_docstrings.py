@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Objective: Maintenance and automation script for replace placeholder docstrings.
 """Replace existing placeholder docstrings safely (no insertion)."""
 
 from __future__ import annotations

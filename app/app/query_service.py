@@ -1,24 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-query_service.py — versão MULTIMODAL COMPLETA
-----------------------------------------------------
-Serviço de persistência para logs avançados do Router Multimodal.
+# Objective: Application runtime code for query service.
+"""Persist query execution records for analysis, feedback, and offline review.
 
-Agora inclui:
-✔ modality (text, vision, multimodal)
-✔ image_provided
-✔ image_output_b64
-✔ query_embedding (LONGBLOB)
-✔ answer_embedding (LONGBLOB)
-✔ raw_payload (LONGTEXT)
-✔ context_label
-✔ total compatibilidade com RAG multimodal
-
-Compatível com:
-- embeddings.py multimodal
-- providers multimodais
-- router_core multimodal
-- judges multimodais
+The query log stores the user request, chosen model, answer payload, optional
+multimodal artifacts, embeddings, and summary quality/cost metadata. The
+schema is intentionally denormalized so offline analysis and research workflows
+can inspect a single record without reconstructing context from multiple tables.
 """
 
 from __future__ import annotations
@@ -49,7 +36,7 @@ if not logger.handlers:
 # DB connection (using centralized engine)
 # ============================================================
 def _get_engine():
-    """Get database engine from centralized module."""
+    """Return the shared SQLAlchemy engine managed by the database module."""
     return get_engine()
 
 
@@ -58,18 +45,18 @@ engine = property(lambda self: _get_engine())
 
 
 class _EngineProxy:
-    """Proxy to centralized engine for backward compatibility."""
+    """Expose a minimal engine-like interface for legacy callers."""
 
     def begin(self):
-        """Executa begin."""
+        """Open a transactional connection using the shared engine."""
         return get_engine().begin()
 
     def connect(self):
-        """Executa connect."""
+        """Open a plain connection using the shared engine."""
         return get_engine().connect()
 
     def execute(self, *args, **kwargs):
-        """Executa execute."""
+        """Forward direct execution calls to the shared engine."""
         return get_engine().execute(*args, **kwargs)
 
 
@@ -81,7 +68,7 @@ engine = _EngineProxy()
 # ============================================================
 
 def _to_blob(vec) -> Optional[bytes]:
-    """Converte listas/np arrays para bytes binários (LONGBLOB)."""
+    """Convert an embedding-like vector into the binary format stored in MySQL."""
     if vec is None:
         return None
     try:
@@ -91,7 +78,7 @@ def _to_blob(vec) -> Optional[bytes]:
 
 
 def _safe_json(obj: dict | list | str | None) -> str:
-    """Serializa payload multimodal em JSON seguro."""
+    """Serialize payload data to JSON while redacting common secret fields."""
     sensitive_keys = {
         "api_key",
         "authorization",
@@ -103,7 +90,7 @@ def _safe_json(obj: dict | list | str | None) -> str:
     }
 
     def _redact(value):
-        """Executa redact."""
+        """Recursively redact sensitive keys before JSON serialization."""
         if isinstance(value, dict):
             out = {}
             for k, v in value.items():
@@ -127,8 +114,11 @@ def _safe_json(obj: dict | list | str | None) -> str:
 # ============================================================
 
 def ensure_query_log() -> None:
-    """
-    Cria a tabela query_log multimodal + embeddings + payload.
+    """Create the `query_log` table when it does not already exist.
+
+    The table definition supports text-only and multimodal requests, optional
+    image outputs, serialized payloads, and binary embeddings used by later
+    analytics or judging flows.
     """
     ddl = """
     CREATE TABLE IF NOT EXISTS query_log (
@@ -203,8 +193,13 @@ def insert_query_log(
     query_embedding: Optional[List[float]] = None,
     answer_embedding: Optional[List[float]] = None,
 ) -> None:
+    """Insert one fully-populated router execution record into `query_log`.
 
-    """Executa insert query log."""
+    Callers provide the normalized execution summary plus any optional
+    multimodal payloads and embeddings. The function ensures the table exists,
+    redacts sensitive payload fields, and stores binary vectors in the compact
+    representation expected by the schema.
+    """
     ensure_query_log()
 
     try:

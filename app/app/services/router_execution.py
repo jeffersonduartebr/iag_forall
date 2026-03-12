@@ -1,3 +1,4 @@
+# Objective: Service-layer helpers for router execution.
 """Fast-path routing implementation extracted from router_core."""
 
 from __future__ import annotations

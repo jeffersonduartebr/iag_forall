@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for embeddings behavior and regressions.
 """
 test_embeddings.py — Tests for Embeddings Module
 --------------------------------------------------

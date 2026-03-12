@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Utility helpers for text splitter.
+"""Utility helpers for text splitter.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
 
 import re
 import numpy as np
@@ -13,11 +19,15 @@ logger = logging.getLogger(__name__)
 
 def split_into_sentences(text: str) -> List[str]:
     # Regex robusto para separar sentenças (preserva pontuação)
-    """Executa split into sentences."""
+    """Execute the split into sentences routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return re.split(r'(?<=[.?!])\s+', text)
 
 def _cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
-    """Executa cosine similarity."""
+    """Execute the cosine similarity routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     norm1 = np.linalg.norm(v1)
     norm2 = np.linalg.norm(v2)
     if norm1 == 0 or norm2 == 0: return 0.0

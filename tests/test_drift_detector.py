@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for drift detector behavior and regressions.
 """
 Tests for query distribution drift detection.
 """

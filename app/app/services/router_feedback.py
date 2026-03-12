@@ -1,3 +1,4 @@
+# Objective: Service-layer helpers for router feedback.
 """Background feedback processing helper for router_core."""
 
 from __future__ import annotations

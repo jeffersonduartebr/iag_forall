@@ -1,4 +1,10 @@
-"""Módulo `tests/test_prometheus_setup.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for prometheus setup behavior and regressions.
+"""Test coverage for prometheus setup behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 

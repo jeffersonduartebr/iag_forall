@@ -1,4 +1,10 @@
-"""Módulo `tests/test_rag_local_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for rag local extra behavior and regressions.
+"""Test coverage for rag local extra behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import pytest
 
@@ -15,24 +21,34 @@ async def test_rag_local_helpers_and_visual_query_cache(monkeypatch):
     assert rl._auto_modality("text", None) == "text"
 
     class _Redis:
-        """Classe `_Redis`: concentra responsabilidades de test rag local extra."""
+        """Represent `_Redis` within this module.
+
+The class groups the state and behavior required for Redis."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.store = {}
 
         def get(self, key):
-            """Executa get."""
+            """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self.store.get(key)
 
         def setex(self, key, _ttl, val):
-            """Executa setex."""
+            """Execute the setex routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.store[key] = val
 
     rds = _Redis()
     monkeypatch.setattr(rl, "_rds", rds)
 
     async def _call_model(**kwargs):
-        """Executa call model."""
+        """Execute the call model routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "ferrugem no parafuso", {"ok": 1}
 
     monkeypatch.setattr(rl, "call_model", _call_model)
@@ -49,7 +65,9 @@ async def test_compute_embedding_and_fusion_paths(monkeypatch):
     monkeypatch.setattr(rl, "embed_text", lambda txt: [len(txt)])
     monkeypatch.setattr(rl, "embed_multimodal", lambda q, img: {"multimodal": [9.0], "text": [8.0]})
     async def _vq(_img):
-        """Executa vq."""
+        """Execute the vq routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "descrição visual"
 
     monkeypatch.setattr(rl, "_generate_visual_search_query", _vq)
@@ -75,11 +93,15 @@ async def test_compute_embedding_and_fusion_paths(monkeypatch):
 async def test_build_prompt_add_document_and_health(monkeypatch):
     """Testa build prompt add document and health."""
     async def _emb(*a, **k):
-        """Executa emb."""
+        """Execute the emb routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return [0.1, 0.2]
 
     async def _query(**kwargs):
-        """Executa query."""
+        """Execute the query routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {"ids": [["d1", "d2"]], "documents": [["doc1", "doc2"]]}
 
     monkeypatch.setattr(rl, "_compute_embedding", _emb)
@@ -98,7 +120,9 @@ async def test_build_prompt_add_document_and_health(monkeypatch):
     assert "doc1" in prompt or "doc2" in prompt
 
     async def _emb_none(*a, **k):
-        """Executa emb none."""
+        """Execute the emb none routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return None
 
     monkeypatch.setattr(rl, "_compute_embedding", _emb_none)
@@ -108,7 +132,9 @@ async def test_build_prompt_add_document_and_health(monkeypatch):
     assert await rl.build_augmented_prompt("", modality="text", image_b64=None) == ""
 
     async def _add_ok(**kwargs):
-        """Executa add ok."""
+        """Execute the add ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return True
 
     monkeypatch.setattr(rl, "add_document", _add_ok)
@@ -116,18 +142,24 @@ async def test_build_prompt_add_document_and_health(monkeypatch):
     assert ok is True
 
     async def _add_fail(**kwargs):
-        """Executa add fail."""
+        """Execute the add fail routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         raise RuntimeError("x")
 
     monkeypatch.setattr(rl, "add_document", _add_fail)
     assert await rl.add_document_local("d2", text="abc") is False
 
     async def _health_ok():
-        """Executa health ok."""
+        """Execute the health ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return True
 
     async def _health_fail():
-        """Executa health fail."""
+        """Execute the health fail routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         raise RuntimeError("x")
 
     monkeypatch.setattr(rl, "health_async", _health_ok)

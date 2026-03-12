@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for rag context provider.
 """
 rag_context_provider.py
 ----------------------------------------------------

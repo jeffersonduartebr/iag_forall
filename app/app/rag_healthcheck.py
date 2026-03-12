@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for rag healthcheck.
 """
 rag_healthcheck.py
 ----------------------------------------------------
@@ -41,7 +42,9 @@ QUERY_TEXT = "Verificação do pipeline RAG e conectividade com a base vetorial.
 
 
 async def rag_healthcheck() -> Dict[str, Any]:
-    """Executa rag healthcheck."""
+    """Execute the rag healthcheck routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     report: Dict[str, Any] = {
         "ok": False,
         "steps": {},
@@ -167,13 +170,17 @@ def rag_healthcheck_sync(timeout_s: int = 10) -> Dict[str, Any]:
     Wrapper síncrono — útil para scripts, CLIs e contexts não-async.
     """
     async def _runner():
-        """Executa runner."""
+        """Execute the runner routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return await rag_healthcheck()
 
     return asyncio.run(asyncio.wait_for(_runner(), timeout=timeout_s))
 
 
 def _finalize(report: Dict[str, Any], t0: float) -> Dict[str, Any]:
-    """Executa finalize."""
+    """Execute the finalize routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     report["latency_total_s"] = round(time.time() - t0, 3)
     return report

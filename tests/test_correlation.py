@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for correlation behavior and regressions.
 """
 test_correlation.py — Tests for correlation ID infrastructure
 -------------------------------------------------------------
@@ -143,7 +144,9 @@ class TestAsyncCorrelationPropagation:
         set_correlation_id("async-test-id")
 
         async def inner_coroutine():
-            """Executa inner coroutine."""
+            """Execute the inner coroutine routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return get_correlation_id()
 
         result = await inner_coroutine()
@@ -158,7 +161,9 @@ class TestAsyncCorrelationPropagation:
         """Each concurrent task should have isolated correlation ID."""
 
         async def task_with_id(task_id: str):
-            """Executa task with id."""
+            """Execute the task with id routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             set_correlation_id(task_id)
             await asyncio.sleep(0.01)  # Simulate async work
             return get_correlation_id()

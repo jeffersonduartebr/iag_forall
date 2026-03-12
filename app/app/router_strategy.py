@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for router strategy.
 """
 router_strategy.py (Versão Final: Filtros Bilaterais de Segurança)
 ------------------------------------------------------------------
@@ -27,11 +28,15 @@ logger = logging.getLogger(__name__)
 SOTA_MARKERS = ["gpt-5", "opus", "sonnet", "gemini-3-pro"]
 
 def _is_sota(model_name: str) -> bool:
-    """Executa is sota."""
+    """Execute the is sota routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return any(m in model_name.lower() for m in SOTA_MARKERS)
 
 def _is_local(model_name: str) -> bool:
-    """Executa is local."""
+    """Execute the is local routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return "ollama" in model_name.lower()
 
 def _get_circuit_breaker_penalty(model: str) -> float:
@@ -79,7 +84,9 @@ def choose_top2_models(
     # ==================================================================
     # 🚨 CASCADE DETECTION - Emergency routing check
     # ==================================================================
-    """Executa choose top2 models."""
+    """Execute the choose top2 models routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     cascade_detector = get_cascade_detector()
     if cascade_detector.is_emergency_mode:
         emergency_model = cascade_detector.get_emergency_fallback()

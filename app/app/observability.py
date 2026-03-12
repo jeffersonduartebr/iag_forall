@@ -1,3 +1,4 @@
+# Objective: Application runtime code for observability.
 """
 observability.py
 ----------------------------------------------------
@@ -80,9 +81,9 @@ registry: CollectorRegistry = _build_registry()
 # ============================================================
 
 def render_metrics_response():
-    """
-    Retorna (body_bytes, content_type_str) para o endpoint /metrics.
-    """
+    """Execute the render metrics response routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     data = generate_latest(registry)
     return data, CONTENT_TYPE_LATEST
 
@@ -681,7 +682,9 @@ class JsonUTF8Renderer:
     """Renderizador JSON que mantém acentuação legível."""
 
     def __call__(self, logger, name, event_dict):
-        """Executa call."""
+        """Execute the call routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         try:
             return json.dumps(event_dict, ensure_ascii=False)
         except Exception as e:

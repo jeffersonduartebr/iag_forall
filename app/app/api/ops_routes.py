@@ -1,3 +1,4 @@
+# Objective: API layer code for ops routes.
 """Operational endpoints such as health checks."""
 
 from __future__ import annotations

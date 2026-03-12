@@ -1,3 +1,4 @@
+# Objective: Test coverage for settings config behavior and regressions.
 """Tests for settings catalog and coercion helpers."""
 
 from app.config.settings_catalog import (

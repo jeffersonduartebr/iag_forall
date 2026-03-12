@@ -1,4 +1,10 @@
-"""Módulo `alembic/env.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Alembic environment bootstrap for database migration execution.
+"""Alembic environment bootstrap for database migration execution.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
 
 import sys
 import os
@@ -33,7 +39,9 @@ target_metadata = None   # Não usamos autogenerate baseado em models.py
 # Modo offline
 # -----------------------------------------------------------
 def run_migrations_offline():
-    """Executa migrations offline."""
+    """Run migrations offline.
+
+This function coordinates the main execution path for that step."""
     context.configure(
         url=DB_URL,
         literal_binds=True,
@@ -47,7 +55,9 @@ def run_migrations_offline():
 # Modo online
 # -----------------------------------------------------------
 def run_migrations_online():
-    """Executa migrations online."""
+    """Run migrations online.
+
+This function coordinates the main execution path for that step."""
     engine = create_engine(DB_URL, poolclass=pool.NullPool)
 
     with engine.connect() as connection:

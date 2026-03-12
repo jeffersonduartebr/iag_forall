@@ -1,4 +1,10 @@
-"""Módulo `tests/conftest.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Shared pytest fixtures, test doubles, and test-time configuration.
+"""Shared pytest fixtures, test doubles, and test-time configuration.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
 
 import os
 import sys

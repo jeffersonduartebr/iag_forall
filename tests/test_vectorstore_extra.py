@@ -1,4 +1,10 @@
-"""Módulo `tests/test_vectorstore_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for vectorstore extra behavior and regressions.
+"""Test coverage for vectorstore extra behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import asyncio
 from types import SimpleNamespace
@@ -36,7 +42,9 @@ async def test_get_or_create_collection_async_with_versioning(monkeypatch):
     called = []
 
     def _fake(name, metadata=None):
-        """Executa fake."""
+        """Execute the fake routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         called.append((name, metadata))
         return {"name": name}
 
@@ -53,41 +61,63 @@ async def test_get_or_create_collection_async_with_versioning(monkeypatch):
 def test_insert_embedding_sync_and_query_sync_paths(monkeypatch):
     """Testa insert embedding sync and query sync paths."""
     class _ColOK:
-        """Classe `_ColOK`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_ColOK` within this module.
+
+The class groups the state and behavior required for ColOK."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.add_calls = 0
 
         def add(self, **kwargs):
-            """Executa add."""
+            """Execute the add routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.add_calls += 1
 
         def query(self, **kwargs):
-            """Executa query."""
+            """Execute the query routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return {"ids": [["1"]], "documents": [["doc"]], "distances": [[0.1]]}
 
     class _ColDimFail(_ColOK):
-        """Classe `_ColDimFail`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_ColDimFail` within this module.
+
+The class groups the state and behavior required for ColDimFail."""
         def add(self, **kwargs):
-            """Executa add."""
+            """Execute the add routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("dimension does not match")
 
     class _ColOtherFail(_ColOK):
-        """Classe `_ColOtherFail`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_ColOtherFail` within this module.
+
+The class groups the state and behavior required for ColOtherFail."""
         def add(self, **kwargs):
-            """Executa add."""
+            """Execute the add routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("any other error")
 
     class _Client:
-        """Classe `_Client`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_Client` within this module.
+
+The class groups the state and behavior required for Client."""
         def __init__(self, col):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.col = col
             self.deleted = []
             self.created = []
 
         def get_or_create_collection(self, name, metadata=None):
-            """Obtém or create collection."""
+            """Return or create collection.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
             return self.col
 
         def delete_collection(self, name):
@@ -115,9 +145,13 @@ def test_insert_embedding_sync_and_query_sync_paths(monkeypatch):
     vs._insert_embedding_sync("c3", "d3", "txt", [1, 2], {"a": 1})
 
     class _QDimFail(_ColOK):
-        """Classe `_QDimFail`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_QDimFail` within this module.
+
+The class groups the state and behavior required for QDimFail."""
         def query(self, **kwargs):
-            """Executa query."""
+            """Execute the query routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("dimension does not match")
 
     qdim_client = _Client(_QDimFail())
@@ -126,9 +160,13 @@ def test_insert_embedding_sync_and_query_sync_paths(monkeypatch):
     assert qdim_client.deleted == ["cq"]
 
     class _QOtherFail(_ColOK):
-        """Classe `_QOtherFail`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_QOtherFail` within this module.
+
+The class groups the state and behavior required for QOtherFail."""
         def query(self, **kwargs):
-            """Executa query."""
+            """Execute the query routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("boom")
 
     qother_client = _Client(_QOtherFail())
@@ -165,13 +203,19 @@ async def test_add_query_reset_and_health(monkeypatch):
     assert res_custom["name"] == "knowledge_base"
 
     class _Client:
-        """Classe `_Client`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_Client` within this module.
+
+The class groups the state and behavior required for Client."""
         def reset(self):
-            """Executa reset."""
+            """Execute the reset routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
         def heartbeat(self):
-            """Executa heartbeat."""
+            """Execute the heartbeat routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return "ok"
 
     monkeypatch.setattr(vs, "chroma_client", _Client())
@@ -179,13 +223,19 @@ async def test_add_query_reset_and_health(monkeypatch):
     assert await vs.health_async() is True
 
     class _BadClient:
-        """Classe `_BadClient`: concentra responsabilidades de test vectorstore extra."""
+        """Represent `_BadClient` within this module.
+
+The class groups the state and behavior required for BadClient."""
         def heartbeat(self):
-            """Executa heartbeat."""
+            """Execute the heartbeat routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("down")
 
         def reset(self):
-            """Executa reset."""
+            """Execute the reset routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("nope")
 
     monkeypatch.setattr(vs, "chroma_client", _BadClient())

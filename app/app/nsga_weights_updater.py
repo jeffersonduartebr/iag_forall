@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for nsga weights updater.
 """
 nsga_weights_updater.py — Otimizador Multimodal (NSGA-II + UQ Tuning + Strategy Tuning)
 ---------------------------------------------------------------------
@@ -61,7 +62,9 @@ DB_URL = f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HO
 engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
 def get_redis_client():
-    """Obtém redis client."""
+    """Return redis client.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
     try:
         r = redis.Redis(
             host=settings.REDIS_HOST,
@@ -81,7 +84,9 @@ redis_client = get_redis_client()
 # Inicialização de Tabelas
 # ============================================================
 def init_db_tables():
-    """Executa init db tables."""
+    """Execute the init db tables routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     DDL = """
     CREATE TABLE IF NOT EXISTS nsga_weights (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -107,7 +112,9 @@ init_db_tables()
 # ============================================================
 def load_candidate_models(modality: str) -> List[str]:
     # 1. Redis
-    """Executa load candidate models."""
+    """Load candidate models.
+
+The function reads the current representation from its backing store or runtime source."""
     try:
         if redis_client:
             raw = redis_client.get(REDIS_KEY_CANDIDATES.get(modality, ""))
@@ -143,7 +150,9 @@ def load_candidate_models(modality: str) -> List[str]:
 # 2. Coleta de Dados Históricos (EMA)
 # ============================================================
 def aggregate_ema_by_model(modality: str, models: List[str]) -> Dict[str, Dict[str, float]]:
-    """Executa aggregate ema by model."""
+    """Execute the aggregate ema by model routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         with engine.connect() as conn:
             rows = conn.execute(
@@ -335,7 +344,9 @@ def run_nsga_optimization(
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
     def evaluate(individual):
-        """Executa evaluate."""
+        """Execute the evaluate routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         s = sum(individual) or 1.0
         w = [x/s for x in individual]
         
@@ -371,7 +382,9 @@ def run_nsga_optimization(
 # 5. Ajuste Dinâmico de Incerteza (UQ Tuning)
 # ============================================================
 def tune_uncertainty_threshold(current_efficiency: float) -> float:
-    """Executa tune uncertainty threshold."""
+    """Execute the tune uncertainty threshold routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     current_thresh = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
     
     if current_efficiency < 2.0:
@@ -721,7 +734,9 @@ def calibrate_uncertainty_threshold() -> Dict[str, Any]:
 # 7. Persistência
 # ============================================================
 def persist_results(modality: str, weights: Dict[str, float]):
-    """Executa persist results."""
+    """Execute the persist results routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         with engine.begin() as conn:
             for m, w in weights.items():
@@ -795,7 +810,9 @@ def tune_weights_from_judge_feedback() -> None:
 # 8. Execução (Uma Iteração)
 # ============================================================
 def run_optimization_cycle(modality: str):
-    """Executa run optimization cycle."""
+    """Run optimization cycle.
+
+This function coordinates the main execution path for that step."""
     models = load_candidate_models(modality)
     if not models:
         logger.warning(f"[NSGA] Pulo: Sem modelos para {modality}")
@@ -833,7 +850,9 @@ app = FastAPI(title="NSGA-II Worker")
 
 @app.post("/run/{modality}")
 def trigger_run(modality: str = Path(...)):
-    """Executa trigger run."""
+    """Execute the trigger run routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if modality not in MODALITIES:
         return JSONResponse({"error": "Invalid modality"}, status_code=400)
     try:
@@ -845,12 +864,16 @@ def trigger_run(modality: str = Path(...)):
 
 @app.get("/metrics")
 def metrics():
-    """Executa metrics."""
+    """Execute the metrics routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return PlainTextResponse(generate_latest(REGISTRY).decode("utf-8"))
 
 @app.get("/health")
 def health():
-    """Executa health."""
+    """Execute the health routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return {"status": "ok"}
 
 
@@ -990,7 +1013,9 @@ def run_calibration_cycle():
 
 
 def background_loop():
-    """Executa background loop."""
+    """Execute the background loop routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     time.sleep(15)
     calibration_counter = 0
 

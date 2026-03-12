@@ -1,4 +1,10 @@
-"""Módulo `tests/test_utils.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for utils behavior and regressions.
+"""Test coverage for utils behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import pytest
 from app.utils.pricing import get_model_cost

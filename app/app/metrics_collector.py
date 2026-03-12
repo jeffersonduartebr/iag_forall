@@ -1,3 +1,4 @@
+# Objective: Application runtime code for metrics collector.
 # app/metrics_collector.py
 # -*- coding: utf-8 -*-
 """
@@ -199,13 +200,8 @@ def update_model_metrics(
 # ============================================================
 
 def get_snapshot() -> Dict[str, Dict[str, float]]:
-    """
-    Retorna snapshot (modelo/modality → métricas) thread-safe:
-    {
-        ("gpt-4o", "text"): {quality, latency, cost},
-        ("gpt-4o", "vision"): {...},
-        ...
-    }
-    """
+    """Return snapshot.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
     with _LOCK:
         return {k: v.copy() for k, v in _MODEL_METRICS.items()}

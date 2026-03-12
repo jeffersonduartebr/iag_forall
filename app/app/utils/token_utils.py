@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Utility helpers for token utils.
 """
 token_utils.py — Token Counting Utilities
 ------------------------------------------

@@ -1,4 +1,10 @@
-"""Módulo `tests/test_runtime_state.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for runtime state behavior and regressions.
+"""Test coverage for runtime state behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from app import runtime_state as rs
 

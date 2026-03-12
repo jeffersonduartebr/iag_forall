@@ -1,4 +1,10 @@
-"""Módulo `tests/test_rag_router.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for rag router behavior and regressions.
+"""Test coverage for rag router behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from io import BytesIO
 from types import SimpleNamespace
@@ -29,7 +35,9 @@ def test_extract_text_from_pdf_error(monkeypatch):
 async def test_summarize_text_success_and_fallback(monkeypatch):
     """Testa summarize text success and fallback."""
     async def _ok(**kwargs):
-        """Executa ok."""
+        """Execute the ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "TÍTULO: Manual\nRESUMO: Guia curto.", {}
 
     monkeypatch.setattr(rr, "call_model", _ok)
@@ -38,7 +46,9 @@ async def test_summarize_text_success_and_fallback(monkeypatch):
     assert "Guia curto" in summary
 
     async def _empty(**kwargs):
-        """Executa empty."""
+        """Execute the empty routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "", {}
 
     monkeypatch.setattr(rr, "call_model", _empty)
@@ -51,13 +61,17 @@ async def test_summarize_text_success_and_fallback(monkeypatch):
 async def test_add_doc_txt_success(monkeypatch):
     """Testa add doc txt success."""
     async def _summary(_txt):
-        """Executa summary."""
+        """Execute the summary routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "Meu título", "Meu resumo"
 
     inserted = []
 
     async def _add_document(**kwargs):
-        """Executa add document."""
+        """Execute the add document routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         inserted.append(kwargs)
         return True
 
@@ -92,7 +106,9 @@ async def test_ingest_text_success_and_fail(monkeypatch):
     req = rr.IngestRequest(text="abc", doc_id="d1", metadata={"a": 1}, collection_name="course_1")
 
     async def _ok(**kwargs):
-        """Executa ok."""
+        """Execute the ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return True
 
     monkeypatch.setattr(rr, "add_document", _ok)
@@ -101,7 +117,9 @@ async def test_ingest_text_success_and_fail(monkeypatch):
     assert req.metadata["target_collection"] == "course_1"
 
     async def _fail(**kwargs):
-        """Executa fail."""
+        """Execute the fail routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return False
 
     monkeypatch.setattr(rr, "add_document", _fail)

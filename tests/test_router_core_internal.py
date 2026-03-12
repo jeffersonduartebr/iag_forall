@@ -1,4 +1,10 @@
-"""Módulo `tests/test_router_core_internal.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for router core internal behavior and regressions.
+"""Test coverage for router core internal behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -7,7 +13,9 @@ import pytest
 
 
 def _mock_settings():
-    """Executa mock settings."""
+    """Execute the mock settings routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return SimpleNamespace(
         MAX_TOKENS_DEFAULT=128,
         TEMPERATURE_DEFAULT=0.3,

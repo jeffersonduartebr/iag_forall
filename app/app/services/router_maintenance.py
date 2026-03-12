@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Service-layer helpers for router maintenance.
 """Maintenance helpers for router background services."""
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ def create_background_threads(
     cleanup_ema_history_log: Callable[[], None],
     update_db_pool_metrics: Callable[[], None],
 ) -> List[threading.Thread]:
-    """Executa create background threads."""
+    """Create background threads.
+
+This function encapsulates the construction and persistence steps for the new resource."""
     return [
         threading.Thread(target=cleanup_old_query_logs, daemon=True, name="router-cleanup-query-log"),
         threading.Thread(target=cleanup_ema_history, daemon=True, name="router-cleanup-ema-cache"),

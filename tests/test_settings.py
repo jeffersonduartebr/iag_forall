@@ -1,3 +1,4 @@
+# Objective: Test coverage for settings behavior and regressions.
 """Tests for dynamic settings cache, snapshot, and catalog helpers."""
 
 from app.settings_dynamic import DynamicSettings, LRUCache

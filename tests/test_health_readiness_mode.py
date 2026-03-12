@@ -1,4 +1,10 @@
-"""Módulo `tests/test_health_readiness_mode.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for health readiness mode behavior and regressions.
+"""Test coverage for health readiness mode behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import os
 import sys
@@ -17,17 +23,25 @@ async def test_readiness_strict_requires_both(monkeypatch):
     from app import health
 
     class Obj:
-        """Classe `Obj`: concentra responsabilidades de test health readiness mode."""
+        """Represent `Obj` within this module.
+
+The class groups the state and behavior required for Obj."""
         def __init__(self, healthy):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.healthy = healthy
 
     async def _redis_ok():
-        """Executa redis ok."""
+        """Execute the redis ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return Obj(True)
 
     async def _db_down():
-        """Executa db down."""
+        """Execute the db down routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return Obj(False)
 
     monkeypatch.setenv("READINESS_MODE", "strict")
@@ -48,17 +62,25 @@ async def test_readiness_degraded_accepts_one_dependency(monkeypatch):
     from app import health
 
     class Obj:
-        """Classe `Obj`: concentra responsabilidades de test health readiness mode."""
+        """Represent `Obj` within this module.
+
+The class groups the state and behavior required for Obj."""
         def __init__(self, healthy):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.healthy = healthy
 
     async def _redis_ok():
-        """Executa redis ok."""
+        """Execute the redis ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return Obj(True)
 
     async def _db_down():
-        """Executa db down."""
+        """Execute the db down routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return Obj(False)
 
     monkeypatch.setenv("READINESS_MODE", "degraded")
@@ -79,17 +101,25 @@ async def test_readiness_defaults_to_strict(monkeypatch):
     from app import health
 
     class Obj:
-        """Classe `Obj`: concentra responsabilidades de test health readiness mode."""
+        """Represent `Obj` within this module.
+
+The class groups the state and behavior required for Obj."""
         def __init__(self, healthy):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.healthy = healthy
 
     async def _redis_ok():
-        """Executa redis ok."""
+        """Execute the redis ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return Obj(True)
 
     async def _db_ok():
-        """Executa db ok."""
+        """Execute the db ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return Obj(True)
 
     monkeypatch.delenv("READINESS_MODE", raising=False)

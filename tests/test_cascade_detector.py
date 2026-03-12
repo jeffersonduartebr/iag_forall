@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for cascade detector behavior and regressions.
 """
 Tests for cascade failure detection.
 """

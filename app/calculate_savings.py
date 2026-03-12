@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for calculate savings.
 """
 calculate_savings.py
 --------------------
@@ -27,7 +28,9 @@ DB_PORT = 3307 if DB_HOST == "localhost" else 3306
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 def run_analysis():
-    """Executa analysis."""
+    """Run analysis.
+
+This function coordinates the main execution path for that step."""
     print(f"🔌 Conectando ao banco {DB_NAME} em {DB_HOST}...")
     engine = create_engine(DB_URL)
 

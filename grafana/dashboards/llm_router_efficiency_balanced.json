@@ -1,0 +1,542 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "increase(router_cost_savings_usd_total[$__range])",
+          "refId": "A"
+        }
+      ],
+      "title": "Economia no periodo",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 5,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "router_cost_per_query_usd",
+          "refId": "A"
+        }
+      ],
+      "title": "Custo por query",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 10,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "router_local_model_usage_ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Uso de modelos locais",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 14,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "rate(bandit_reward_sum[5m]) / rate(bandit_reward_count[5m])",
+          "refId": "A"
+        }
+      ],
+      "title": "Reward medio do bandit",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 0
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "user_feedback_quality_avg",
+          "refId": "A"
+        }
+      ],
+      "title": "Qualidade media percebida",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(api_requests_total[15m])",
+          "legendFormat": "requests 15m",
+          "refId": "A"
+        },
+        {
+          "expr": "router_history_entries_total",
+          "legendFormat": "historico ativo",
+          "refId": "B"
+        },
+        {
+          "expr": "ema_history_size",
+          "legendFormat": "EMA em memoria",
+          "refId": "C"
+        }
+      ],
+      "title": "Uso e memoria do roteador",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(candidate_latency_seconds_sum[5m]) / rate(candidate_latency_seconds_count[5m])",
+          "legendFormat": "latencia media",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(candidate_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "latencia p95",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(centroid_lookup_duration_seconds_sum[5m]) / rate(centroid_lookup_duration_seconds_count[5m])",
+          "legendFormat": "centroid lookup",
+          "refId": "C"
+        }
+      ],
+      "title": "Latencia da solucao",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(total_cost_usd_total[15m])",
+          "legendFormat": "custo acumulado",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(candidate_estimated_cost_usd_sum[5m]) / rate(candidate_estimated_cost_usd_count[5m])",
+          "legendFormat": "custo medio por resposta",
+          "refId": "B"
+        }
+      ],
+      "title": "Custo da solucao",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "cache_threshold_current",
+          "legendFormat": "threshold atual",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(cache_threshold_adjustments_total[15m])",
+          "legendFormat": "ajustes 15m",
+          "refId": "B"
+        }
+      ],
+      "title": "Ajuste adaptativo de cache",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 20
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "uq_high_avg_quality",
+          "legendFormat": "alta UQ",
+          "refId": "A"
+        },
+        {
+          "expr": "uq_low_avg_quality",
+          "legendFormat": "baixa UQ",
+          "refId": "B"
+        },
+        {
+          "expr": "uq_vs_error_correlation",
+          "legendFormat": "UQ x erro",
+          "refId": "C"
+        }
+      ],
+      "title": "Qualidade x incerteza",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "cache_hit_rate",
+          "legendFormat": "cache geral",
+          "refId": "A"
+        },
+        {
+          "expr": "embedding_cache_hit_rate",
+          "legendFormat": "embedding",
+          "refId": "B"
+        },
+        {
+          "expr": "judge_cache_hit_rate",
+          "legendFormat": "judge",
+          "refId": "C"
+        }
+      ],
+      "title": "Efetividade do cache",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 20
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "router_history_entries_total",
+          "legendFormat": "historico roteador",
+          "refId": "A"
+        },
+        {
+          "expr": "ema_history_size",
+          "legendFormat": "EMA em memoria",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(ema_history_evictions_total[15m])",
+          "legendFormat": "evictions 15m",
+          "refId": "C"
+        }
+      ],
+      "title": "Memoria e aprendizado",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 37,
+  "tags": [
+    "llm",
+    "router",
+    "efficiency",
+    "prometheus"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "LLM Router - Eficiencia da Solucao",
+  "uid": "llm-router-efficiency-balanced",
+  "version": 1,
+  "weekStart": ""
+}

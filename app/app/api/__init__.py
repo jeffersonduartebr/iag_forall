@@ -1,3 +1,4 @@
+# Objective: Package initialization and import surface for api.
 """API routers and dependencies for the FastAPI application."""
 
 from .admin_routes import router as admin_router

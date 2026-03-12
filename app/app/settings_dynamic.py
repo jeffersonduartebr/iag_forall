@@ -1,8 +1,23 @@
 # -*- coding: utf-8 -*-
-"""
-settings_dynamic.py (VERSÃO FINAL: Com Configuração de Amostragem)
---------------------------------------------------------------------------
-Carrega configurações com fallback em camadas.
+# Objective: Application runtime code for settings dynamic.
+"""Resolve runtime settings through a layered configuration strategy.
+
+This module is the operational settings facade used across the application.
+Values may come from multiple sources, in descending order of precedence:
+
+1. Process environment variables
+2. Redis overrides
+3. MariaDB persisted settings
+4. Catalog defaults defined in ``config/settings_catalog.py``
+
+The implementation adds three behaviors on top of plain key lookup:
+
+- short-lived in-process caching to reduce Redis and database traffic
+- runtime mutability metadata so the admin API can reject restart-only changes
+- a Redis pub/sub listener that invalidates local caches when settings change
+
+The public ``settings`` object is intentionally lightweight so the rest of the
+runtime can treat settings as a normal attribute-based configuration source.
 """
 
 from __future__ import annotations
@@ -36,10 +51,11 @@ REDIS_PREFIX = "settings:"
 REDIS_RELOAD_CHANNEL = "settings:reload"
 
 def _get_rds():
-    """Executa a responsabilidade descrita por este método.
+    """Return a Redis client suitable for dynamic settings access.
 
-    Returns:
-        Valor produzido pela execução.
+    The helper first attempts to reuse the shared async-safe client and then
+    falls back to a best-effort connection bootstrap. Returning ``None`` is
+    acceptable and simply means Redis-backed overrides are unavailable.
     """
     return get_redis_async_safe() or ensure_redis_connected(max_wait_s=0.0, min_retry_interval_s=2.0)
 
@@ -71,31 +87,24 @@ engine = property(lambda self: _get_settings_engine())
 
 
 class _EngineProxy:
-    """Proxy to centralized engine for backward compatibility."""
+    """Backward-compatible proxy around the centralized SQLAlchemy engine.
+
+    Older parts of the codebase still import ``settings_dynamic.engine``. The
+    proxy preserves that interface while delegating all real work to the engine
+    factory in ``app.db``.
+    """
 
     def begin(self):
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Open a transactional context using the shared settings database engine."""
         return _get_settings_engine().begin()
 
     def connect(self):
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Open a direct database connection using the shared settings engine."""
         return _get_settings_engine().connect()
 
     @property
     def pool(self):
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Expose the underlying connection pool for operational metrics."""
         return _get_settings_engine().pool
 
 
@@ -124,31 +133,21 @@ except Exception as e:
 # ============================================================
 
 class LRUCache:
-    """Define responsabilidades de estado e comportamento."""
+    """Small thread-safe cache used to reduce repeated settings lookups.
+
+    The cache stores resolved setting values for a short period because many
+    runtime paths read the same keys on every request. It is deliberately simple
+    and only supports the operations needed by the settings facade.
+    """
     def __init__(self, maxsize: int = 512, ttl_s: int = 30):
-        """Executa a responsabilidade descrita por este método.
-
-        Args:
-            maxsize: Parâmetro de entrada.
-            ttl_s: Parâmetro de entrada.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Create a bounded cache with LRU eviction and optional TTL."""
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
         self._data: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
 
     def get(self, key: str) -> Optional[Any]:
-        """Executa a responsabilidade descrita por este método.
-
-        Args:
-            key: Parâmetro de entrada.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Return a cached value when present and still fresh."""
         now = time.time()
         with self._lock:
             if key not in self._data:
@@ -164,15 +163,7 @@ class LRUCache:
             return value
 
     def set(self, key: str, value: Any) -> None:
-        """Executa a responsabilidade descrita por este método.
-
-        Args:
-            key: Parâmetro de entrada.
-            value: Parâmetro de entrada.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Insert or refresh one cached setting value."""
         now = time.time()
         with self._lock:
             if key in self._data:
@@ -182,11 +173,7 @@ class LRUCache:
                 self._data.popitem(last=False)
 
     def clear(self) -> None:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Remove all cached entries immediately."""
         with self._lock:
             self._data.clear()
 
@@ -198,11 +185,7 @@ _lru = LRUCache(maxsize=SETTINGS_CACHE_SIZE, ttl_s=SETTINGS_CACHE_TTL_S)
 
 
 def _invalidate_cache():
-    """Executa a responsabilidade descrita por este método.
-
-    Returns:
-        Valor produzido pela execução.
-    """
+    """Clear the local settings cache after a runtime configuration change."""
     _lru.clear()
     logger.info("[settings_dynamic] Cache LRU invalidado.")
 
@@ -212,14 +195,7 @@ def _invalidate_cache():
 # ============================================================
 
 def _get_from_redis(key: str) -> Optional[str]:
-    """Executa a responsabilidade descrita por este método.
-
-    Args:
-        key: Parâmetro de entrada.
-
-    Returns:
-        Valor produzido pela execução.
-    """
+    """Read one settings override from Redis, returning ``None`` on failure."""
     rds = _get_rds()
     if not rds:
         return None
@@ -231,14 +207,7 @@ def _get_from_redis(key: str) -> Optional[str]:
 
 
 def _get_from_db(key: str) -> Optional[str]:
-    """Executa a responsabilidade descrita por este método.
-
-    Args:
-        key: Parâmetro de entrada.
-
-    Returns:
-        Valor produzido pela execução.
-    """
+    """Read one persisted setting from MariaDB, returning ``None`` on failure."""
     try:
         with engine.connect() as conn:
             r = conn.execute(
@@ -256,15 +225,7 @@ def _get_from_db(key: str) -> Optional[str]:
 
 
 def _set_to_redis(key: str, val: str):
-    """Executa a responsabilidade descrita por este método.
-
-    Args:
-        key: Parâmetro de entrada.
-        val: Parâmetro de entrada.
-
-    Returns:
-        Valor produzido pela execução.
-    """
+    """Write one resolved setting value to Redis as a best-effort cache/update."""
     rds = _get_rds()
     if not rds:
         return
@@ -275,14 +236,7 @@ def _set_to_redis(key: str, val: str):
 
 
 def _load_json_list(raw: Optional[str]) -> List[str]:
-    """Executa a responsabilidade descrita por este método.
-
-    Args:
-        raw: Parâmetro de entrada.
-
-    Returns:
-        Valor produzido pela execução.
-    """
+    """Parse a JSON-encoded list setting into a normalized string list."""
     return as_list(raw)
 
 
@@ -291,21 +245,17 @@ def _load_json_list(raw: Optional[str]) -> List[str]:
 # ============================================================
 
 class DynamicSettings:
+    """Expose layered runtime settings through a compact facade.
 
-    """Define responsabilidades de estado e comportamento."""
+    Most of the codebase accesses settings through attributes on this object.
+    The facade keeps lookup behavior centralized, consistent, and easy to
+    instrument while still supporting hot-reload semantics.
+    """
     DEFAULTS: Dict[str, str] = SETTINGS_DEFAULTS
     METADATA: Dict[str, Dict[str, str]] = SETTING_METADATA
 
     def get(self, key: str, fallback: Any = None) -> Any:
-        """Executa a responsabilidade descrita por este método.
-
-        Args:
-            key: Parâmetro de entrada.
-            fallback: Parâmetro de entrada.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Resolve one setting through cache, Redis, DB, environment, and defaults."""
         return resolve_setting_value(
             key=key,
             fallback=fallback,
@@ -339,16 +289,11 @@ class DynamicSettings:
         return as_list(self.get(key, default))
 
     def set(self, key: str, value: str, actor: str = "system", source: str = "internal") -> None:
-        """Executa a responsabilidade descrita por este método.
+        """Persist a setting update and broadcast cache invalidation.
 
-        Args:
-            key: Parâmetro de entrada.
-            value: Parâmetro de entrada.
-            actor: Parâmetro de entrada.
-            source: Parâmetro de entrada.
-
-        Returns:
-            Valor produzido pela execução.
+        The update is written to MariaDB, mirrored to Redis when available, and
+        published on the reload channel so all running processes can evict stale
+        local cache entries.
         """
         try:
             with engine.begin() as conn:
@@ -373,14 +318,7 @@ class DynamicSettings:
         logger.info(f"[settings] '{key}' atualizado por {actor} via {source}.")
 
     def snapshot(self, only_known: bool = False) -> Dict[str, Any]:
-        """Executa a responsabilidade descrita por este método.
-
-        Args:
-            only_known: Parâmetro de entrada.
-
-        Returns:
-            Valor produzido pela execução.
-        """
+        """Return a point-in-time view of known settings and selected env values."""
         keys = known_setting_keys() if only_known else known_setting_keys() + [
             "DB_HOST", "DB_USER", "DB_NAME", "DB_PORT",
             "OLLAMA_HOST", "OLLAMA_BASE_URL",

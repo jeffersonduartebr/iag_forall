@@ -1,3 +1,4 @@
+# Objective: API layer code for eval routes.
 """Academic and evaluation endpoints."""
 
 from __future__ import annotations

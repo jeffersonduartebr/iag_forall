@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for user feedback behavior and regressions.
 """
 Tests for user feedback processing.
 """

@@ -1,4 +1,10 @@
-"""Módulo `tests/test_bandits.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for bandits behavior and regressions.
+"""Test coverage for bandits behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import pytest
 from app.bandits import compute_reward, _dynamic_epsilon

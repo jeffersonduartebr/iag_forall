@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Service-layer helpers for bandit centroids.
 """Centroid helpers for bandit clustering."""
 
 from __future__ import annotations
@@ -9,7 +10,9 @@ import numpy as np
 
 
 def normalize_centroid_vec(vec: np.ndarray, dim: int) -> np.ndarray:
-    """Executa normalize centroid vec."""
+    """Execute the normalize centroid vec routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     v = vec.astype(np.float32).reshape(-1)
     if len(v) != dim:
         if len(v) > dim:
@@ -21,7 +24,9 @@ def normalize_centroid_vec(vec: np.ndarray, dim: int) -> np.ndarray:
 
 
 def nearest_centroid_from_array(v: np.ndarray, cents: List[dict]) -> Tuple[Optional[int], float]:
-    """Executa nearest centroid from array."""
+    """Execute the nearest centroid from array routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if not cents:
         return None, 0.0
     c = np.stack([c_["vec"] for c_ in cents], axis=0)

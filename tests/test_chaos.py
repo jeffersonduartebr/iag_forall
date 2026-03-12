@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for chaos behavior and regressions.
 """
 test_chaos.py — Chaos Testing for Failure Scenarios
 ----------------------------------------------------
@@ -195,7 +196,9 @@ class TestTimeoutChaos:
     async def test_slow_provider_timeout(self):
         """Slow providers should timeout appropriately."""
         async def slow_function():
-            """Executa slow function."""
+            """Execute the slow function routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             await asyncio.sleep(10)
             return "Should not reach here"
 
@@ -259,7 +262,9 @@ class TestProviderFailureChaos:
         from app.error_handling import classify_exception, ErrorCategory
 
         class RateLimitError(Exception):
-            """Classe `RateLimitError`: concentra responsabilidades de test chaos."""
+            """Represent `RateLimitError` within this module.
+
+The class groups the state and behavior required for RateLimitError."""
             pass
 
         category, severity, retry = classify_exception(RateLimitError())
@@ -272,7 +277,9 @@ class TestProviderFailureChaos:
         from app.error_handling import classify_exception, ErrorCategory
 
         class AuthenticationError(Exception):
-            """Classe `AuthenticationError`: concentra responsabilidades de test chaos."""
+            """Represent `AuthenticationError` within this module.
+
+The class groups the state and behavior required for AuthenticationError."""
             pass
 
         category, severity, retry = classify_exception(AuthenticationError())
@@ -287,7 +294,9 @@ class TestProviderFailureChaos:
         call_count = {"count": 0}
 
         async def failing_execute(model: str):
-            """Executa failing execute."""
+            """Execute the failing execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             call_count["count"] += 1
             if call_count["count"] < 3:
                 raise Exception(f"Model {model} failed")
@@ -309,7 +318,9 @@ class TestConcurrencyChaos:
         call_count = {"count": 0}
 
         async def expensive_operation():
-            """Executa expensive operation."""
+            """Execute the expensive operation routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             call_count["count"] += 1
             await asyncio.sleep(0.1)
             return f"result-{call_count['count']}"
@@ -347,7 +358,9 @@ class TestConcurrencyChaos:
         async def create_operation(idx):
             """Cria operation."""
             async def operation():
-                """Executa operation."""
+                """Execute the operation routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
                 await asyncio.sleep(0.01)
                 return f"result-{idx}"
             return operation
@@ -490,7 +503,9 @@ class TestMemoryPressureChaos:
 
         # Add some in-flight requests
         async def slow_op():
-            """Executa slow op."""
+            """Execute the slow op routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             await asyncio.sleep(2)
             return "done"
 

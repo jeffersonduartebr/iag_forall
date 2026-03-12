@@ -1,3 +1,4 @@
+# Objective: Test coverage for query runtime behavior and regressions.
 """Unit tests for query runtime orchestration."""
 
 from types import SimpleNamespace

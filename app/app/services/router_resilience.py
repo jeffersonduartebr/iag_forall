@@ -1,3 +1,4 @@
+# Objective: Service-layer helpers for router resilience.
 """Resilience helpers extracted from router_core."""
 
 from __future__ import annotations

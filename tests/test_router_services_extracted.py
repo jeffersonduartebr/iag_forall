@@ -1,3 +1,4 @@
+# Objective: Test coverage for router services extracted behavior and regressions.
 """Direct tests for extracted router service helpers."""
 
 from __future__ import annotations

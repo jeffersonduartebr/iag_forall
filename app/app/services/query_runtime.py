@@ -1,3 +1,4 @@
+# Objective: Service-layer helpers for query runtime.
 """Query orchestration helpers extracted from the HTTP layer."""
 
 from __future__ import annotations

@@ -1,4 +1,10 @@
-"""Módulo `tests/test_reranker_module.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for reranker module behavior and regressions.
+"""Test coverage for reranker module behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from app import reranker as rr
 
@@ -15,13 +21,19 @@ def test_get_reranker_model_and_rerank_paths(monkeypatch):
     monkeypatch.setattr(rr, "CE_AVAILABLE", True)
 
     class _CE:
-        """Classe `_CE`: concentra responsabilidades de test reranker module."""
+        """Represent `_CE` within this module.
+
+The class groups the state and behavior required for CE."""
         def __init__(self, name, device="cpu"):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.name = name
 
         def predict(self, pairs):
-            """Executa predict."""
+            """Execute the predict routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return [0.1, 0.9, 0.3][: len(pairs)]
 
     monkeypatch.setattr(rr, "CrossEncoder", _CE, raising=False)
@@ -32,9 +44,13 @@ def test_get_reranker_model_and_rerank_paths(monkeypatch):
     assert docs == ["d2", "d3"]
 
     class _BrokenCE(_CE):
-        """Classe `_BrokenCE`: concentra responsabilidades de test reranker module."""
+        """Represent `_BrokenCE` within this module.
+
+The class groups the state and behavior required for BrokenCE."""
         def predict(self, pairs):
-            """Executa predict."""
+            """Execute the predict routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("x")
 
     rr._RERANKER_INSTANCE = _BrokenCE("x")

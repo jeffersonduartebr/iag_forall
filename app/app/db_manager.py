@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for db manager.
 """
 db_manager.py (FULL SCHEMA + PRICING SEED)
 ------------------------------------------------------------------------------
@@ -446,7 +447,9 @@ def ensure_indexes(conn):
 
 
 def initialize_system() -> None:
-    """Executa o setup completo do banco."""
+    """Execute the initialize system routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     logger.info("🚀 Iniciando verificação e migração do Schema...")
 
     try:

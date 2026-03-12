@@ -1,3 +1,4 @@
+# Objective: Configuration support code for settings catalog.
 """Catalog of dynamic settings grouped by domain."""
 
 from __future__ import annotations

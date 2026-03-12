@@ -1,3 +1,4 @@
+# Objective: Application runtime code for correlation metrics.
 """
 correlation_metrics.py — Cálculo, exposição e armazenamento histórico das correlações multiobjetivo (NSGA-II)
 Autor: Jefferson Duarte
@@ -85,7 +86,9 @@ def _make_db_engine() -> Any:
     )
 
 def _connect_redis() -> redis.Redis | None:
-    """Executa connect redis."""
+    """Execute the connect redis routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         r = redis.Redis(
             host=REDIS_HOST,
@@ -336,7 +339,9 @@ def persist_correlations(corr_data: Dict[str, Dict[str, Any]]) -> None:
 # 🚀 Loop principal
 # -----------------------------------------------------------------------------
 def main() -> None:
-    """Executa main."""
+    """Execute the main routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     logger.info(f"🚀 Servidor de correlações ativo (porta {PROM_PORT})")
     # Sobe o endpoint de métricas
     start_http_server(PROM_PORT)

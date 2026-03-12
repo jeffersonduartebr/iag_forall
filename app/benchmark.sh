@@ -1,4 +1,5 @@
 #!/bin/bash
+# Objective: Shell utility for benchmark.
 
 
 pip3 install datasets tqdm pandas httpx --break-system-packages

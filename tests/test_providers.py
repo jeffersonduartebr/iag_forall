@@ -1,4 +1,10 @@
-"""Módulo `tests/test_providers.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for providers behavior and regressions.
+"""Test coverage for providers behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock

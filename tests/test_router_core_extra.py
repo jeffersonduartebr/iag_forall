@@ -1,4 +1,10 @@
-"""Módulo `tests/test_router_core_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for router core extra behavior and regressions.
+"""Test coverage for router core extra behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -39,33 +45,51 @@ def test_ema_history_cache_and_batch_queue(monkeypatch):
 def test_load_ema_from_db_and_start_stop_services(monkeypatch):
     """Testa load ema from db and start stop services."""
     class _Rows:
-        """Classe `_Rows`: concentra responsabilidades de test router core extra."""
+        """Represent `_Rows` within this module.
+
+The class groups the state and behavior required for Rows."""
         def mappings(self):
-            """Executa mappings."""
+            """Execute the mappings routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self
 
         def all(self):
-            """Executa all."""
+            """Execute the all routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return [{"modality": "text", "model": "m", "ema_latency": 1, "ema_quality": 2, "ema_cost": 3, "ema_alignment": 1}]
 
     class _Conn:
-        """Classe `_Conn`: concentra responsabilidades de test router core extra."""
+        """Represent `_Conn` within this module.
+
+The class groups the state and behavior required for Conn."""
         def __enter__(self):
-            """Executa enter."""
+            """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self
 
         def __exit__(self, exc_type, exc, tb):
-            """Executa exit."""
+            """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return False
 
         def execute(self, *_a, **_k):
-            """Executa execute."""
+            """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _Rows()
 
     class _Engine:
-        """Classe `_Engine`: concentra responsabilidades de test router core extra."""
+        """Represent `_Engine` within this module.
+
+The class groups the state and behavior required for Engine."""
         def connect(self):
-            """Executa connect."""
+            """Execute the connect routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return _Conn()
 
     monkeypatch.setattr(rc, "_get_db_engine", lambda: _Engine())
@@ -76,17 +100,25 @@ def test_load_ema_from_db_and_start_stop_services(monkeypatch):
     started = []
 
     class _T:
-        """Classe `_T`: concentra responsabilidades de test router core extra."""
+        """Represent `_T` within this module.
+
+The class groups the state and behavior required for T."""
         def __init__(self, target=None, daemon=None, name=None):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self._name = name
 
         def start(self):
-            """Executa start."""
+            """Execute the start routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             started.append(self._name)
 
         def join(self, timeout=None):
-            """Executa join."""
+            """Execute the join routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
     monkeypatch.setattr(rc.threading, "Thread", _T)
@@ -107,9 +139,13 @@ async def test_route_and_answer_dedup_and_timeout(monkeypatch):
     monkeypatch.setattr(rc, "settings", SimpleNamespace(get=lambda k, d=None: "1" if k == "REQUEST_DEDUP_ENABLED" else 1))
 
     class _Dedup:
-        """Classe `_Dedup`: concentra responsabilidades de test router core extra."""
+        """Represent `_Dedup` within this module.
+
+The class groups the state and behavior required for Dedup."""
         async def deduplicate(self, **kwargs):
-            """Executa deduplicate."""
+            """Execute the deduplicate routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return await kwargs["execute_fn"]()
 
     monkeypatch.setattr(rc, "get_request_deduplicator", lambda: _Dedup())
@@ -125,7 +161,9 @@ async def test_route_and_answer_dedup_and_timeout(monkeypatch):
     assert out2["ok"] is True
 
     async def _slow(*args, **kwargs):
-        """Executa slow."""
+        """Execute the slow routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         await rc.asyncio.sleep(0.05)
         return {"ok": False}
 
@@ -141,21 +179,31 @@ async def test_process_background_feedback_branches(monkeypatch):
     monkeypatch.setattr(rc, "embed_text", lambda q: [0.1, 0.2])
 
     class _Pred:
-        """Classe `_Pred`: concentra responsabilidades de test router core extra."""
+        """Represent `_Pred` within this module.
+
+The class groups the state and behavior required for Pred."""
         def predict_error_probability(self, emb):
-            """Executa predict error probability."""
+            """Execute the predict error probability routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return 0.9
 
         def learn(self, emb, is_correct):
-            """Executa learn."""
+            """Execute the learn routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
         def record_outcome(self, p, e):
-            """Executa record outcome."""
+            """Execute the record outcome routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
         def save(self):
-            """Executa save."""
+            """Execute the save routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
     monkeypatch.setattr(rc, "get_predictor", lambda model: _Pred())

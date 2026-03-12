@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""
-providers_async.py (FINAL: Suporte a Reasoning/Thinking Explícito)
-------------------------------------------------------------------
-Implementação Robusta, Assíncrona e Resiliente de TODOS os provedores.
+# Objective: Application runtime code for providers async.
+"""Implement asynchronous provider calls and provider-specific runtime behavior.
 
-Melhorias:
-- Injeção automática de instrução <think> para modelos de raciocínio.
-- Extração e separação do pensamento (CoT) da resposta final.
-- Quick Win #6: Adaptive timeout based on model type.
-- Quick Win #7: Configurable Ollama concurrency limit.
-- Quick Win #8: Async Ollama model ensure using httpx.
+This module normalizes how the router talks to local and remote model providers.
+It owns the common contract for provider responses, applies retry and circuit
+breaker behavior, tracks provider metrics, and contains provider-specific logic
+such as adaptive timeouts, Ollama concurrency control, and reasoning-output
+separation.
+
+The rest of the application relies on this module to expose one consistent
+``call_model`` path regardless of the underlying provider implementation.
 """
 
 from __future__ import annotations
@@ -88,7 +88,12 @@ logger = logging.getLogger("providers_async")
 
 
 class ProviderCallError(Exception):
-    """Structured provider call failure."""
+    """Represent a normalized provider failure raised to router callers.
+
+    Provider integrations raise many library-specific exception types. This
+    wrapper converts them into a stable application-level error shape with a
+    category and retryability flag.
+    """
 
     def __init__(
         self,
@@ -98,7 +103,7 @@ class ProviderCallError(Exception):
         category: str = "provider_unavailable",
         retryable: bool = True,
     ):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the provider failure with routing-friendly metadata."""
         super().__init__(message)
         self.model = model
         self.category = category
@@ -106,10 +111,10 @@ class ProviderCallError(Exception):
 
 
 class ProviderCircuitOpenError(ProviderCallError):
-    """Raised when a provider circuit breaker is open."""
+    """Raised when provider execution is blocked by an open circuit breaker."""
 
     def __init__(self, model: str, message: str):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize a non-retryable failure caused by circuit-breaker state."""
         super().__init__(
             model=model,
             message=message,
@@ -133,7 +138,7 @@ def _classify_provider_exception(e: Exception) -> str:
 
 
 def _build_response_meta(result: "LLMResponse") -> Dict[str, Any]:
-    """Build a consistent metadata payload from LLMResponse."""
+    """Convert an internal provider response into the metadata shape used upstream."""
     return {
         "latency": result.latency,
         "load_time": result.load_time,
@@ -215,13 +220,11 @@ _http_client_lock = asyncio.Lock()
 
 async def get_http_client() -> httpx.AsyncClient:
     """
-    Get or create a global HTTP client with connection pooling.
+    Get or create the shared async HTTP client used by provider integrations.
 
-    Uses lazy initialization with async lock for thread safety.
-    Connection limits:
-    - max_connections: 100 (total connections across all hosts)
-    - max_keepalive_connections: 20 (persistent connections per host)
-    - Timeouts: 60s total, 10s for connect
+    The client is initialized lazily and reused across calls to avoid repeated
+    connection setup overhead. A shared pool matters especially for Ollama and
+    cloud SDK fallbacks that issue frequent HTTP requests.
     """
     global _http_client
 
@@ -243,7 +246,7 @@ async def get_http_client() -> httpx.AsyncClient:
 
 
 async def close_http_client():
-    """Close the global HTTP client. Call on shutdown."""
+    """Close the shared HTTP client during process shutdown."""
     global _http_client
     if _http_client is not None and not _http_client.is_closed:
         await _http_client.close()
@@ -284,7 +287,11 @@ REASONING_MULTIPLIER = DEFAULT_REASONING_MULTIPLIER
 
 
 def _runtime_provider_settings() -> Dict[str, Any]:
-    """Read provider runtime settings with safe fallback (supports hot reload)."""
+    """Read runtime-adjustable provider settings with safe defaults.
+
+    This helper supports hot-reload behavior by consulting dynamic settings at
+    call time instead of relying only on import-time constants.
+    """
     out = {
         "ollama_concurrency_limit": DEFAULT_OLLAMA_CONCURRENCY_LIMIT,
         "adaptive_timeout_enabled": DEFAULT_ADAPTIVE_TIMEOUT_ENABLED,
@@ -308,10 +315,11 @@ def _runtime_provider_settings() -> Dict[str, Any]:
 
 def _get_adaptive_timeout(model: str) -> float:
     """
-    Calculate adaptive timeout based on model type (Quick Win #6).
-    - Reasoning models: 3x base timeout
-    - Large models: 2x base timeout
-    - Standard models: base timeout
+    Calculate a timeout budget that reflects the expected cost of the model call.
+
+    Reasoning and larger models receive a larger timeout budget so normal
+    behavior does not look like failure, while simpler models keep lower limits
+    to surface stalls earlier.
     """
     runtime_cfg = _runtime_provider_settings()
     adaptive_timeout_enabled = bool(runtime_cfg["adaptive_timeout_enabled"])
@@ -338,7 +346,11 @@ def _get_adaptive_timeout(model: str) -> float:
     return min(timeout, max_timeout)
 
 def heuristic_quality_estimate(text: str) -> float:
-    """Executa heuristic quality estimate."""
+    """Estimate answer quality with a cheap 0-10 proxy for observability.
+
+    This heuristic is intentionally simple. It provides a rough quality signal
+    when provider metrics need a score before the formal judge pipeline has run.
+    """
     if not text or not text.strip():
         return 0.0
     length = len(text)
@@ -348,12 +360,12 @@ def heuristic_quality_estimate(text: str) -> float:
     return max(0.0, min(10.0, round(score, 2)))
 
 def _estimate_tokens(text: str) -> int:
-    """Executa estimate tokens."""
+    """Estimate token count from text length when provider usage is unavailable."""
     if not text: return 0
     return max(1, len(text) // 4)
 
 def render_metrics_response():
-    """Executa render metrics response."""
+    """Serialize provider metrics using the shared Prometheus registry."""
     return generate_latest(registry), CONTENT_TYPE_LATEST
 
 # ==============================================================================
@@ -361,7 +373,12 @@ def render_metrics_response():
 # ==============================================================================
 
 class LLMResponse(BaseModel):
-    """Classe `LLMResponse`: organiza responsabilidades de providers async."""
+    """Represent the normalized provider response consumed by router code.
+
+    Every provider adapter returns this model so downstream code can work with a
+    stable shape for text, timing, cost, token counts, raw payloads, and
+    optional reasoning traces.
+    """
     text: str
     latency: float
     load_time: float = 0.0
@@ -377,20 +394,20 @@ class LLMResponse(BaseModel):
 # ==============================================================================
 
 class BaseProvider(ABC):
-    """Classe `BaseProvider`: organiza responsabilidades de providers async."""
+    """Define the shared asynchronous interface implemented by all providers."""
     def __init__(self, name: str, concurrency_limit: int):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize provider identity and the concurrency semaphore."""
         self.name = name
         self._concurrency_limit = max(1, int(concurrency_limit))
         self.semaphore = asyncio.Semaphore(self._concurrency_limit)
 
     @abstractmethod
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Executa generate."""
+        """Generate a normalized model response for the given prompt."""
         pass
 
     def _record_metrics(self, model: str, latency: float, cost: float, success: bool):
-        """Executa record metrics."""
+        """Publish provider-level success, latency, and cost metrics."""
         PROV_REQ.labels(model=model).inc()
         if success:
             PROV_OK.labels(model=model).inc()
@@ -404,9 +421,9 @@ class BaseProvider(ABC):
 # ==============================================================================
 
 class OpenAIProvider(BaseProvider):
-    """Classe `OpenAIProvider`: organiza responsabilidades de providers async."""
+    """Call OpenAI chat models through the async SDK and normalize the result."""
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Create the OpenAI client and configure cloud-provider concurrency."""
         if not AsyncOpenAI: raise ImportError("OpenAI SDK not installed")
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         super().__init__("openai", concurrency_limit=100)
@@ -414,7 +431,7 @@ class OpenAIProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Executa generate."""
+        """Execute one OpenAI chat-completion request and normalize its output."""
         model = kwargs.get("model", "gpt-4o")
         temperature = kwargs.get("temperature", 0.5)
         max_tokens = kwargs.get("max_tokens", 512)
@@ -472,9 +489,9 @@ class OpenAIProvider(BaseProvider):
 # ==============================================================================
 
 class AnthropicProvider(BaseProvider):
-    """Classe `AnthropicProvider`: organiza responsabilidades de providers async."""
+    """Call Anthropic models and normalize the response for router consumers."""
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Create the Anthropic client and configure cloud-provider concurrency."""
         if not AsyncAnthropic: raise ImportError("Anthropic SDK not installed")
         self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
         super().__init__("anthropic", concurrency_limit=50)
@@ -482,7 +499,7 @@ class AnthropicProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Executa generate."""
+        """Execute one Anthropic request and normalize the provider payload."""
         model = kwargs.get("model", "claude-3-5-sonnet-latest")
         start = time.time()
 
@@ -526,9 +543,9 @@ class AnthropicProvider(BaseProvider):
 # ==============================================================================
 
 class GeminiProvider(BaseProvider):
-    """Classe `GeminiProvider`: organiza responsabilidades de providers async."""
+    """Call Gemini models through the available Google SDK path."""
     class GeminiAdapter:
-        """Adapter layer to isolate SDK calls and simplify migration to google.genai."""
+        """Isolate SDK-specific Gemini calls behind a small compatibility layer."""
 
         def generate(
             self,
@@ -538,8 +555,7 @@ class GeminiProvider(BaseProvider):
             temperature: float,
             max_tokens: int,
         ):
-            # Prefer google.genai (new SDK), fallback to google.generativeai.
-            """Executa generate."""
+            """Execute one Gemini generation call using the available SDK."""
             if google_genai is not None:
                 client = google_genai.Client(api_key=GEMINI_API_KEY or None)
                 parts = [{"text": prompt}]
@@ -579,7 +595,7 @@ class GeminiProvider(BaseProvider):
             )
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the Gemini provider and its adapter."""
         if not genai: raise ImportError("Google GenAI SDK not installed")
         super().__init__("gemini", concurrency_limit=60)
         self._adapter = self.GeminiAdapter()
@@ -587,18 +603,14 @@ class GeminiProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Executa generate."""
+        """Execute one Gemini request and normalize the response payload."""
         model_name = kwargs.get("model", "gemini-1.5-flash")
         start = time.time()
 
         async with self.semaphore:
             try:
                 def _call():
-                    """Executa a responsabilidade descrita por este método.
-
-                    Returns:
-                        Valor produzido pela execução.
-                    """
+                    """Invoke the adapter in a worker thread-friendly callable."""
                     return self._adapter.generate(
                         model_name=model_name,
                         prompt=prompt,
@@ -632,15 +644,20 @@ class GeminiProvider(BaseProvider):
 # ==============================================================================
 
 class OllamaProvider(BaseProvider):
-    """Classe `OllamaProvider`: organiza responsabilidades de providers async."""
+    """Call local Ollama models with adaptive timeout and concurrency controls.
+
+    This provider owns the semaphore that limits concurrent local execution, the
+    model-availability check, and the logic that separates reasoning traces from
+    final answer text.
+    """
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the local provider host and current concurrency settings."""
         self.host = OLLAMA_HOST
         cfg = _runtime_provider_settings()
         super().__init__("ollama", concurrency_limit=int(cfg["ollama_concurrency_limit"]))
 
     def _refresh_concurrency_limit(self) -> None:
-        """Executa refresh concurrency limit."""
+        """Refresh the Ollama semaphore when runtime settings change."""
         cfg = _runtime_provider_settings()
         new_limit = int(cfg["ollama_concurrency_limit"])
         if new_limit != self._concurrency_limit:
@@ -651,7 +668,7 @@ class OllamaProvider(BaseProvider):
     @COMMON_RETRY_STRATEGY
     @local_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
-        """Executa generate."""
+        """Execute one local Ollama request and normalize text and reasoning output."""
         model = kwargs.get("model", "phi4:latest")
         start = time.time()
         self._refresh_concurrency_limit()
@@ -766,12 +783,12 @@ class OllamaProvider(BaseProvider):
 # ==============================================================================
 
 class ProviderFactory:
-    """Classe `ProviderFactory`: organiza responsabilidades de providers async."""
+    """Create or reuse provider instances based on the model prefix."""
     _instances = {}
 
     @classmethod
     def get_provider(cls, model_name: str) -> BaseProvider:
-        """Obtém provider."""
+        """Return the provider instance responsible for one fully qualified model."""
         prefix = model_name.split("/")[0] if "/" in model_name else "ollama"
         if not is_provider_configured(prefix):
             raise RuntimeError(f"Provider '{prefix}' is not configured in the environment")
@@ -797,9 +814,12 @@ async def call_model(
     temperature: float = 0.5,
     max_tokens: int = 512,
 ) -> Tuple[str, Dict[str, Any]]:
-    """
-    Substituição direta (drop-in) para a antiga função call_model.
-    Roteia internamente para a arquitetura async/resiliente.
+    """Run one model call through the normalized provider pipeline.
+
+    This is the main entry point used by the router and judge layers. It
+    resolves the provider implementation, executes the async generation path,
+    classifies failures into stable application categories, and returns the
+    legacy `(text, metadata)` tuple expected by existing callers.
     """
     try:
         provider = ProviderFactory.get_provider(model)
@@ -845,7 +865,7 @@ async def call_model(
 # ==============================================================================
 
 async def _ensure_ollama_model_async(model_name: str) -> bool:
-    """Async version using pooled httpx client (Quick Win #8)."""
+    """Ensure an Ollama model is available using the shared async HTTP client."""
     try:
         client = await get_http_client()
         resp = await client.get(f"{OLLAMA_HOST}/api/tags", timeout=10.0)
@@ -937,9 +957,7 @@ def _ensure_ollama_model(model_name: str) -> bool:
 
 
 def reset_provider_runtime_state() -> None:
-    """
-    Reset global/singleton provider runtime state (test/dev utility).
-    """
+    """Reset provider singletons and mutable runtime state for tests and diagnostics."""
     global _http_client
     _http_client = None
     ProviderFactory._instances = {}

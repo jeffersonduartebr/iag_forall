@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for adaptive timeout.
 """
 adaptive_timeout.py — Adaptive Timeout Calculation
 ---------------------------------------------------

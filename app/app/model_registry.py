@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
-"""
-model_registry.py — Centralized Model Configuration Registry
--------------------------------------------------------------
-Provides a single source of truth for all model configurations including:
-- Provider information
-- Capabilities (vision, streaming, function calling)
-- Pricing information
-- Timeout and context limits
-- Fallback chains for graceful degradation
+# Objective: Application runtime code for model registry.
+"""Maintain the router's canonical catalog of supported model configurations.
+
+The registry is the authoritative source for provider ownership, capability
+flags, pricing metadata, timeout defaults, and fallback chains. Runtime code
+uses it to answer two different questions:
+
+- what the application knows how to support in principle
+- what models are actually eligible right now given the current environment
+
+That distinction matters because the codebase retains support for paid APIs
+while local deployments may intentionally expose only providers that have valid
+credentials or local runtimes configured.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ _PROVIDER_ENV_KEYS = {
 # ==============================================================================
 
 class Provider(str, Enum):
-    """Supported LLM providers."""
+    """Enumerate the provider backends recognized by the registry."""
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GEMINI = "gemini"
@@ -40,7 +44,7 @@ class Provider(str, Enum):
 
 
 class Capability(str, Enum):
-    """Model capabilities."""
+    """Describe functional traits used during routing and filtering."""
     TEXT = "text"
     VISION = "vision"
     STREAMING = "streaming"
@@ -54,7 +58,7 @@ class Capability(str, Enum):
 
 @dataclass
 class ModelConfig:
-    """Configuration for a single model."""
+    """Describe one model's operational metadata and routing constraints."""
     name: str
     provider: Provider
     display_name: str = ""
@@ -88,7 +92,7 @@ class ModelConfig:
     requires_alternating_roles: bool = False
 
     def __post_init__(self):
-        """Executa post init."""
+        """Normalize derived fields after dataclass initialization."""
         if not self.display_name:
             self.display_name = self.name
 
@@ -99,21 +103,21 @@ class ModelConfig:
 
     @property
     def supports_vision(self) -> bool:
-        """Executa supports vision."""
+        """Return whether the model accepts visual inputs."""
         return Capability.VISION in self.capabilities
 
     @property
     def supports_streaming(self) -> bool:
-        """Executa supports streaming."""
+        """Return whether the model supports streamed generation semantics."""
         return Capability.STREAMING in self.capabilities
 
     @property
     def supports_reasoning(self) -> bool:
-        """Executa supports reasoning."""
+        """Return whether the model is treated as a reasoning-oriented model."""
         return Capability.REASONING in self.capabilities
 
     def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        """Calculate the cost for a request."""
+        """Estimate request cost from token counts using registry pricing data."""
         input_cost = (input_tokens / 1000) * self.cost_per_1k_input
         output_cost = (output_tokens / 1000) * self.cost_per_1k_output
         return round(input_cost + output_cost, 6)
@@ -124,27 +128,25 @@ class ModelConfig:
 # ==============================================================================
 
 class ModelRegistry:
-    """
-    Centralized registry for all model configurations.
+    """Expose a singleton registry of model definitions and lookup helpers.
 
-    Usage:
-        registry = ModelRegistry()
-        config = registry.get("openai/gpt-4o")
-        if config.supports_vision:
-            # Handle vision request
+    The registry keeps model metadata in memory and offers convenience methods
+    for filtering by capability, provider availability, cost, and fallback
+    relationships. It intentionally behaves like a process-wide singleton
+    because routing code expects a stable, shared catalog across requests.
     """
 
     _instance: Optional["ModelRegistry"] = None
 
     def __new__(cls) -> "ModelRegistry":
-        """Singleton pattern."""
+        """Return the process-wide singleton registry instance."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Populate the registry exactly once with the default model catalog."""
         if self._initialized:
             return
 
@@ -153,7 +155,7 @@ class ModelRegistry:
         self._initialized = True
 
     def _initialize_default_models(self):
-        """Initialize with default model configurations."""
+        """Register the built-in model catalog used by the application."""
 
         # ==========================================================
         # OpenAI Models

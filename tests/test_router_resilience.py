@@ -1,3 +1,4 @@
+# Objective: Test coverage for router resilience behavior and regressions.
 """Focused tests for router resilience helpers."""
 
 from __future__ import annotations

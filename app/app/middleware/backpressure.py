@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: HTTP middleware for backpressure.
 """
 backpressure.py — Global Concurrency Limit Middleware
 ------------------------------------------------------
@@ -39,14 +40,18 @@ class BackpressureSemaphore:
     _lock = asyncio.Lock()
 
     def __new__(cls) -> "BackpressureSemaphore":
-        """Executa new."""
+        """Return the instance created for this class.
+
+This hook is typically used to enforce singleton-style behavior or other allocation constraints."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         if self._initialized:
             return
 
@@ -137,7 +142,9 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         # Check if backpressure is enabled
-        """Executa dispatch."""
+        """Execute the dispatch routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if not settings.BACKPRESSURE_ENABLED:
             return await call_next(request)
 

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for integration pipeline behavior and regressions.
 """
 test_integration_pipeline.py — Integration tests for the full request pipeline
 ------------------------------------------------------------------------------

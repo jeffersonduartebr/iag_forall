@@ -1,3 +1,4 @@
+# Objective: API layer code for governance routes.
 """Governance, policy, and RBAC endpoints."""
 
 from __future__ import annotations

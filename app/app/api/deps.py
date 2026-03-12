@@ -1,3 +1,4 @@
+# Objective: API layer code for deps.
 """Shared FastAPI authorization helpers."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# Objective: Configuration support code for settings sources.
 """Source resolution helpers for dynamic settings."""
 
 from __future__ import annotations

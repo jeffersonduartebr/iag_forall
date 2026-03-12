@@ -1,4 +1,10 @@
-"""Módulo `tests/test_vision.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for vision behavior and regressions.
+"""Test coverage for vision behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import requests
 import base64
@@ -100,7 +106,9 @@ def send_request(image_path):
 # ==============================================================================
 def main():
     # Busca extensões comuns (case insensitive para Windows/Linux)
-    """Executa main."""
+    """Execute the main routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     patterns = ['*.jpg', '*.jpeg', '*.png', '*.webp', '*.JPG', '*.PNG']
     files = []
     

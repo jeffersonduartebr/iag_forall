@@ -1,4 +1,5 @@
 #!/bin/sh
+# Objective: Shell utility for init chroma.
 set -e
 chroma run --path /data --host 0.0.0.0 --port 8000 &
 sleep 5

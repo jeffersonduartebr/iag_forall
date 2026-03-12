@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for user feedback.
 """
 user_feedback.py — User Feedback Processing
 --------------------------------------------

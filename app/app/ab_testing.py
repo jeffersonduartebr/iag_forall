@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for ab testing.
 """
 ab_testing.py — A/B Testing Infrastructure
 -------------------------------------------
@@ -66,7 +67,9 @@ class Experiment:
     target_samples: int = 1000
 
     def to_dict(self) -> Dict[str, Any]:
-        """Executa to dict."""
+        """Execute the to dict routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {
             "id": self.id,
             "name": self.name,
@@ -81,7 +84,9 @@ class Experiment:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Experiment":
-        """Executa from dict."""
+        """Execute the from dict routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         variants = [
             Variant(name=v["name"], weight=v["weight"], config=v.get("config", {}))
             for v in data.get("variants", [])
@@ -118,7 +123,9 @@ class ABTestManager:
     _lock = threading.Lock()
 
     def __new__(cls) -> "ABTestManager":
-        """Executa new."""
+        """Return the instance created for this class.
+
+This hook is typically used to enforce singleton-style behavior or other allocation constraints."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -127,7 +134,9 @@ class ABTestManager:
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         if self._initialized:
             return
 
@@ -136,7 +145,9 @@ class ABTestManager:
         self._initialized = True
 
     def _get_redis(self):
-        """Executa get redis."""
+        """Execute the get redis routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return get_redis()
 
     def _load_experiments(self) -> None:

@@ -1,4 +1,10 @@
-"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Utility helpers for bkp redis client.
+"""Utility helpers for bkp redis client.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
 
 # app/utils/redis_client.py
 # ------------------------------------------------------------
@@ -17,13 +23,9 @@ _redis_client = None  # cache global do cliente
 
 
 def get_redis(max_wait_s: int = 5):
-    """
-    Retorna cliente Redis síncrono.
-    Agora com:
-    ✅ Suporte a senha (REDIS_PASSWORD)
-    ✅ Tentativas automáticas até max_wait_s
-    ✅ Log mais claro
-    """
+    """Return redis.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
     global _redis_client
 
     if _redis_client:

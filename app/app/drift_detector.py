@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for drift detector.
 """
 drift_detector.py — Query Distribution Drift Detection
 -------------------------------------------------------
@@ -66,7 +67,9 @@ class QueryDriftDetector:
     _lock = threading.Lock()
 
     def __new__(cls) -> "QueryDriftDetector":
-        """Executa new."""
+        """Return the instance created for this class.
+
+This hook is typically used to enforce singleton-style behavior or other allocation constraints."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -75,7 +78,9 @@ class QueryDriftDetector:
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         if self._initialized:
             return
 
@@ -99,7 +104,9 @@ class QueryDriftDetector:
         self._initialized = True
 
     def _get_redis(self):
-        """Executa get redis."""
+        """Execute the get redis routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return get_redis()
 
     def _load_state(self) -> None:

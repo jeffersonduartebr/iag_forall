@@ -1,32 +1,52 @@
-"""Módulo `tests/test_bandits_more.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for bandits more behavior and regressions.
+"""Test coverage for bandits more behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import numpy as np
 import pytest
 
 
 class _DummyMetric:
-    """Classe `_DummyMetric`: concentra responsabilidades de test bandits more."""
+    """Represent `_DummyMetric` within this module.
+
+The class groups the state and behavior required for DummyMetric."""
     def labels(self, **_kwargs):
-        """Executa labels."""
+        """Execute the labels routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return self
 
     def inc(self, *_args, **_kwargs):
-        """Executa inc."""
+        """Execute the inc routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return None
 
     def observe(self, *_args, **_kwargs):
-        """Executa observe."""
+        """Execute the observe routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return None
 
 
 class _FakeRedis:
-    """Classe `_FakeRedis`: concentra responsabilidades de test bandits more."""
+    """Represent `_FakeRedis` within this module.
+
+The class groups the state and behavior required for FakeRedis."""
     def __init__(self, value=None):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self._value = value
 
     def get(self, _key):
-        """Executa get."""
+        """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return self._value
 
 
@@ -180,7 +200,9 @@ def test_bandit_update_and_reward(monkeypatch):
     captured = {}
 
     def _set_ctx(ctx, stats):
-        """Executa set ctx."""
+        """Execute the set ctx routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         captured[ctx] = stats
 
     monkeypatch.setattr(bandits, "_set_ctx_stats", _set_ctx)
@@ -205,7 +227,9 @@ def test_bandit_update_and_reward(monkeypatch):
     assert 0.0 <= r <= 1.0
 
     def _boom():
-        """Executa boom."""
+        """Execute the boom routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         raise RuntimeError("x")
 
     monkeypatch.setattr(bandits, "_load_nsga_weights", _boom)
@@ -224,7 +248,9 @@ def test_centroids_online_update_and_label(monkeypatch):
     saved = {}
 
     def _save(c):
-        """Executa save."""
+        """Execute the save routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         saved["cents"] = c
 
     monkeypatch.setattr(bandits, "_save_centroids", _save)

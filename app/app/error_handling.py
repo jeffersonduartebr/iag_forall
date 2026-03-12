@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for error handling.
 """
 error_handling.py — Structured Error Handling and Logging
 ---------------------------------------------------------

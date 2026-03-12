@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Project code for adversarial university full suite.
 """
 adversarial_university_full_suite.py
 ------------------------------------------------------------------

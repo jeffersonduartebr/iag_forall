@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for 00providers.
 """
 providers.py — versão multimodal + UM-RAG compatível (VALIDAÇÃO DE PARÂMETROS)
 ------------------------------------------------------------

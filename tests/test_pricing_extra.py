@@ -1,4 +1,10 @@
-"""Módulo `tests/test_pricing_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for pricing extra behavior and regressions.
+"""Test coverage for pricing extra behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import json
 import time
@@ -8,28 +14,42 @@ from app.utils import pricing as pr
 
 
 class _Conn:
-    """Classe `_Conn`: concentra responsabilidades de test pricing extra."""
+    """Represent `_Conn` within this module.
+
+The class groups the state and behavior required for Conn."""
     def __init__(self, rows):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self.rows = rows
 
     def execute(self, *_a, **_k):
-        """Executa execute."""
+        """Execute the execute routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return SimpleNamespace(fetchall=lambda: self.rows)
 
 
 class _Ctx:
-    """Classe `_Ctx`: concentra responsabilidades de test pricing extra."""
+    """Represent `_Ctx` within this module.
+
+The class groups the state and behavior required for Ctx."""
     def __init__(self, rows):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self.rows = rows
 
     def __enter__(self):
-        """Executa enter."""
+        """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return _Conn(self.rows)
 
     def __exit__(self, exc_type, exc, tb):
-        """Executa exit."""
+        """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return False
 
 
@@ -46,22 +66,32 @@ def test_refresh_pricing_from_db_success_and_error(monkeypatch):
 def test_refresh_pricing_redis_hit_and_fallback(monkeypatch):
     """Testa refresh pricing redis hit and fallback."""
     class _R:
-        """Classe `_R`: concentra responsabilidades de test pricing extra."""
+        """Represent `_R` within this module.
+
+The class groups the state and behavior required for R."""
         def __init__(self, payload=None):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.payload = payload
             self.writes = []
 
         def get(self, key):
-            """Executa get."""
+            """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self.payload
 
         def setex(self, key, ttl, value):
-            """Executa setex."""
+            """Execute the setex routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.writes.append((key, ttl, value))
 
         def delete(self, key):
-            """Executa delete."""
+            """Execute the delete routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.writes.append(("del", key))
 
     hit = _R(payload=json.dumps({"x": {"in": 1.0, "out": 2.0}}))

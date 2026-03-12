@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Configuration support code for constants.
 """
 constants.py — Application Constants
 --------------------------------------

@@ -1,3 +1,4 @@
+# Objective: Test coverage for router core facade behavior and regressions.
 """Focused tests for router_core façade helpers and delegations."""
 
 from __future__ import annotations

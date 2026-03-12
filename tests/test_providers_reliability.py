@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for providers reliability behavior and regressions.
 """
 test_providers_reliability.py — Tests for provider reliability patterns
 -----------------------------------------------------------------------
@@ -46,7 +47,9 @@ class TestCircuitBreaker:
         # Simulate failures
         @test_breaker
         def failing_func():
-            """Executa failing func."""
+            """Execute the failing func routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             raise Exception("Simulated failure")
 
         for _ in range(2):

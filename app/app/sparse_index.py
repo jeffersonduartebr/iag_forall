@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for sparse index.
 """
 sparse_index.py — Gerenciador de Índice BM25 (Busca por Palavras-Chave)
 -----------------------------------------------------------------------
@@ -23,9 +24,13 @@ DATA_DIR = settings.get("RAG_DATA_DIR", "/app/data")
 INDEX_PATH = os.path.join(DATA_DIR, "bm25_index.pkl")
 
 class SparseIndex:
-    """Classe `SparseIndex`: organiza responsabilidades de sparse index."""
+    """Represent `SparseIndex` within this module.
+
+The class groups the state and behavior required for SparseIndex."""
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self.documents: List[str] = []
         self.doc_ids: List[str] = []
         self.bm25 = None
@@ -73,9 +78,9 @@ class SparseIndex:
             logger.error(f"[SparseIndex] Erro ao commitar índice: {e}")
 
     def search(self, query: str, top_k: int = 10) -> List[Tuple[str, float]]:
-        """
-        Retorna [(doc_id, score), ...]
-        """
+        """Execute the search routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if not self.bm25 or not self.documents:
             return []
 
@@ -106,7 +111,9 @@ class SparseIndex:
             return ""
 
     def _save(self):
-        """Executa save."""
+        """Execute the save routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         try:
             os.makedirs(os.path.dirname(INDEX_PATH), exist_ok=True)
             with open(INDEX_PATH, "wb") as f:
@@ -119,7 +126,9 @@ class SparseIndex:
             logger.error(f"[SparseIndex] Erro ao salvar índice em disco: {e}")
 
     def _load(self):
-        """Executa load."""
+        """Execute the load routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if os.path.exists(INDEX_PATH):
             try:
                 with open(INDEX_PATH, "rb") as f:

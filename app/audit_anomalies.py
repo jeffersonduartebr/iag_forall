@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for audit anomalies.
 """
 audit_anomalies.py — Auditoria de Discrepâncias (Sincronizado)
 --------------------------------------------------------------
@@ -46,7 +47,9 @@ def debug_parser(dataset_name, model_output):
     return "N/A"
 
 def main():
-    """Executa main."""
+    """Execute the main routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     df = load_latest_data()
     
     if 'is_correct' not in df.columns:

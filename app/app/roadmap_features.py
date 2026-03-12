@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for roadmap features.
 """Roadmap hardening features.
 
 Provides foundational capabilities for:
@@ -127,7 +128,9 @@ DDL_STATEMENTS = [
 
 @dataclass
 class BudgetCheck:
-    """Classe `BudgetCheck`: concentra responsabilidades de roadmap features."""
+    """Represent `BudgetCheck` within this module.
+
+The class groups the state and behavior required for BudgetCheck."""
     allowed: bool
     reason: str
     daily_spent: float
@@ -138,7 +141,9 @@ class BudgetCheck:
 
 @dataclass
 class AccessDecision:
-    """Classe `AccessDecision`: concentra responsabilidades de roadmap features."""
+    """Represent `AccessDecision` within this module.
+
+The class groups the state and behavior required for AccessDecision."""
     allowed: bool
     reason: str
     roles: List[str]
@@ -185,7 +190,9 @@ def get_tenant_budget(tenant_id: str) -> Dict[str, Any]:
 
 
 def _usage_snapshot(tenant_id: str) -> Dict[str, float]:
-    """Executa usage snapshot."""
+    """Execute the usage snapshot routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     day_key = time.strftime("%Y-%m-%d")
     month_key = time.strftime("%Y-%m")
     with get_engine().connect() as conn:

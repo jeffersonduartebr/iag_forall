@@ -1,3 +1,4 @@
+# Objective: Router module for rag router.
 """
 rag_router.py (CORRIGIDO: Importação e Async)
 ----------------------------------------------------
@@ -176,7 +177,9 @@ async def add_doc(file: UploadFile = File(...)):
 
 
 class IngestRequest(BaseModel):
-    """Classe `IngestRequest`: organiza responsabilidades de rag router."""
+    """Represent `IngestRequest` within this module.
+
+The class groups the state and behavior required for IngestRequest."""
     text: str
     doc_id: str
     metadata: Dict[str, Any]

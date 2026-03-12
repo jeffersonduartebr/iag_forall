@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Objective: Maintenance and automation script for fill docstrings safe.
 """Safely fill missing/placeholder docstrings across project files.
 
 Safety guarantees:

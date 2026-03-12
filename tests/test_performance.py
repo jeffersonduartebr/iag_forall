@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for performance behavior and regressions.
 """
 test_performance.py - Testes de Performance para Quick Wins
 ------------------------------------------------------------
@@ -348,7 +349,9 @@ class TestThreadSafety:
         errors = []
 
         def writer(thread_id):
-            """Executa writer."""
+            """Execute the writer routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             try:
                 for i in range(100):
                     cache.set(("text", f"model_{thread_id}_{i}"), {"value": i})
@@ -356,7 +359,9 @@ class TestThreadSafety:
                 errors.append(e)
 
         def reader(thread_id):
-            """Executa reader."""
+            """Execute the reader routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             try:
                 for i in range(100):
                     cache.get(("text", f"model_{thread_id}_{i}"))
@@ -384,7 +389,9 @@ class TestThreadSafety:
         errors = []
 
         def worker(thread_id):
-            """Executa worker."""
+            """Execute the worker routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             try:
                 for i in range(100):
                     key = f"key_{thread_id}_{i}"

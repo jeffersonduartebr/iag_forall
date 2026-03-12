@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-health.py — Deep Health Checks for All Dependencies
-----------------------------------------------------
-Provides comprehensive health checks for:
-- Redis, MariaDB, ChromaDB, Ollama
-- Circuit breaker status
-- System resources
+# Objective: Application runtime code for health.
+"""Run deep health checks for the runtime's critical dependencies.
 
-Features:
-- Result caching (30s TTL) to avoid repeated deep checks
+This module centralizes the expensive health probes used by operational routes.
+It inspects infrastructure dependencies such as Redis, MariaDB, ChromaDB, and
+Ollama, plus internal control-plane signals such as circuit breaker state.
+
+Because these checks can be comparatively expensive, results are cached for a
+short TTL and exposed through small helper functions that distinguish between
+liveness, readiness, and full diagnostic views.
 """
 
 from __future__ import annotations
@@ -30,17 +30,17 @@ HEALTH_CACHE_TTL_S = 30  # Cache health results for 30 seconds
 
 
 class HealthCache:
-    """Thread-safe cache for health check results."""
+    """Store recent deep-health results behind a thread-safe TTL cache."""
 
     def __init__(self, ttl_s: int = HEALTH_CACHE_TTL_S):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize cache storage and the lock protecting shared state."""
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_time: float = 0
 
     def get(self) -> Optional[Dict[str, Any]]:
-        """Get cached health result if still valid."""
+        """Return a copy of the cached result when the TTL has not expired."""
         with self._lock:
             if self._cache is None:
                 return None
@@ -50,13 +50,13 @@ class HealthCache:
             return self._cache.copy()
 
     def set(self, result: Dict[str, Any]) -> None:
-        """Cache a health check result."""
+        """Persist one health snapshot and refresh the cache timestamp."""
         with self._lock:
             self._cache = result.copy()
             self._cache_time = time.time()
 
     def invalidate(self) -> None:
-        """Clear the cache."""
+        """Drop any cached snapshot so the next request performs fresh probes."""
         with self._lock:
             self._cache = None
             self._cache_time = 0
@@ -66,7 +66,7 @@ _health_cache = HealthCache()
 
 
 class HealthStatus(str, Enum):
-    """Classe `HealthStatus`: organiza responsabilidades de health."""
+    """Enumerate the aggregate status values returned by deep health checks."""
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -74,7 +74,7 @@ class HealthStatus(str, Enum):
 
 @dataclass
 class ComponentHealth:
-    """Classe `ComponentHealth`: organiza responsabilidades de health."""
+    """Capture the status of one dependency or internal subsystem probe."""
     name: str
     healthy: bool
     latency_ms: Optional[float] = None
@@ -82,7 +82,7 @@ class ComponentHealth:
     details: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Executa to dict."""
+        """Serialize the dataclass into the JSON-friendly shape used by routes."""
         result = {"name": self.name, "healthy": self.healthy}
         if self.latency_ms is not None:
             result["latency_ms"] = round(self.latency_ms, 2)
@@ -194,16 +194,13 @@ async def check_circuit_breakers_health() -> ComponentHealth:
 
 
 async def get_full_health_check(force_refresh: bool = False) -> Dict[str, Any]:
-    """
-    Run all health checks and return comprehensive status.
+    """Run all deep probes and assemble the operational health payload.
 
-    Uses caching (30s TTL) to avoid repeated deep checks.
-
-    Args:
-        force_refresh: If True, bypass cache and run fresh checks
-
-    Returns:
-        Dict with overall status and individual component health
+    The function executes dependency checks concurrently, derives an aggregate
+    health state from individual probe results, and caches the final payload so
+    repeated dashboard or readiness calls do not continuously pound external
+    services. `force_refresh` bypasses the TTL cache when callers need a fresh
+    diagnostic snapshot.
     """
     # Check cache first (unless force_refresh)
     if not force_refresh:
@@ -266,17 +263,17 @@ async def get_full_health_check(force_refresh: bool = False) -> Dict[str, Any]:
 
 
 def invalidate_health_cache() -> None:
-    """Invalidate the health check cache (call when components change)."""
+    """Clear the cached deep-health payload after runtime state changes."""
     _health_cache.invalidate()
 
 
 async def get_liveness_check() -> Dict[str, Any]:
-    """Simple liveness check (is the app running?)."""
+    """Return a lightweight signal that the process is alive."""
     return {"status": "alive", "timestamp": time.time()}
 
 
 async def get_readiness_check() -> Dict[str, Any]:
-    """Readiness check (is the app ready to serve traffic?)."""
+    """Return a lightweight readiness verdict derived from deep health status."""
     # Check critical dependencies only
     redis_health = await check_redis_health()
     db_health = await check_database_health()

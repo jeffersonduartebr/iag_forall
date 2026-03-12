@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for benchmark thesis.
 """
 benchmark_thesis.py — Phase 1: Generation & Performance (NO JUDGE)
 ------------------------------------------------------------------
@@ -68,7 +69,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 class RateLimiter:
     """Controla taxa de chamadas assíncronas por janela de tempo."""
     def __init__(self, max_calls_per_minute):
-        """Inicializa limite de chamadas por minuto."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self.max_calls = max_calls_per_minute
         self.period = 60.0
         self.timestamps = []
@@ -219,7 +222,9 @@ def load_datasets():
 # 🌊 FRUGAL GPT
 # ==============================================================================
 async def run_frugal_cascade(query: str):
-    """Executa cascata local->SOTA com heurística frugal de escalonamento."""
+    """Run frugal cascade.
+
+This function coordinates the main execution path for that step."""
     start_t = time.time()
     local_model = list(LOCAL_BASELINES.values())[0]
     
@@ -365,7 +370,9 @@ async def evaluate_interaction(mode_label: str, task: dict, run_id: int):
         }
 
 async def run_benchmark_suite():
-    """Executa benchmark completo e persiste progresso em checkpoint."""
+    """Run benchmark suite.
+
+This function coordinates the main execution path for that step."""
     tasks_data = load_datasets()
     if not tasks_data: return pd.DataFrame()
 

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for autonomous behavior and regressions.
 """
 test_autonomous.py — Tests for Phase 5 Autonomous Behavior Improvements
 ------------------------------------------------------------------------
@@ -238,7 +239,9 @@ class TestJudgeCalibration:
         # Mock settings.get to return "0" for JUDGE_CALIBRATION_ENABLED
         original_get = DynamicSettings.get
         def mock_get(self, key, fallback=None):
-            """Executa mock get."""
+            """Execute the mock get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             if key == "JUDGE_CALIBRATION_ENABLED":
                 return "0"
             return original_get(self, key, fallback)

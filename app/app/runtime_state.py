@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for runtime state.
 """Global runtime state reset helpers for tests/dev."""
 
 from __future__ import annotations

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Package initialization and import surface for middleware.
 """
 Middleware modules for the LLM Router application.
 """

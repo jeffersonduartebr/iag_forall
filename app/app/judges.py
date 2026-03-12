@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-judges.py (VERSÃO FINAL: Binary Verdict + Tie-Breaker Meta-Judge)
------------------------------------------------------------------
-Sistema de avaliação de respostas.
+# Objective: Application runtime code for judges.
+"""Evaluate router answers with heuristic and model-based judges.
 
-Mudanças Arquiteturais:
-1. Avaliação Binária: O juiz decide apenas entre CORRECT (10) ou INCORRECT (0).
-2. Chain-of-Thought (CoT): Obrigatório para evitar "chutes".
-3. Meta-Juiz de Desempate: Acionado apenas em conflito direto (0 vs 10).
-4. Cache de Verdicts: TTL de 5 minutos para queries similares.
+The current judge pipeline is optimized for operational scoring rather than
+academic benchmarking. It uses binary verdicts, a short-lived verdict cache,
+adaptive judge selection, and a meta-judge that only runs when primary judges
+disagree. This keeps the quality signal useful while limiting cost and latency.
 """
 
 from __future__ import annotations
@@ -52,10 +49,10 @@ VERDICT_CACHE_TTL_S = 300  # 5 minutos
 
 
 class VerdictCache:
-    """Cache LRU com TTL para verdicts de juízes."""
+    """Store recently computed judge verdicts for repeated query/answer pairs."""
 
     def __init__(self, maxsize: int = VERDICT_CACHE_SIZE, ttl_s: int = VERDICT_CACHE_TTL_S):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Create a bounded verdict cache with TTL-based expiration."""
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
@@ -69,7 +66,7 @@ class VerdictCache:
         return hashlib.sha256(payload).hexdigest()
 
     def get(self, query: str, answer: str) -> Optional[float]:
-        """Executa get."""
+        """Return a cached verdict score when the query/answer pair is still fresh."""
         key = self._make_key(query, answer)
         now = time.time()
         with self._lock:
@@ -86,7 +83,7 @@ class VerdictCache:
             return score
 
     def set(self, query: str, answer: str, score: float) -> None:
-        """Executa set."""
+        """Store one normalized verdict score in the cache."""
         key = self._make_key(query, answer)
         now = time.time()
         with self._lock:
@@ -97,7 +94,7 @@ class VerdictCache:
                 self._data.popitem(last=False)
 
     def stats(self) -> Dict[str, Any]:
-        """Executa stats."""
+        """Return cache hit, miss, and occupancy statistics."""
         total = self._hits + self._misses
         return {
             "hits": self._hits,
@@ -111,7 +108,7 @@ _verdict_cache = VerdictCache()
 
 
 def get_verdict_cache_stats() -> Dict[str, Any]:
-    """Retorna estatísticas do cache de verdicts."""
+    """Expose verdict-cache statistics for admin endpoints and observability."""
     return _verdict_cache.stats()
 
 # ============================================================
@@ -132,7 +129,7 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 # ============================================================
 
 def _safe_setting_float(key: str, default: float) -> float:
-    """Executa safe setting float."""
+    """Read one float setting defensively for judge configuration."""
     try:
         return float(settings.get(key, default))
     except Exception:
@@ -140,7 +137,7 @@ def _safe_setting_float(key: str, default: float) -> float:
 
 
 def _safe_setting_int(key: str, default: int) -> int:
-    """Executa safe setting int."""
+    """Read one integer setting defensively for judge configuration."""
     try:
         return int(settings.get(key, default))
     except Exception:
@@ -219,7 +216,9 @@ def _resolve_judge_models() -> List[str]:
 
 @dataclass
 class JudgeStats:
-    """Classe `JudgeStats`: organiza responsabilidades de judges."""
+    """Represent `JudgeStats` within this module.
+
+The class groups the state and behavior required for JudgeStats."""
     model: str
     avg_score: float = 0.7
     avg_latency: float = 2.0
@@ -230,7 +229,9 @@ class JudgeStats:
 
 @dataclass
 class SelectedJudge:
-    """Classe `SelectedJudge`: organiza responsabilidades de judges."""
+    """Represent `SelectedJudge` within this module.
+
+The class groups the state and behavior required for SelectedJudge."""
     model: str
     weight: float
 
@@ -240,7 +241,7 @@ class SelectedJudge:
 # ============================================================
 
 def _adaptive_threshold(values: Sequence[float], base: float) -> float:
-    """Executa adaptive threshold."""
+    """Derive a selection threshold from recent judge fitness values."""
     if not values:
         return base
     median_val = statistics.median(values)
@@ -248,7 +249,7 @@ def _adaptive_threshold(values: Sequence[float], base: float) -> float:
 
 
 def _image_hash_from_b64(image_b64: Optional[str]) -> Optional[str]:
-    """Executa image hash from b64."""
+    """Return a stable image hash used for judge logging and deduplication."""
     if not image_b64:
         return None
     try:
@@ -264,8 +265,11 @@ def _image_hash_from_b64(image_b64: Optional[str]) -> Optional[str]:
 # ============================================================
 
 def _ensure_judge_logs_table() -> None:
-    # Assume-se que o db_manager.py ou alembic já criou as tabelas
-    """Executa ensure judge logs table."""
+    """Placeholder for judge log bootstrap kept for backward compatibility.
+
+    Table creation is currently handled elsewhere in the application startup
+    path, so this function remains as a stable no-op hook for older callers.
+    """
     pass 
 
 
@@ -274,7 +278,7 @@ def _ensure_judge_logs_table() -> None:
 # ============================================================
 
 def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
-    """Executa load judge stats."""
+    """Load recent judge-performance aggregates used for adaptive selection."""
     since = datetime.utcnow() - timedelta(minutes=window_minutes)
     stats: Dict[str, JudgeStats] = {}
 
@@ -319,14 +323,14 @@ def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
 # ============================================================
 
 def _score_candidate(s: JudgeStats) -> float:
-    """Executa score candidate."""
+    """Compute a composite score used to rank candidate judge models."""
     qc = s.avg_score / max(s.avg_cost, 1e-6)
     qc_norm = min(10.0, 1.0 + qc ** 0.25)
     return max(0.0, W_FIT * s.fitness + W_QC * (qc_norm / 10.0))
 
 
 def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[SelectedJudge]:
-    """Executa choose two."""
+    """Select two judges using fitness filtering and weighted randomization."""
     fitness_vals = [stats.get(m, JudgeStats(m)).fitness for m in models]
     thr = _adaptive_threshold(fitness_vals, MIN_FITNESS)
     valid = [m for m in models if stats.get(m, JudgeStats(m)).fitness >= thr]
@@ -344,7 +348,7 @@ def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[Selecte
     weights = [(m, w / total) for m, w in scored]
 
     def pick(wlist):
-        """Executa pick."""
+        """Draw one model from a normalized weight list."""
         r = random.random()
         acc = 0.0
         for name, w in wlist:
@@ -365,7 +369,7 @@ def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[Selecte
 # ============================================================
 
 async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500) -> str:
-    """Obtém rag context."""
+    """Retrieve a compact RAG context block to assist judge prompts."""
     try:
         vec = await asyncio.to_thread(embed_text, query)
         coll = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
@@ -388,7 +392,7 @@ async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500)
 # ============================================================
 
 def heuristic_score(answer: str) -> float:
-    """Executa heuristic score."""
+    """Estimate answer quality cheaply when LLM judging is disabled or blended."""
     try:
         s = len(answer.strip())
         if s == 0:
@@ -433,7 +437,7 @@ def _ensure_judge_calibration_table():
 
 
 def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitness):
-    """Executa persist judge metrics."""
+    """Persist one aggregate judge-performance sample to the database."""
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -455,7 +459,7 @@ def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitne
         logger.warning("[Judges] persist metrics fail: %s", exc)
 
 def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=None):
-    """Executa persist judge log."""
+    """Persist one raw judge evaluation event for audit and analysis."""
     try:
         q_short = query[:2000] if query else ""
         a_short = answer[:4000] if answer else ""
@@ -488,7 +492,7 @@ def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=N
 # ============================================================
 
 async def _describe_image_if_needed(image_b64: Optional[str], modality: str) -> str:
-    """Executa describe image if needed."""
+    """Generate a short technical image description for judge prompts when needed."""
     if not image_b64:
         return ""
 
@@ -610,8 +614,12 @@ CORRECT ou INCORRECT
 
 
 async def _llm_pair_score(query, answer, use_rag, modality, image_b64, reference=None):
-    # Check verdict cache first (Performance optimization)
-    """Executa llm pair score."""
+    """Score one answer with two judges and an optional meta-judge tie-breaker.
+
+    The function first checks the verdict cache, then evaluates the answer with
+    the selected judge pair. When the two judges disagree on the binary verdict,
+    a stronger meta-judge resolves the conflict.
+    """
     cached_score = _verdict_cache.get(query, answer)
     if cached_score is not None:
         logger.debug(f"[Judges] Cache HIT: score={cached_score}")
@@ -664,7 +672,7 @@ CORRECT ou INCORRECT
     # --- PARALLEL JUDGE EVALUATION (Performance Optimization) ---
     # Evaluate judges in parallel using asyncio.gather for -500ms to -1s latency reduction
     async def _evaluate_single_judge(sj: SelectedJudge) -> Tuple[str, float, float, Dict[str, Any]]:
-        """Evaluate a single judge and return results."""
+        """Execute one judge model call and return normalized scoring metadata."""
         try:
             text_out, meta = await call_model(
                 model=sj.model,
@@ -751,7 +759,7 @@ CORRECT ou INCORRECT
 # ============================================================
 
 async def llm_based_score(query, answer, use_rag, modality, image_b64, reference=None):
-    """Executa llm based score."""
+    """Public wrapper around the pairwise LLM judging path."""
     return await _llm_pair_score(
         query=query,
         answer=answer,
@@ -770,8 +778,12 @@ async def judge_answer(
     image_b64: Optional[str] = None,
     reference: Optional[str] = None
 ) -> List[Dict[str, Any]]:
+    """Run the configured judge pipeline and return normalized judge results.
 
-    """Executa judge answer."""
+    The function can emit heuristic-only, LLM-only, or hybrid outputs depending
+    on runtime settings. Every returned item contains a ``judge_id`` and a
+    normalized ``score`` in the 0-1 range used by the router.
+    """
     if not answer or not isinstance(answer, str):
         return [{"judge_id": "heuristic", "score": 0.0}]
 

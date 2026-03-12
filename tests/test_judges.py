@@ -1,4 +1,10 @@
-"""Módulo `tests/test_judges.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for judges behavior and regressions.
+"""Test coverage for judges behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import pytest
 import asyncio
@@ -31,7 +37,9 @@ async def test_judge_answer_empty_response():
 async def test_llm_based_score_mock(monkeypatch):
     """Substitui o modelo real por mock e verifica conversão do score."""
     async def fake_call_model(*args, **kwargs):
-        """Executa fake call model."""
+        """Execute the fake call model routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return "Nota 9", {}
 
     monkeypatch.setattr(judges, "call_model", fake_call_model)

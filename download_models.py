@@ -1,3 +1,10 @@
+"""Project code for download models.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
+# Objective: Project code for download models.
 import os
 import json
 import logging

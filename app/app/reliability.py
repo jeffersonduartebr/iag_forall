@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for reliability.
+"""Application runtime code for reliability.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
 """
-reliability.py — Reliability Patterns for LLM Providers
---------------------------------------------------------
-Provides:
-- Per-model circuit breakers
-- Fallback chain execution
-- Request deduplication
-- Retry strategies
-"""
+
 
 from __future__ import annotations
 
@@ -60,7 +58,12 @@ class ModelCircuitBreakerManager:
     _lock = threading.Lock()
 
     def __new__(cls) -> "ModelCircuitBreakerManager":
-        """Executa new."""
+        """Return the process-wide singleton instance.
+
+        The router uses one breaker manager per process so breaker state remains
+        consistent across repeated calls without having to thread an instance
+        through every provider integration.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -69,7 +72,7 @@ class ModelCircuitBreakerManager:
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize internal breaker storage once for the singleton instance."""
         if self._initialized:
             return
 
@@ -181,7 +184,7 @@ class RequestDeduplicator:
     _lock = threading.Lock()
 
     def __new__(cls) -> "RequestDeduplicator":
-        """Executa new."""
+        """Return the process-wide request deduplicator singleton."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -190,7 +193,7 @@ class RequestDeduplicator:
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize in-flight request tracking once for the singleton."""
         if self._initialized:
             return
 
@@ -281,7 +284,12 @@ class RequestDeduplicator:
                     del self._in_flight[key]
 
     async def cleanup_stale(self):
-        """Remove stale in-flight requests."""
+        """Remove expired in-flight entries that were never cleaned up.
+
+        This is primarily a defensive maintenance hook for long-running worker
+        processes. Stale entries can accumulate if callers are cancelled or if a
+        request fails before normal cleanup finishes.
+        """
         now = time.time()
         async with self._request_lock:
             stale_keys = [
@@ -489,7 +497,7 @@ class CascadeDetector:
     _lock = threading.Lock()
 
     def __new__(cls) -> "CascadeDetector":
-        """Executa new."""
+        """Return the process-wide cascade detector singleton."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -498,7 +506,12 @@ class CascadeDetector:
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize emergency fallback configuration once for the singleton.
+
+        Emergency fallback models are loaded lazily from dynamic settings so the
+        detector can react to runtime configuration changes while still having a
+        safe local default when settings are unavailable.
+        """
         if self._initialized:
             return
 

@@ -1,4 +1,10 @@
-"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Application runtime code for dash control panel.
+"""Application runtime code for dash control panel.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
 
 import os
 import redis
@@ -44,7 +50,9 @@ engine = create_engine(f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}
 # 🧠 Funções auxiliares
 # =========================================================
 def get_system_status():
-    """Obtém system status."""
+    """Return system status.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
     try:
         redis_ok = r.ping()
     except Exception:
@@ -172,7 +180,9 @@ app.layout = html.Div(
 # =========================================================
 @app.callback(Output("tabs-content", "children"), [Input("tabs", "value")])
 def render_content(tab):
-    """Executa render content."""
+    """Execute the render content routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if tab == "tab-sys":
         redis_ok, db_ok = get_system_status()
         color_r = "green" if redis_ok else "red"
@@ -259,7 +269,9 @@ def render_content(tab):
     State("slider-bandit", "value"),
 )
 def save_variables(n_clicks, temp, tokens, top_p, bandit):
-    """Executa save variables."""
+    """Save variables.
+
+The function persists the current representation to its backing store."""
     if n_clicks > 0:
         save_dynamic_settings( # <-- CORRIGIDO
             {
@@ -278,7 +290,9 @@ def save_variables(n_clicks, temp, tokens, top_p, bandit):
     Input("btn-refresh-hist", "n_clicks"),
 )
 def refresh_history(n_clicks):
-    """Executa refresh history."""
+    """Execute the refresh history routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     df = fetch_query_history()
     return df.to_dict("records")
 
@@ -291,7 +305,9 @@ def refresh_history(n_clicks):
     State("w-cost", "value"),
 )
 def update_nsga_weights_callback(n, w_acc, w_lat, w_cost):
-    """Executa update nsga weights callback."""
+    """Update nsga weights callback.
+
+This function applies the module-specific mutation logic for the target resource."""
     if n > 0:
         update_nsga_weight("accuracy", w_acc)
         update_nsga_weight("latency", w_lat)

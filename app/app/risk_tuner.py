@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for risk tuner.
 """
 risk_tuner.py — Adaptive Risk Factor Management
 ------------------------------------------------
@@ -45,20 +46,26 @@ class PerformanceRecord:
 
     @property
     def avg_quality(self) -> float:
-        """Executa avg quality."""
+        """Execute the avg quality routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if self.total_samples == 0:
             return 5.0
         return self.quality_sum / self.total_samples
 
     @property
     def success_rate(self) -> float:
-        """Executa success rate."""
+        """Execute the success rate routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if self.total_samples == 0:
             return 0.5
         return self.success_count / self.total_samples
 
     def to_dict(self) -> Dict[str, Any]:
-        """Executa to dict."""
+        """Execute the to dict routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {
             "total_samples": self.total_samples,
             "quality_sum": self.quality_sum,
@@ -67,7 +74,9 @@ class PerformanceRecord:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "PerformanceRecord":
-        """Executa from dict."""
+        """Execute the from dict routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return PerformanceRecord(
             total_samples=data.get("total_samples", 0),
             quality_sum=data.get("quality_sum", 0.0),
@@ -87,7 +96,9 @@ class AdaptiveRiskTuner:
     _lock = threading.Lock()
 
     def __new__(cls) -> "AdaptiveRiskTuner":
-        """Executa new."""
+        """Return the instance created for this class.
+
+This hook is typically used to enforce singleton-style behavior or other allocation constraints."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -96,7 +107,9 @@ class AdaptiveRiskTuner:
         return cls._instance
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         if self._initialized:
             return
 
@@ -119,7 +132,9 @@ class AdaptiveRiskTuner:
         self._initialized = True
 
     def _get_redis(self):
-        """Executa get redis."""
+        """Execute the get redis routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return get_redis()
 
     def _load_state(self) -> None:

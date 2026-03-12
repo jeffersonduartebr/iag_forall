@@ -1,3 +1,4 @@
+# Objective: Test coverage for settings dynamic runtime behavior and regressions.
 """Focused tests for runtime behaviors in settings_dynamic."""
 
 from __future__ import annotations

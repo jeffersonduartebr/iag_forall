@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for schemas.
 """
 schemas.py (VERSÃO COMPLETA DE PRODUÇÃO)
 ----------------------------------------
@@ -24,7 +25,9 @@ from enum import Enum
 # ============================================================
 
 class Modality(str, Enum):
-    """Classe `Modality`: organiza responsabilidades de schemas."""
+    """Represent `Modality` within this module.
+
+The class groups the state and behavior required for Modality."""
     TEXT = "text"
     VISION = "vision"
     MULTIMODAL = "multimodal"

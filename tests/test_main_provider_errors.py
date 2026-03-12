@@ -1,3 +1,4 @@
+# Objective: Test coverage for main provider errors behavior and regressions.
 """Tests for provider error mapping in query_runtime and main wiring."""
 
 import os

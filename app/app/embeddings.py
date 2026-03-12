@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""
-embeddings.py — Híbrido Otimizado (CPU Local + Cloud Fallback)
---------------------------------------------------------------
-OTIMIZAÇÃO DE PERFORMANCE:
-Para evitar que o Ollama fique trocando modelos na GPU (Model Thrashing),
-rodamos o modelo de embedding (que é leve) localmente na CPU do container
-usando 'sentence-transformers'.
+# Objective: Application runtime code for embeddings.
+"""Generate and cache embeddings used by retrieval and semantic caching.
 
-Isso deixa a GPU livre para o LLM/VLM pesado.
+The embedding layer is optimized to keep heavy generation workloads away from
+the main Ollama inference path when possible. It prefers a lightweight local
+SentenceTransformer running on CPU and falls back to cloud embeddings only when
+needed. The module also combines:
 
-CACHE L1: In-memory LRU cache para acesso ultra-rápido
-CACHE L2: Redis cache para persistência
+- an in-process L1 cache for repeated hot-path lookups
+- a Redis-backed L2 cache for persistence across requests
+- modality-specific helpers for text, image, and multimodal embeddings
 """
 
 from __future__ import annotations
@@ -54,10 +53,10 @@ EMBED_L1_CACHE_TTL_S = 28800  # 8 horas - reduces embedding recalculation by 50-
 
 
 class EmbeddingL1Cache:
-    """Cache LRU in-memory para embeddings com TTL."""
+    """Store recent embeddings in process memory with LRU and TTL behavior."""
 
     def __init__(self, maxsize: int = EMBED_L1_CACHE_SIZE, ttl_s: int = EMBED_L1_CACHE_TTL_S):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Create an in-memory embedding cache with bounded size and freshness."""
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
@@ -66,7 +65,7 @@ class EmbeddingL1Cache:
         self._misses = 0
 
     def get(self, key: str) -> Optional[List[float]]:
-        """Executa get."""
+        """Return a cached embedding vector when the entry is still valid."""
         now = time.time()
         with self._lock:
             if key not in self._data:
@@ -83,7 +82,7 @@ class EmbeddingL1Cache:
             return vec
 
     def set(self, key: str, vec: List[float]) -> None:
-        """Executa set."""
+        """Store one embedding vector in the in-memory cache."""
         now = time.time()
         with self._lock:
             if key in self._data:
@@ -93,7 +92,7 @@ class EmbeddingL1Cache:
                 self._data.popitem(last=False)
 
     def stats(self) -> Dict[str, Any]:
-        """Executa stats."""
+        """Return hit, miss, and occupancy statistics for the L1 cache."""
         total = self._hits + self._misses
         return {
             "hits": self._hits,
@@ -122,7 +121,7 @@ _rds = get_redis()
 _LOCAL_MODEL_INSTANCE = None
 
 def get_local_model():
-    """Obtém local model."""
+    """Lazily load and return the local SentenceTransformer embedding model."""
     global _LOCAL_MODEL_INSTANCE
     if _LOCAL_MODEL_INSTANCE is None and ST_AVAILABLE:
         logger.info(f"[Embeddings] Carregando modelo local CPU: {EMBED_MODEL_TEXT}...")
@@ -137,17 +136,17 @@ def get_local_model():
 # ============================================================
 
 def _hash_text(text: str, model: str) -> str:
-    """Executa hash text."""
+    """Hash one text/model pair into a stable cache key fragment."""
     payload = f"{model}|{text}".encode("utf-8", errors="ignore")
     return hashlib.sha256(payload).hexdigest()
 
 def _norm(vec: np.ndarray) -> np.ndarray:
-    """Executa norm."""
+    """Normalize a vector while preserving zero vectors unchanged."""
     n = np.linalg.norm(vec)
     return vec if n == 0 else vec / n
 
 def _save_cache(key: str, vec: List[float]):
-    """Executa save cache."""
+    """Persist one embedding vector to the Redis-backed L2 cache."""
     if _rds:
         try:
             _rds.setex(key, EMBED_CACHE_TTL_S, json.dumps({"v": vec}))
@@ -155,7 +154,7 @@ def _save_cache(key: str, vec: List[float]):
             logger.warning(f"[Embeddings] Failed to save cache for key {key[:20]}...: {e}")
 
 def _load_cache(key: str) -> Optional[List[float]]:
-    """Executa load cache."""
+    """Load one embedding vector from the Redis-backed L2 cache."""
     if _rds:
         try:
             raw = _rds.get(key)
@@ -170,7 +169,7 @@ def _load_cache(key: str) -> Optional[List[float]]:
 # ============================================================
 
 def _local_cpu_embed(text: str) -> List[float]:
-    """Gera embedding localmente na CPU, sem chamar Ollama."""
+    """Generate one embedding locally on CPU without involving Ollama."""
     model = get_local_model()
     if not model:
         raise RuntimeError("SentenceTransformers não instalado ou falha ao carregar.")
@@ -188,7 +187,7 @@ def _local_cpu_embed(text: str) -> List[float]:
 # ============================================================
 
 def embed_text(text: str) -> List[float]:
-    """Executa embed text."""
+    """Generate a text embedding with layered cache lookup and CPU-first fallback."""
     text = (text or "").strip()
     if not text:
         return [0.0]
@@ -233,17 +232,27 @@ def embed_text(text: str) -> List[float]:
 
 
 def get_embedding_cache_stats() -> Dict[str, Any]:
-    """Retorna estatísticas do cache L1 de embeddings."""
+    """Expose L1 embedding-cache statistics for observability and diagnostics."""
     return _embed_l1_cache.stats()
 
 # Vision embedding removido/simplificado pois o RAG agora usa "Ponte Descritiva"
 # (VLM gera texto -> Texto vira embedding)
 def embed_image(image_b64: str) -> List[float]:
-    """Executa embed image."""
+    """Return a placeholder image embedding for the current text-bridge strategy.
+
+    The project currently relies on image description followed by text
+    embeddings, so direct image embeddings remain intentionally stubbed while
+    preserving a stable public interface.
+    """
     return [0.0] 
 
 def embed_multimodal(text: str, image_b64: Optional[str]) -> Dict[str, List[float]]:
-    """Executa embed multimodal."""
+    """Return the multimodal embedding payload expected by downstream callers.
+
+    Under the current bridge strategy, multimodal requests are represented by
+    the text embedding derived from the textual side of the prompt or image
+    description pipeline.
+    """
     text_vec = embed_text(text)
     # Retorna apenas o texto, pois estamos usando a estratégia de descrição
     return {

@@ -1,3 +1,4 @@
+# Objective: API layer code for feedback routes.
 """Feedback endpoints."""
 
 from __future__ import annotations

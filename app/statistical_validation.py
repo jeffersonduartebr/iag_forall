@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for statistical validation.
 """
 statistical_validation.py — Validação Estatística (Sincronizado com Benchmark Final)
 ------------------------------------------------------------------------------------
@@ -66,7 +67,9 @@ def load_latest_data():
     return df_grouped
 
 def calculate_cohens_d(x, y):
-    """Executa calculate cohens d."""
+    """Execute the calculate cohens d routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     nx = len(x)
     ny = len(y)
     dof = nx + ny - 2
@@ -75,12 +78,16 @@ def calculate_cohens_d(x, y):
     return (np.mean(x) - np.mean(y)) / pool_std
 
 def format_p_value(p):
-    """Executa format p value."""
+    """Execute the format p value routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if p < 0.001: return "< 0.001"
     return f"= {p:.4f}"
 
 def analyze_metric(df, metric_col, metric_name_en):
-    """Executa analyze metric."""
+    """Execute the analyze metric routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if metric_col not in df.columns: return None
 
     pivot = df.pivot(index="id", columns="mode_clean", values=metric_col).dropna()
@@ -137,7 +144,9 @@ def analyze_metric(df, metric_col, metric_name_en):
     }
 
 def generate_latex_text(results):
-    """Executa generate latex text."""
+    """Execute the generate latex text routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if not results: return ""
     
     m = results["metric_name"]
@@ -156,7 +165,9 @@ Post-hoc Wilcoxon results:
     
     # Ordenação Lógica para Tabela: Local -> Frugal -> SOTA -> Ablações
     def sort_key(name):
-        """Executa sort key."""
+        """Execute the sort key routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if "Gemma" in name or "Qwen" in name: return 0
         if "Frugal" in name: return 1
         if "GPT" in name or "SOTA" in name: return 2
@@ -205,7 +216,9 @@ Post-hoc Wilcoxon results:
     return text
 
 def main():
-    """Executa main."""
+    """Execute the main routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     print("="*80)
     print("🚀 THESIS STATISTICAL GENERATOR (Final Sync)")
     print("="*80)

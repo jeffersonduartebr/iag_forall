@@ -1,4 +1,5 @@
 #!/bin/bash
+# Objective: Shell utility for prestart dash.
 echo "🚀 Inicializando Painel Dash..."
 echo "🔍 Verificando Redis e Banco de Dados..."
 

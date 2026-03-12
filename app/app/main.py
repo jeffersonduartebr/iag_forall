@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-"""
-main.py (Production-Ready with Rate Limiting, Compression, Health Checks)
--------------------------------------------------------------------------
-API Principal with enterprise features:
-- Rate limiting
-- Gzip compression
-- Deep health checks
-- Circuit breaker integration
-- Request deduplication
-- API versioning support
+# Objective: Application runtime code for main.
+"""Expose the FastAPI application, lifecycle hooks, and top-level HTTP routes.
+
+This module is the primary API entry point for the router runtime. It is
+responsible for:
+
+- constructing the FastAPI app instance
+- wiring middleware, routers, and observability exports
+- orchestrating startup and shutdown tasks
+- delegating query execution to the extracted service layer
+
+Business logic intentionally stays thin here. Request-time orchestration is
+delegated to service modules so this file remains focused on HTTP composition,
+runtime bootstrap, and cross-cutting concerns.
 """
 
 # ==============================================================================
@@ -91,7 +95,12 @@ setup_prometheus()
 # ==============================================================================
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Executa lifespan."""
+    """Run application startup and shutdown work around the ASGI lifespan.
+
+    FastAPI calls this context manager once per process. The implementation
+    delegates to the explicit startup and shutdown helpers so the same behavior
+    remains testable outside the ASGI server.
+    """
     await startup_event()
     try:
         yield
@@ -131,8 +140,12 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        # Get correlation ID from header or generate new one
-        """Executa dispatch."""
+        """Propagate a correlation ID across the current request/response cycle.
+
+        The middleware reads the incoming header when present, generates one
+        otherwise, and ensures the final response echoes the active correlation
+        ID so logs and client-side traces can be stitched together.
+        """
         correlation_id = request.headers.get(CORRELATION_ID_HEADER)
         set_correlation_id(correlation_id)
 
@@ -154,7 +167,11 @@ app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_SIZE)
 
 # --- HELPER DE CONVERSÃO ---
 def safe_parse_json(payload: Any) -> Any:
-    """Executa safe parse json."""
+    """Decode a JSON string when possible, otherwise return the original value.
+
+    This helper is used on metadata fields that may already be parsed objects in
+    some paths and raw JSON strings in others.
+    """
     if isinstance(payload, str):
         try:
             return json.loads(payload)
@@ -255,13 +272,25 @@ app.include_router(rag_router.router)
 
 @app.get("/metrics")
 def metrics():
-    """Executa metrics."""
+    """Return the Prometheus exposition payload for the current process.
+
+    The route keeps the HTTP-facing layer intentionally thin. Metric rendering
+    is delegated to the observability module so this endpoint only translates
+    the serialized payload into a regular FastAPI `Response`.
+    """
     data, ctype = render_metrics_response()
     return Response(content=data, media_type=ctype)
 
 
 async def startup_event():
-    """Executa startup event."""
+    """Initialize runtime dependencies and schedule non-blocking warmup tasks.
+
+    Startup validates critical configuration, prepares shared services, installs
+    background listeners, and schedules warmup work that should not block API
+    availability longer than necessary. Fail-fast validation remains here
+    because serving traffic with invalid admin or runtime configuration would be
+    operationally unsafe.
+    """
     admin_token = (settings.ADMIN_TOKEN or "").strip()
     if not admin_token or admin_token == "changeme-please":
         raise RuntimeError("ADMIN_TOKEN must be configured with a non-default value")
@@ -289,7 +318,13 @@ async def startup_event():
     asyncio.create_task(rate_limit_cleanup())
 
     async def _bg():
-        """Executa bg."""
+        """Perform deferred warmup work after the HTTP server is accepting traffic.
+
+        The background task primes optional dependencies such as Redis,
+        vectorstore state, Ollama model availability, and a lightweight
+        end-to-end smoke path. Failures are logged as degraded startup rather
+        than crashing the process because most of this work is opportunistic.
+        """
         try:
             logger.info("[warmup] Iniciando serviços...")
             r = get_redis()
@@ -347,9 +382,12 @@ async def startup_event():
 
 
 async def shutdown_event():
-    """
-    Graceful shutdown handler.
-    Properly closes Redis, HTTP, and database connections.
+    """Release long-lived runtime resources during process shutdown.
+
+    Shutdown mirrors startup ordering in reverse: background services are
+    stopped first, then shared HTTP clients, Redis connections, and database
+    pools are closed. Each teardown step is isolated so one failure does not
+    prevent the remaining cleanup actions from running.
     """
     logger.info("[shutdown] Iniciando shutdown gracioso...")
 
@@ -381,7 +419,13 @@ async def shutdown_event():
 
 @app.post("/query", response_model=QueryResponse)
 async def route_query(req: QueryRequest):
-    """Executa route query."""
+    """Handle the primary synchronous query endpoint.
+
+    The route delegates most orchestration to `process_query_request`, then
+    records request-level metrics, updates cost and token counters, triggers
+    side effects such as persistence and feedback scheduling, and finally maps
+    the service result into the public `QueryResponse` schema.
+    """
     start = time.time()
     API_REQUESTS.inc()
 
@@ -437,7 +481,14 @@ async def route_query(req: QueryRequest):
 
 @app.post("/query/stream", tags=["Query"])
 async def route_query_stream(req: QueryRequest):
-    """SSE streaming wrapper for query processing."""
+    """Expose a simple Server-Sent Events wrapper around the standard query flow.
+
+    The current implementation does not stream provider tokens directly. It
+    first resolves the full answer through the same runtime service used by the
+    synchronous endpoint, then emits metadata, whitespace-delimited token
+    chunks, and a terminal completion event to consumers expecting an SSE
+    contract.
+    """
     processed = await process_query_request(req)
     result = processed["result"]
     answer = result.get("answer", "")
@@ -448,6 +499,7 @@ async def route_query_stream(req: QueryRequest):
     }
 
     async def _event_gen():
+        """Yield the SSE event sequence for the already-computed answer payload."""
         yield "event: meta\\ndata: " + json.dumps(payload, ensure_ascii=False) + "\\n\\n"
         for token in answer.split():
             yield "event: token\\ndata: " + json.dumps({"text": token + " "}, ensure_ascii=False) + "\\n\\n"
@@ -463,13 +515,18 @@ async def route_query_stream(req: QueryRequest):
 
 @v1_router.post("/query", response_model=QueryResponse)
 async def v1_route_query(req: QueryRequest):
-    """V1 Query endpoint - same as /query."""
+    """Provide the versioned alias for the primary query endpoint.
+
+    Version one currently preserves the exact behavior of `/query`; the wrapper
+    exists so clients can pin to an explicit API version before future route
+    evolution introduces incompatible changes.
+    """
     return await route_query(req)
 
 
 @v1_router.get("/health")
 async def v1_health():
-    """V1 Health endpoint."""
+    """Provide the versioned alias for the operational health endpoint."""
     from .api.ops_routes import health
 
     return await health()

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for umrag.
 """
 umrag.py — Unified Multimodal RAG
 ---------------------------------------------------------
@@ -61,7 +62,9 @@ RAG_TOP_K = int(settings.get("RAG_TOP_K", 3))
 # ============================================================
 
 def _unit(x: np.ndarray) -> np.ndarray:
-    """Executa unit."""
+    """Execute the unit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     x = x.astype(np.float32).reshape(-1)
     n = float(np.linalg.norm(x))
     return x if n == 0 else (x / n)
@@ -73,7 +76,9 @@ def _embed_for_rag(
     image_b64: Optional[str] = None,
 ) -> np.ndarray:
 
-    """Executa embed for rag."""
+    """Execute the embed for rag routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     modality = (modality or "text").lower()
     q = (query or "").strip()
 
@@ -105,7 +110,9 @@ def _embed_for_rag(
 # ============================================================
 
 def _extract_docs_from(res: Dict[str, Any]) -> List[str]:
-    """Executa extract docs from."""
+    """Execute the extract docs from routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if not res:
         return []
     docs = res.get("documents") or []
@@ -215,7 +222,9 @@ async def add_document(
 # ============================================================
 
 async def health() -> Dict[str, Any]:
-    """Executa health."""
+    """Execute the health routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         chroma_ok = await vector_health_async()
     except Exception:

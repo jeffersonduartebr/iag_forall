@@ -1,28 +1,16 @@
 # -*- coding: utf-8 -*-
-"""
-bandits.py — Meta-Bandit Multimodal Completo + UQ Support
-==========================================================
-Compatível com:
-- router_core.py
-- settings_dynamic.py
-- embeddings multimodais
-- judges
-- RAG multimodal
-- query_log multimodal
+# Objective: Application runtime code for bandits.
+"""Implement the contextual bandit layer used for model selection.
 
-Inclui:
-- ε-greedy + UCB1 + Thompson Sampling (Meta-Bandit)
-- Contextos automáticos via clustering dinâmico
-- Centróides semânticos vetorizados (NumPy)
-- Reinicialização automática de centróides degenerados
-- NSGA-II weight-aware reward
-- Toda persistência em Redis + MariaDB
-- NOVO: Persistência de centróides para Quantificação de Incerteza (UQ)
+This module combines three concerns that shape router behavior over time:
 
-APIs públicas:
-- select_model(valid_models, query, modality="text")
-- bandit_update(model, query, reward, modality="text")
-- compute_reward(model, quality, latency_s, cost_per_1k)
+- contextual model selection with epsilon-greedy, UCB1, and Thompson sampling
+- semantic clustering so similar queries share learning signal
+- reward computation and persistence across Redis and MariaDB
+
+The public entry points are ``select_model()``, ``bandit_update()``, and
+``compute_reward()``. The rest of the module supports those APIs with centroid
+maintenance, context aggregation, and policy-combination helpers.
 """
 
 from __future__ import annotations
@@ -72,7 +60,7 @@ def _get_db_engine():
 # Redis
 # ============================================================
 def _get_rds():
-    """Executa get rds."""
+    """Return the Redis client used for bandit state and centroid storage."""
     return get_redis_async_safe() or ensure_redis_connected(max_wait_s=0.0, min_retry_interval_s=2.0)
 
 # Redis Keys (ajustadas)
@@ -88,7 +76,7 @@ R_CLUSTERING_LOCK = "meta:bandit:cluster:lock"
 # Hyperparams
 # ============================================================
 def _safe_setting_float(key: str, default: float) -> float:
-    """Executa safe setting float."""
+    """Read one float setting defensively, falling back on parse errors."""
     try:
         return float(settings.get(key, default))
     except Exception:
@@ -96,7 +84,7 @@ def _safe_setting_float(key: str, default: float) -> float:
 
 
 def _safe_setting_int(key: str, default: int) -> int:
-    """Executa safe setting int."""
+    """Read one integer setting defensively, falling back on parse errors."""
     try:
         return int(settings.get(key, default))
     except Exception:
@@ -117,13 +105,13 @@ META_STRATEGIES = ["epsilon_greedy", "ucb1", "thompson"]
 # Utils NumPy
 # ============================================================
 def _unit(v: np.ndarray) -> np.ndarray:
-    """Executa unit."""
+    """Return a normalized vector, preserving zero vectors unchanged."""
     n = np.linalg.norm(v)
     return v if n == 0 else v / n
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
-    """Executa cosine."""
+    """Compute cosine similarity between two vectors safely."""
     denom = np.linalg.norm(a) * np.linalg.norm(b)
     if denom == 0:
         return 0.0
@@ -131,7 +119,7 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _ensure_dim(v: np.ndarray) -> np.ndarray:
-    """Executa ensure dim."""
+    """Project a vector to the configured centroid dimensionality."""
     return normalize_centroid_vec(v, CENTROIDS_DIM)
 
 
@@ -140,7 +128,7 @@ def _sanitize_model_stats(raw: Optional[Dict[str, float]]) -> Dict[str, float]:
     s = raw or {}
 
     def _f(key: str, default: float) -> float:
-        """Executa f."""
+        """Coerce one floating-point statistic and guard against NaN/inf values."""
         try:
             v = float(s.get(key, default))
             return v if math.isfinite(v) else default
@@ -148,7 +136,7 @@ def _sanitize_model_stats(raw: Optional[Dict[str, float]]) -> Dict[str, float]:
             return default
 
     def _i(key: str, default: int) -> int:
-        """Executa i."""
+        """Coerce one non-negative integer statistic used in bandit state."""
         try:
             v = int(s.get(key, default))
             return max(0, v)
@@ -170,10 +158,15 @@ def _sanitize_model_stats(raw: Optional[Dict[str, float]]) -> Dict[str, float]:
 # Pre-computed Centroid Matrix Cache (Performance Optimization)
 # ============================================================
 class CentroidMatrixCache:
-    """Cache para matriz de centróides pré-computada."""
+    """Cache a dense centroid matrix for fast nearest-neighbor lookup.
+
+    Centroid search is a hot path during routing. Precomputing the stacked
+    matrix avoids repeated array construction and enables a single vectorized dot
+    product for nearest-centroid selection.
+    """
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the centroid cache with no precomputed matrix."""
         self._lock = threading.Lock()
         self._matrix: Optional[np.ndarray] = None  # (K, D)
         self._ids: List[int] = []
@@ -221,7 +214,7 @@ _centroid_matrix_cache = CentroidMatrixCache()
 # ============================================================
 
 def _acquire_lock(key: str, ttl: int = 10) -> bool:
-    """Executa acquire lock."""
+    """Acquire a short-lived Redis lock for centroid mutation."""
     rds = _get_rds()
     if not rds:
         return False
@@ -232,7 +225,7 @@ def _acquire_lock(key: str, ttl: int = 10) -> bool:
 
 
 def _release_lock(key: str) -> None:
-    """Executa release lock."""
+    """Release a Redis lock previously acquired for centroid mutation."""
     rds = _get_rds()
     if not rds:
         return
@@ -333,7 +326,7 @@ def _save_centroids(cents: List[dict]) -> None:
 
 
 def _new_centroid_id(cents: List[dict]) -> int:
-    """Executa new centroid id."""
+    """Return the first unused integer identifier for a new centroid."""
     used = {c["id"] for c in cents}
     cid = 0
     while cid in used:
@@ -365,13 +358,12 @@ def _nearest_centroid_vec(
 
 def centroids_online_update(query_text: str) -> Optional[int]:
     """
-    Atualização ONLINE:
-      - embed_text(query_text) → v (np.ndarray normalizado)
-      - se não há centróides: cria o primeiro
-      - senão: acha centróide mais próximo
-           * se sim < CENTROIDS_MIN_SIM_CREATE e len < K → cria novo
-           * senão: update exponencial c := (1-α)c + αv ; renorma; count++
-    Retorna ID do centróide associado ou None em caso de falha.
+    Update semantic centroids online using the current query embedding.
+
+    The procedure either creates a new centroid for sufficiently novel queries or
+    nudges the nearest existing centroid toward the new embedding using an
+    exponential moving update. Returning ``None`` means the update failed or was
+    skipped because another process already holds the mutation lock.
     """
     try:
         v = embed_text(query_text)
@@ -418,9 +410,10 @@ def centroids_online_update(query_text: str) -> Optional[int]:
 
 def _nearest_centroid_label(query_text: str) -> Optional[str]:
     """
-    Somente leitura: retorna 'semctx:<id>' do centróide mais próximo.
-    NÃO cria centróides novos (usa embedding atual).
-    Usado pelo router_core para logging.
+    Return a read-only semantic context label for the nearest known centroid.
+
+    Unlike ``centroids_online_update()``, this helper never mutates centroid
+    state. It exists for logging, inspection, and other non-learning paths.
     """
     try:
         v = embed_text(query_text)
@@ -483,7 +476,7 @@ def _auto_context_labels(query: str, modality: str = "text") -> List[str]:
 # ============================================================
 
 def _ctx_key(ctx: str) -> str:
-    """Executa ctx key."""
+    """Build the Redis hash key used to store one context's model statistics."""
     return f"{R_CTX_PREFIX}:{ctx}"
 
 
@@ -551,7 +544,7 @@ def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
 
 
 def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
-    """Executa set ctx stats."""
+    """Persist one context's bandit statistics to Redis."""
     rds = _get_rds()
     if not rds:
         return
@@ -576,7 +569,7 @@ def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
 
 
 def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
-    """Executa upsert ctx db."""
+    """Persist one model's contextual statistics to MariaDB."""
     try:
         with _get_db_engine().begin() as conn:
             conn.execute(
@@ -614,24 +607,24 @@ def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
 # ============================================================
 
 def _dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]]) -> float:
-    """Executa dynamic epsilon."""
+    """Compute the exploration rate for one context from current statistics."""
     return bandit_policy.dynamic_epsilon(ctx_stats, DEFAULT_EPSILON)
 
 
 def _choose_epsilon_greedy(
     models: List[str], ctx_stats: Dict[str, Dict[str, float]]
 ) -> str:
-    """Executa choose epsilon greedy."""
+    """Choose a model using the epsilon-greedy policy implementation."""
     return bandit_policy.choose_epsilon_greedy(models, ctx_stats, DEFAULT_EPSILON)
 
 
 def _choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
-    """Executa choose ucb1."""
+    """Choose a model using the UCB1 policy implementation."""
     return bandit_policy.choose_ucb1(models, ctx_stats)
 
 
 def _choose_thompson(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
-    """Executa choose thompson."""
+    """Choose a model using the Thompson sampling policy implementation."""
     return bandit_policy.choose_thompson(models, ctx_stats)
 
 
@@ -667,11 +660,9 @@ def _meta_combine_choices(
     models: List[str],
     ctx_stats: Dict[str, Dict[str, float]],
 ) -> Tuple[str, Dict[str, str]]:
-    """
-    Executa as três estratégias e combina por:
-      1) voto majoritário; se empate total, prioriza meta-stratégia.
-    Retorna (modelo_escolhido, {"eps":..., "ucb1":..., "ts":...}).
-    """
+    """Execute the meta combine choices routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return bandit_policy.meta_combine_choices(
         models=models,
         ctx_stats=ctx_stats,
@@ -690,10 +681,11 @@ def select_model(
     modality: str = "text",
 ) -> str:
     """
-    Seleção de modelo via Meta-Bandit híbrido.
+    Select one model for the current query using the hybrid meta-bandit.
 
-    Compatível com router_core:
-      select_model(top2, query, modality=modality)
+    The selection path derives a semantic context, loads contextual statistics,
+    executes the component policies, combines their suggestions, and emits the
+    chosen model as the router-facing decision.
     """
     if not valid_models:
         logger.warning("[bandit] Lista de modelos vazia; retornando default.")
@@ -739,8 +731,11 @@ def bandit_update(
     modality: str = "text",
 ) -> None:
     """
-    Atualiza estatísticas Welford (mean/var) + Beta(α,β) por contexto e modelo.
-    Compatível com router_core.bandit_update(model, query, reward, modality=...).
+    Update contextual bandit statistics after observing one reward value.
+
+    The update touches every derived context for the query, keeps Welford moments
+    for stable variance estimates, and refreshes the Beta parameters used by
+    Thompson sampling.
     """
     # normaliza reward
     try:

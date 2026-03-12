@@ -1,4 +1,10 @@
-"""Módulo `tests/test_rag_logic.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for rag logic behavior and regressions.
+"""Test coverage for rag logic behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import pytest
 from app.rag_local import reciprocal_rank_fusion

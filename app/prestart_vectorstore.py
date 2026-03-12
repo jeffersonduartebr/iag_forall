@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for prestart vectorstore.
 """
 prestart_vectorstore.py
 ----------------------------------------------------

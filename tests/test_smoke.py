@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for smoke behavior and regressions.
 """
 test_smoke.py — Smoke Tests for LLM Router
 -------------------------------------------

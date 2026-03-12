@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for db.
 """
 db.py — Centralized Database Connection Management
 ---------------------------------------------------
@@ -230,11 +231,15 @@ class _LazyEngine:
     """Lazy engine accessor for backward compatibility."""
 
     def __getattr__(self, name):
-        """Executa getattr."""
+        """Execute the getattr routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return getattr(get_engine(), name)
 
     def __call__(self, *args, **kwargs):
-        """Executa call."""
+        """Execute the call routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return get_engine()
 
 

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for update nsga best params.
 """
 update_nsga_best_params.py  (VERSÃO MULTIMODAL)
 ------------------------------------------------------------
@@ -106,7 +107,9 @@ CREATE TABLE IF NOT EXISTS nsga_meta_results (
 
 
 def init_tables():
-    """Executa init tables."""
+    """Execute the init tables routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         with engine.begin() as conn:
             conn.execute(text(DDL_PARAMS))
@@ -125,7 +128,9 @@ init_tables()
 # ============================================================
 
 def load_best_trial(modality: str) -> Optional[Dict[str, Any]]:
-    """Executa load best trial."""
+    """Load best trial.
+
+The function reads the current representation from its backing store or runtime source."""
     try:
         with engine.connect() as conn:
             row = conn.execute(
@@ -161,7 +166,9 @@ def load_best_trial(modality: str) -> Optional[Dict[str, Any]]:
 # ============================================================
 
 def update_best_params(modality: str, row: Dict[str, Any]) -> None:
-    """Executa update best params."""
+    """Update best params.
+
+This function applies the module-specific mutation logic for the target resource."""
     try:
         modal_id = {"text": 1, "vision": 2, "multimodal": 3}[modality]
 
@@ -206,7 +213,9 @@ def update_best_params(modality: str, row: Dict[str, Any]) -> None:
 # ============================================================
 
 def compute_model_weights(modality: str) -> Dict[str, float]:
-    """Executa compute model weights."""
+    """Compute model weights.
+
+The function derives the value needed by the surrounding workflow from the available inputs."""
     try:
         with engine.connect() as conn:
             rows = conn.execute(
@@ -245,7 +254,9 @@ def compute_model_weights(modality: str) -> Dict[str, float]:
 # ============================================================
 
 def persist_weights(modality: str, weights: Dict[str, float]) -> None:
-    """Executa persist weights."""
+    """Execute the persist weights routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if not weights:
         logger.warning(f"[update_nsga] Nenhum peso para persistir modality={modality}.")
         return

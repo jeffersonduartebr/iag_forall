@@ -1,4 +1,10 @@
-"""Módulo `tests/test_semantic_cache.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for semantic cache behavior and regressions.
+"""Test coverage for semantic cache behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 import pytest
 import time

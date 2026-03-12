@@ -1,4 +1,10 @@
-"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Application runtime code for 00rag.
+"""Application runtime code for 00rag.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
 
 # app/rag.py
 import logging

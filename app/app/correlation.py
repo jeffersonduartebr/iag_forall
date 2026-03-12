@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for correlation.
 """
 correlation.py — Request Correlation ID Infrastructure
 -------------------------------------------------------
@@ -66,17 +67,23 @@ class CorrelationIdContext:
     """
 
     def __init__(self, correlation_id: Optional[str] = None):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self.correlation_id = correlation_id or generate_correlation_id()
         self._token: Optional[contextvars.Token] = None
 
     def __enter__(self) -> str:
-        """Executa enter."""
+        """Execute the enter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         self._token = _correlation_id.set(self.correlation_id)
         return self.correlation_id
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Executa exit."""
+        """Execute the exit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if self._token is not None:
             _correlation_id.reset(self._token)
         return None

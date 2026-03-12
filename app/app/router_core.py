@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for router core.
 """
 router_core.py — Multimodal + UM-RAG + Meta-bandit + UQ + Online Learning
 -------------------------------------------------------------------------
@@ -108,45 +109,61 @@ def _settings_getter(key: str, default: Any) -> Any:
 
 
 def _safe_setting_int(key: str, default: int) -> int:
-    """Executa safe setting int."""
+    """Execute the safe setting int routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return _safe_setting_int_impl(_settings_getter, key, default)
 
 
 def _safe_setting_float(key: str, default: float) -> float:
-    """Executa safe setting float."""
+    """Execute the safe setting float routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return _safe_setting_float_impl(_settings_getter, key, default)
 
 
 def _safe_setting_bool(key: str, default: bool) -> bool:
-    """Executa safe setting bool."""
+    """Execute the safe setting bool routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return _safe_setting_bool_impl(_settings_getter, key, default)
 
 BLOCKED_PREFIXES = ("nomic-embed", "text-embedding", "bge-", "e5-")
 LOG_RETENTION_DAYS = _safe_setting_int("QUERY_LOG_RETENTION_DAYS", 7)
 def _get_rds():
-    """Executa get rds."""
+    """Execute the get rds routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return get_router_redis()
 
 
 def _record_dependency_breaker_metrics() -> None:
-    """Executa record dependency breaker metrics."""
+    """Execute the record dependency breaker metrics routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     _record_dependency_breaker_metrics_impl()
 
 
 def _error_budget_window() -> Tuple[int, float, int]:
-    """Executa error budget window."""
+    """Execute the error budget window routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     from .services.router_resilience import error_budget_window
 
     return error_budget_window(_settings_getter)
 
 
 def _record_request_outcome(success: bool) -> None:
-    """Executa record request outcome."""
+    """Execute the record request outcome routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     _record_request_outcome_impl(settings_getter=_settings_getter, success=success)
 
 
 def _is_error_budget_exceeded() -> bool:
-    """Executa is error budget exceeded."""
+    """Execute the is error budget exceeded routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     return _is_error_budget_exceeded_impl(settings_getter=_settings_getter)
 
 # ============================================================
@@ -273,7 +290,9 @@ def get_dynamic_strategy_weights(modality: str) -> Dict[str, float]:
     Recupera os pesos da estratégia (Objetivos) diretamente do Settings Dinâmico.
     """
     def _safe_attr(name: str, default: float) -> float:
-        """Executa safe attr."""
+        """Execute the safe attr routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         try:
             return float(getattr(settings, name))
         except Exception:
@@ -457,28 +476,9 @@ async def route_and_answer(
     timeout_seconds: int | None = None,
     deduplicate: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Executa o fluxo crítico de resposta com timeout global e deduplicação.
+    """Execute the route and answer routine.
 
-    Args:
-        query: User query text
-        system_prompt: Optional system prompt
-        use_rag: Whether to use RAG augmentation
-        max_tokens: Max tokens for response
-        temperature: Temperature for generation
-        modality: text, vision, or multimodal
-        image_b64: Base64 encoded image for vision
-        rag_modality: RAG search modality
-        use_cache: Whether to use semantic cache
-        timeout_seconds: Optional request timeout override
-        deduplicate: Whether to deduplicate identical in-flight requests
-
-    Returns:
-        Dict with answer, model, cost, latency, and metadata
-
-    Raises:
-        asyncio.TimeoutError: If request exceeds timeout
-    """
+This helper encapsulates one focused step used by the surrounding workflow."""
     # Calculate effective timeout
     default_timeout = _safe_setting_int("REQUEST_TIMEOUT_SECONDS", 120)
     effective_timeout = timeout_seconds or default_timeout

@@ -1,4 +1,10 @@
-"""Módulo `tests/test_semantic_cache_extra.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for semantic cache extra behavior and regressions.
+"""Test coverage for semantic cache extra behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from types import SimpleNamespace
 import threading
@@ -32,37 +38,51 @@ async def test_make_embedding_and_normalize_paths(monkeypatch):
 async def test_check_cache_branches(monkeypatch):
     """Testa check cache branches."""
     class _L1:
-        """Classe `_L1`: concentra responsabilidades de test semantic cache extra."""
+        """Represent `_L1` within this module.
+
+The class groups the state and behavior required for L1."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.saved = []
 
         def get(self, key):
-            """Executa get."""
+            """Execute the get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
         def store(self, key, value):
-            """Executa store."""
+            """Execute the store routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             self.saved.append((key, value))
 
     l1 = _L1()
     monkeypatch.setattr(sc, "_l1_cache", l1)
     async def _emb(*args, **kwargs):
-        """Executa emb."""
+        """Execute the emb routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return [0.1, 0.2]
 
     monkeypatch.setattr(sc, "_make_embedding", _emb)
 
     # no docs
     async def _nodoc(**kwargs):
-        """Executa nodoc."""
+        """Execute the nodoc routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {"documents": []}
 
     monkeypatch.setattr(sc, "query_embedding", _nodoc)
     assert await sc.check_cache("q") is None
 
     async def _empty_nested(**kwargs):
-        """Executa empty nested."""
+        """Execute the empty nested routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {"documents": [[]], "distances": [[]], "metadatas": [[]]}
 
     monkeypatch.setattr(sc, "query_embedding", _empty_nested)
@@ -73,7 +93,9 @@ async def test_check_cache_branches(monkeypatch):
     monkeypatch.setattr(sc, "settings", fake_settings)
 
     async def _low(**kwargs):
-        """Executa low."""
+        """Execute the low routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {"documents": [["q"]], "distances": [[0.4]], "metadatas": [[{"answer_payload": "a"}]]}
 
     monkeypatch.setattr(sc, "query_embedding", _low)
@@ -81,7 +103,9 @@ async def test_check_cache_branches(monkeypatch):
 
     # no answer payload
     async def _nopayload(**kwargs):
-        """Executa nopayload."""
+        """Execute the nopayload routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {"documents": [["q"]], "distances": [[0.01]], "metadatas": [[{"model_used": "m"}]]}
 
     monkeypatch.setattr(sc, "query_embedding", _nopayload)
@@ -89,7 +113,9 @@ async def test_check_cache_branches(monkeypatch):
 
     # success
     async def _ok(**kwargs):
-        """Executa ok."""
+        """Execute the ok routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return {
             "documents": [["q"]],
             "distances": [[0.01]],
@@ -118,26 +144,36 @@ async def test_store_cache_and_hit_rate_tuning(monkeypatch):
     stored = []
 
     class _L1:
-        """Classe `_L1`: concentra responsabilidades de test semantic cache extra."""
+        """Represent `_L1` within this module.
+
+The class groups the state and behavior required for L1."""
         def __init__(self):
-            """Inicializa estado interno necessário para uso da classe."""
+            """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self._hits = 0
             self._misses = 0
             self._lock = threading.Lock()
 
         def store(self, key, value):
-            """Executa store."""
+            """Execute the store routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             stored.append((key, value))
 
         def stats(self):
-            """Executa stats."""
+            """Execute the stats routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return {"hits": self._hits, "misses": self._misses, "size": 0, "maxsize": 10}
 
     l1 = _L1()
     monkeypatch.setattr(sc, "_l1_cache", l1)
 
     async def _add_document(**kwargs):
-        """Executa add document."""
+        """Execute the add document routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         return True
 
     monkeypatch.setattr(sc, "add_document", _add_document)

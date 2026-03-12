@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for experiment oml standard.
 """
 experiment_oml_standard.py — OML Comparison with Statistical Validation
 -----------------------------------------------------------------------
@@ -69,7 +70,9 @@ def load_data():
 # 2. MODEL DEFINITIONS
 # ==============================================================================
 def get_model(name):
-    """Obtém model."""
+    """Return model.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
     if name == "Logistic Regression":
         model = linear_model.LogisticRegression(optimizer=optim.SGD(lr=0.01))
     elif name == "Adaptive Random Forest":
@@ -90,7 +93,9 @@ def get_model(name):
 # 3. WORKER FUNCTION
 # ==============================================================================
 def run_kfold_for_model(model_name, X, y, k_folds):
-    """Executa kfold for model."""
+    """Run kfold for model.
+
+This function coordinates the main execution path for that step."""
     print(f"   🚀 Worker started for: {model_name}")
     
     ensemble = [get_model(model_name) for _ in range(k_folds)]
@@ -199,7 +204,9 @@ def analyze_statistics(final_results):
 # 5. MAIN EXECUTION & PLOTTING
 # ==============================================================================
 def main():
-    """Executa main."""
+    """Execute the main routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     X, y, datasets = load_data()
     models = ["Logistic Regression", "Adaptive Random Forest", "Online MLP"]
     

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: HTTP middleware for rate limit.
 """
 rate_limit.py — Rate Limiting Middleware with Redis Support
 ------------------------------------------------------------
@@ -61,7 +62,9 @@ class RateLimitStore:
     REDIS_TTL = 3600  # 1 hour TTL for Redis keys
 
     def __init__(self):
-        """Inicializa estado interno necessário para uso da classe."""
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         self._memory_store: Dict[str, List[float]] = {}
         self._lock = asyncio.Lock()
         self._use_redis: Optional[bool] = None
@@ -226,7 +229,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Skip rate limiting for health checks and metrics
-        """Executa dispatch."""
+        """Execute the dispatch routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         if request.url.path in self.EXEMPT_PATHS:
             return await call_next(request)
 

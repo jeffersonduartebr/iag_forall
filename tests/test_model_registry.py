@@ -1,10 +1,18 @@
-"""Módulo `tests/test_model_registry.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Test coverage for model registry behavior and regressions.
+"""Test coverage for model registry behavior and regressions.
+
+This test module verifies expected behavior, regression boundaries, and failure
+handling for the corresponding runtime component.
+"""
+
 
 from app import model_registry as mr
 
 
 def _fresh_registry():
-    """Executa fresh registry."""
+    """Execute the fresh registry routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     mr.ModelRegistry._instance = None
     return mr.ModelRegistry()
 

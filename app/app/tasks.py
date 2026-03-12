@@ -1,8 +1,10 @@
+# Objective: Application runtime code for tasks.
 # app/tasks.py
-"""
-Celery tasks for background processing.
+"""Define Celery tasks for async feedback processing and evaluation runs.
 
-Optimized to reuse event loop instead of creating new one per task.
+The worker executes async router code from synchronous Celery tasks by reusing a
+process-local event loop. That avoids the cost and complexity of creating a new
+loop per task while keeping the public task interface conventional for Celery.
 """
 import asyncio
 import logging
@@ -69,14 +71,14 @@ def run_async(coro):
 
 @worker_process_init.connect
 def on_worker_process_init(**kwargs):
-    """Initialize event loop when worker process starts."""
+    """Warm the persistent event loop when a worker process boots."""
     logger.info("[Celery] Worker process initializing...")
     _get_or_create_event_loop()
 
 
 @worker_process_shutdown.connect
 def on_worker_process_shutdown(**kwargs):
-    """Clean up event loop when worker process shuts down."""
+    """Close the persistent event loop during worker process shutdown."""
     global _worker_loop
     if _worker_loop is not None and not _worker_loop.is_closed():
         try:
@@ -105,11 +107,11 @@ def task_process_feedback(
     prompt_tokens: int = 0,
     completion_tokens: int = 0
 ):
-    """
-    Executa o feedback loop (Juízes, Bandit Update, Logging) em background via Celery.
-    Isso garante que o aprendizado não seja perdido se a API reiniciar.
+    """Run the asynchronous feedback pipeline inside a Celery worker.
 
-    Uses persistent event loop for better performance.
+    The task bridges synchronous Celery execution and the async feedback logic
+    in `router_core`. Retries are delegated to Celery so transient persistence
+    or provider-side failures can recover with exponential backoff.
     """
     logger.info(f"[Celery] Processando feedback para modelo {chosen_model}...")
 
@@ -146,8 +148,12 @@ def task_execute_eval_run(
     max_tokens: int = 512,
     temperature: float = 0.5,
 ):
-    """
-    Execute an eval run asynchronously and persist per-prompt metrics.
+    """Execute one stored evaluation run and persist per-prompt results.
+
+    The task loads the run definition, executes every prompt through the normal
+    routing stack, stores each result, and writes a final aggregate summary back
+    to the roadmap/evaluation store. Task retries are reserved for failures
+    that abort the whole run rather than one individual prompt.
     """
     logger.info("[Celery] Running eval run_id=%s", run_id)
     run = get_eval_run(run_id)
@@ -163,7 +169,7 @@ def task_execute_eval_run(
     cost_scores = []
 
     async def _execute():
-        """Executa execute."""
+        """Iterate through prompts and capture metrics for each eval sample."""
         for prompt in prompts:
             try:
                 resp = await route_and_answer(

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for guardrails.
 """Basic content guardrails (MVP).
 
 Provides lightweight checks for:
@@ -32,7 +33,9 @@ _PHONE_RE = re.compile(r"(\+?\d[\d\s\-()]{7,}\d)")
 
 @dataclass
 class GuardrailDecision:
-    """Classe `GuardrailDecision`: concentra responsabilidades de guardrails."""
+    """Represent `GuardrailDecision` within this module.
+
+The class groups the state and behavior required for GuardrailDecision."""
     allowed: bool
     reasons: List[str]
 

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for providers ensure ollama behavior and regressions.
 """
 test_providers_ensure_ollama.py — Extensive tests for _ensure_ollama_model
 --------------------------------------------------------------------------
@@ -381,15 +382,21 @@ class TestEnsureOllamaModelAsync:
         mock_response.json.return_value = {"models": [{"name": "async-model:tag"}]}
 
         async def mock_get(*args, **kwargs):
-            """Executa mock get."""
+            """Execute the mock get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return mock_response
 
         async def mock_aenter(self):
-            """Executa mock aenter."""
+            """Execute the mock aenter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self
 
         async def mock_aexit(self, *args):
-            """Executa mock aexit."""
+            """Execute the mock aexit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             pass
 
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -416,19 +423,27 @@ class TestEnsureOllamaModelAsync:
         mock_pull_response.status_code = 200
 
         async def mock_get(*args, **kwargs):
-            """Executa mock get."""
+            """Execute the mock get routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return mock_tags_response
 
         async def mock_post(*args, **kwargs):
-            """Executa mock post."""
+            """Execute the mock post routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return mock_pull_response
 
         async def mock_aenter(self):
-            """Executa mock aenter."""
+            """Execute the mock aenter routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             return self
 
         async def mock_aexit(self, *args):
-            """Executa mock aexit."""
+            """Execute the mock aexit routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
             pass
 
         with patch("httpx.AsyncClient") as mock_client_class:

@@ -1,4 +1,23 @@
-"""Módulo principal: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Application runtime code for celery app.
+"""Configure the shared Celery application used by background workers.
+
+This module centralizes broker and result-backend wiring for asynchronous tasks
+executed outside the FastAPI request lifecycle. The application imports
+``app.tasks`` eagerly so that worker startup always registers the task set used
+by feedback processing and evaluation jobs.
+
+The configuration intentionally reads connection details from environment
+variables at import time because this module is loaded directly by the Celery
+CLI. That makes it the single source of truth for:
+
+- Redis broker and result backend URLs
+- Task serialization policy
+- Queue routing for background workloads
+- Startup retry behavior for broker availability
+
+The resulting ``celery_app`` object is imported both by the worker container and
+by runtime code that needs to enqueue background jobs.
+"""
 
 # app/celery_app.py
 import os

@@ -1,3 +1,4 @@
+# Objective: Test coverage for main admin behavior and regressions.
 """Tests for admin and feedback HTTP handlers after router extraction."""
 
 from types import SimpleNamespace

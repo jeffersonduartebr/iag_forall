@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for nsga meta optimizer.
 """
 nsga_meta_optimizer.py (MULTIMODAL)
 ------------------------------------------------------------
@@ -120,7 +121,9 @@ def save_result(modality: str, trial_id: int, params: Dict[str, Any],
 def evaluate_once(modality: str, N_pop: int, N_gen: int,
                   cxpb: float, mutpb: float,
                   eta_c: float, eta_m: float) -> float:
-    """Executa NSGA-II real para a modalidade solicitada."""
+    """Execute the evaluate once routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     payload = dict(
         modality=modality,
         N_pop=N_pop,
@@ -146,7 +149,9 @@ def build_objective(modality: str):
     """Cria uma função objetivo isolada para cada modalidade."""
 
     def objective(trial: optuna.trial.Trial) -> float:
-        """Executa objective."""
+        """Execute the objective routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         N_pop = trial.suggest_int("N_pop", 8, 64, step=4)
         N_gen = trial.suggest_int("N_gen", 5, 40, step=5)
         cxpb = trial.suggest_float("cxpb", 0.60, 0.95)

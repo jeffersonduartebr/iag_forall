@@ -1,3 +1,4 @@
+# Objective: API layer code for admin routes.
 """Administrative and A/B testing endpoints."""
 
 from __future__ import annotations

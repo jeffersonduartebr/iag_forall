@@ -1,4 +1,10 @@
-"""Módulo `tests/locustfile.py`: descreve responsabilidades e integrações deste arquivo."""
+# Objective: Locust workloads for load, stress, and routing-behavior validation.
+"""Locust workloads for load, stress, and routing-behavior validation.
+
+This module is part of the tracked codebase and should remain aligned with the
+current runtime architecture and operational documentation.
+"""
+
 
 from locust import HttpUser, task, between
 from locust import events

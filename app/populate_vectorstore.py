@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application-side script for populate vectorstore.
 """
 populate_vectorstore.py (Versão Final: OCR + Deduplicação + Metadados)
 ----------------------------------------------------------------------
@@ -241,7 +242,9 @@ RESUMO: ...
 # 🚀 FLUXO PRINCIPAL
 # ============================================================
 async def populate_vectorstore():
-    """Executa populate vectorstore."""
+    """Execute the populate vectorstore routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     logger.info(f"🚀 Iniciando população da coleção '{COLLECTION_NAME}'...")
     
     # 1. Ler arquivos do disco

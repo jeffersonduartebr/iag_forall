@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Service-layer helpers for bandit policy.
 """Policy helpers for meta-bandit decisions."""
 
 from __future__ import annotations
@@ -11,7 +12,9 @@ import numpy as np
 
 
 def dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]], default_epsilon: float) -> float:
-    """Executa dynamic epsilon."""
+    """Execute the dynamic epsilon routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     eps = default_epsilon
     if not ctx_stats:
         return min(1.0, eps + 0.15)
@@ -32,7 +35,9 @@ def choose_epsilon_greedy(
     ctx_stats: Dict[str, Dict[str, float]],
     default_epsilon: float,
 ) -> str:
-    """Executa choose epsilon greedy."""
+    """Execute the choose epsilon greedy routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     eps = dynamic_epsilon(ctx_stats, default_epsilon)
     if random.random() < eps:
         scored = []
@@ -55,7 +60,9 @@ def choose_epsilon_greedy(
 
 
 def choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
-    """Executa choose ucb1."""
+    """Execute the choose ucb1 routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     total = sum(s.get("count", 0) for s in ctx_stats.values())
     if total <= 0:
         total = 1
@@ -77,7 +84,9 @@ def choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> st
 
 
 def choose_thompson(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
-    """Executa choose thompson."""
+    """Execute the choose thompson routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     cand = []
     for m in models:
         s = ctx_stats.get(m, {})
@@ -98,7 +107,9 @@ def meta_combine_choices(
     default_epsilon: float,
     preferred_strategy: str,
 ) -> Tuple[str, Dict[str, str]]:
-    """Executa meta combine choices."""
+    """Execute the meta combine choices routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
     if not models:
         raise RuntimeError("Nenhum modelo recebido em meta_combine_choices.")
 

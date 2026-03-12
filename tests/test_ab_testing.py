@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Test coverage for ab testing behavior and regressions.
 """
 Tests for A/B testing infrastructure.
 """

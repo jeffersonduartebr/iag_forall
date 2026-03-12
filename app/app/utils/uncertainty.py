@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Utility helpers for uncertainty.
 """
 app/app/utils/uncertainty.py
 ------------------------------------------------------

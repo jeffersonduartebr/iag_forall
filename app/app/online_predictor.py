@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Objective: Application runtime code for online predictor.
 """
 online_predictor.py — Real-Time Error Prediction Module (Logistic Regression SGD)
 ---------------------------------------------------------------------------------
@@ -47,14 +48,13 @@ os.makedirs(STATE_DIR, exist_ok=True)
 DEFAULT_VALIDATION_WINDOW = 1000
 
 class OnlineErrorPredictor:
-    """Classe `OnlineErrorPredictor`: organiza responsabilidades de online predictor."""
-    def __init__(self, model_name: str):
-        """
-        Inicializa o preditor de erro online usando Regressão Logística.
+    """Represent `OnlineErrorPredictor` within this module.
 
-        Args:
-            model_name: Nome do modelo sendo monitorado (ex: 'ollama/gemma3:4b').
-        """
+The class groups the state and behavior required for OnlineErrorPredictor."""
+    def __init__(self, model_name: str):
+        """Initialize the internal state required by this instance.
+
+The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
         if not RIVER_AVAILABLE:
             logger.warning("River library not installed. Online prediction disabled.")
             return
@@ -85,10 +85,9 @@ class OnlineErrorPredictor:
         self._load_validation()  # Load validation history
 
     def _init_model(self):
-        """
-        Define o pipeline: StandardScaler -> Logistic Regression (SGD).
-        O StandardScaler é vital para a convergência do SGD em vetores de embedding.
-        """
+        """Execute the init model routine.
+
+This helper encapsulates one focused step used by the surrounding workflow."""
         self.pipeline = compose.Pipeline(
             preprocessing.StandardScaler(),
             linear_model.LogisticRegression(
@@ -346,7 +345,9 @@ _predictors: Dict[str, OnlineErrorPredictor] = {}
 
 
 def get_predictor(model_name: str) -> OnlineErrorPredictor:
-    """Obtém predictor."""
+    """Return predictor.
+
+This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
     if model_name not in _predictors:
         _predictors[model_name] = OnlineErrorPredictor(model_name)
     return _predictors[model_name]

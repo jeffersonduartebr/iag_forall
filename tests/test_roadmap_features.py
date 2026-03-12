@@ -1,3 +1,4 @@
+# Objective: Test coverage for roadmap features behavior and regressions.
 """Focused tests for roadmap governance helpers."""
 
 from types import SimpleNamespace
