@@ -225,6 +225,8 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
     )
     assert stored
     assert logged
+    assert logged[-1]["quality_source"] == "judge"
+    assert logged[-1]["judge_sampled"] is True
     assert metric_quality.values
 
     deps["random"] = SimpleNamespace(random=lambda: 1.0)
@@ -242,6 +244,8 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
         latency_s=0.3,
         cost_val=0.02,
     )
+    assert logged[-1]["quality_source"] == "bandit_proxy"
+    assert logged[-1]["judge_sampled"] is False
     assert metric_latency.values
 
 

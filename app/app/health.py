@@ -17,7 +17,6 @@ import asyncio
 import logging
 import time
 import os
-import httpx
 import threading
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
@@ -151,20 +150,19 @@ async def check_ollama_health() -> ComponentHealth:
     """Check Ollama server availability."""
     try:
         ollama_host = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+        from .providers_async import get_http_client
 
         start = time.time()
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{ollama_host}/api/tags")
-            resp.raise_for_status()
-            data = resp.json()
+        client = await get_http_client()
+        resp = await client.head(f"{ollama_host}/", timeout=5.0)
+        resp.raise_for_status()
         latency_ms = (time.time() - start) * 1000
 
-        models = [m.get("name") for m in data.get("models", [])]
         return ComponentHealth(
             name="ollama",
             healthy=True,
             latency_ms=latency_ms,
-            details={"models_loaded": len(models), "models": models[:5]},
+            details={"probe": "HEAD /"},
         )
     except Exception as e:
         return ComponentHealth(name="ollama", healthy=False, error=str(e))

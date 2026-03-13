@@ -25,6 +25,7 @@ import traceback
 import re
 import warnings
 import subprocess
+import resource
 from types import SimpleNamespace
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple, List
@@ -230,6 +231,8 @@ local_breaker = pybreaker.CircuitBreaker(
 # Global HTTP client for connection reuse
 _http_client: httpx.AsyncClient | None = None
 _http_client_lock = asyncio.Lock()
+_ollama_tags_cache: dict[str, Any] = {"models": [], "expires_at": 0.0}
+_ollama_tags_cache_lock = asyncio.Lock()
 
 
 async def get_http_client() -> httpx.AsyncClient:
@@ -265,7 +268,57 @@ async def close_http_client():
     if _http_client is not None and not _http_client.is_closed:
         await _http_client.close()
         _http_client = None
+        reset_ollama_tags_cache()
         logger.info("[HTTP Pool] Closed global HTTP client")
+
+
+async def fetch_ollama_tags(*, force_refresh: bool = False, ttl_seconds: int = 120) -> list[dict[str, Any]]:
+    """Return the current Ollama model list using a small shared TTL cache.
+
+    Frequent `/api/tags` probes create avoidable socket churn and file-descriptor
+    pressure under multi-process API deployments. This helper centralizes model
+    discovery behind the shared HTTP client and caches the result for a short
+    period so health checks, warmup code, and model-ensure helpers do not all
+    hit Ollama independently.
+    """
+    now = time.time()
+    if not force_refresh and _ollama_tags_cache["expires_at"] > now:
+        return list(_ollama_tags_cache["models"])
+
+    async with _ollama_tags_cache_lock:
+        now = time.time()
+        if not force_refresh and _ollama_tags_cache["expires_at"] > now:
+            return list(_ollama_tags_cache["models"])
+
+        client = await get_http_client()
+        resp = await client.get(f"{OLLAMA_HOST}/api/tags", timeout=10.0)
+        resp.raise_for_status()
+        models = list(resp.json().get("models", []))
+        _ollama_tags_cache["models"] = models
+        _ollama_tags_cache["expires_at"] = time.time() + max(1, ttl_seconds)
+        return list(models)
+
+
+async def probe_ollama_liveness() -> None:
+    """Perform a lightweight Ollama liveness probe using the shared HTTP pool."""
+    client = await get_http_client()
+    resp = await client.head(f"{OLLAMA_HOST}/", timeout=5.0)
+    resp.raise_for_status()
+
+
+def reset_ollama_tags_cache() -> None:
+    """Invalidate the in-process Ollama tags cache."""
+    _ollama_tags_cache["models"] = []
+    _ollama_tags_cache["expires_at"] = 0.0
+
+
+def log_process_file_descriptor_limit(context: str) -> None:
+    """Log the current soft and hard `nofile` limits for operational diagnosis."""
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        logger.info("[%s] RLIMIT_NOFILE soft=%s hard=%s", context, soft, hard)
+    except Exception as exc:
+        logger.warning("[%s] Failed to read RLIMIT_NOFILE: %s", context, exc)
 
 
 # ==============================================================================
@@ -691,6 +744,7 @@ async def warm_ollama_model_runtime(model_name: str) -> bool:
 
 async def start_provider_runtime_services() -> None:
     """Start background provider-side runtime services."""
+    log_process_file_descriptor_limit("provider-runtime")
     await _ollama_concurrency_controller.start()
 
 
@@ -1302,20 +1356,20 @@ async def call_model(
 async def _ensure_ollama_model_async(model_name: str) -> bool:
     """Ensure an Ollama model is available using the shared async HTTP client."""
     try:
-        client = await get_http_client()
-        resp = await client.get(f"{OLLAMA_HOST}/api/tags", timeout=10.0)
-        if resp.status_code == 200:
-            existing = [m.get("name") for m in resp.json().get("models", [])]
-            if any(model_name in m for m in existing):
-                return True
+        existing = [m.get("name") for m in await fetch_ollama_tags(force_refresh=True)]
+        if any(model_name in m for m in existing):
+            return True
 
         logger.info(f"[ensure_ollama_model] Downloading model: {model_name}")
+        client = await get_http_client()
         # Use longer timeout for pull (model download can be slow)
         resp = await client.post(
             f"{OLLAMA_HOST}/api/pull",
             json={"name": model_name},
             timeout=900.0  # 15 minutes for large models
         )
+        if resp.status_code == 200:
+            reset_ollama_tags_cache()
         return resp.status_code == 200
 
     except Exception as e:
@@ -1374,6 +1428,7 @@ def _ensure_ollama_model(model_name: str) -> bool:
             # Consume the streaming response to complete the download
             for _ in resp.iter_lines():
                 pass
+            reset_ollama_tags_cache()
             logger.info(f"[ensure_ollama_model] Model {model_name} downloaded successfully")
             return True
         else:

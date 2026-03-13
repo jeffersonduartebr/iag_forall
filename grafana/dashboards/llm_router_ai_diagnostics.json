@@ -355,14 +355,19 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason, model) (increase(router_retry_total{model=~\"$model\"}[15m]))",
+          "expr": "sum by (reason, model) (increase(router_retry_total{model=~\"$model\"}[15m])) or on() vector(0)",
           "legendFormat": "{{model}} {{reason}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (first_model, second_model) (increase(router_fallback_used_total[15m]))",
+          "expr": "sum by (first_model, second_model) (increase(router_fallback_used_total[15m])) or on() vector(0)",
           "legendFormat": "{{first_model}} -> {{second_model}}",
           "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(router_attempts_per_query_bucket[15m]))) or on() vector(0)",
+          "legendFormat": "p95 tentativas/query",
+          "refId": "C"
         }
       ],
       "title": "Retries e fallback",
@@ -474,14 +479,19 @@
       },
       "targets": [
         {
-          "expr": "sum by (policy_version) (increase(query_policy_applied_total[15m]))",
-          "legendFormat": "{{policy_version}}",
+          "expr": "max(policy_version_active) or on() vector(0)",
+          "legendFormat": "policy ativa",
           "refId": "A"
         },
         {
-          "expr": "sum by (experiment_id, variant) (increase(ab_experiment_assignments_total[15m]))",
-          "legendFormat": "{{experiment_id}} {{variant}}",
+          "expr": "sum by (policy_version) (increase(query_policy_applied_total[15m])) or on() vector(0)",
+          "legendFormat": "{{policy_version}}",
           "refId": "B"
+        },
+        {
+          "expr": "sum by (experiment_id, variant) (increase(ab_experiment_assignments_total[15m])) or on() vector(0)",
+          "legendFormat": "{{experiment_id}} {{variant}}",
+          "refId": "C"
         }
       ],
       "title": "Policy e experimentos",
@@ -512,19 +522,24 @@
       },
       "targets": [
         {
-          "expr": "judge_calibration_score",
-          "legendFormat": "{{judge_model}} calibration",
+          "expr": "judge_cache_hit_rate or on() vector(0)",
+          "legendFormat": "judge cache hit rate",
           "refId": "A"
         },
         {
-          "expr": "judge_cache_agreement",
-          "legendFormat": "{{judge_model}} agreement",
+          "expr": "increase(judge_cache_hits_total[15m]) or on() vector(0)",
+          "legendFormat": "judge cache hits 15m",
           "refId": "B"
         },
         {
-          "expr": "judge_cache_hit_rate",
-          "legendFormat": "judge cache hit rate",
+          "expr": "increase(judge_cache_misses_total[15m]) or on() vector(0)",
+          "legendFormat": "judge cache misses 15m",
           "refId": "C"
+        },
+        {
+          "expr": "increase(judge_calibration_updates_total[15m]) or on() vector(0)",
+          "legendFormat": "updates calibracao 15m",
+          "refId": "D"
         }
       ],
       "title": "Juizes e calibracao",

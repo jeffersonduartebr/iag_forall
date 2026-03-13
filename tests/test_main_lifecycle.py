@@ -7,6 +7,11 @@ import pytest
 from fastapi import Response
 
 
+async def _async_result(value):
+    """Return one value from a tiny awaitable helper used in monkeypatches."""
+    return value
+
+
 @pytest.mark.asyncio
 async def test_preload_ollama_models_download_flow(monkeypatch):
     """preload_ollama_models should exercise the download path without real IO."""
@@ -19,12 +24,14 @@ async def test_preload_ollama_models_download_flow(monkeypatch):
     monkeypatch.setattr(main, "VLM_OLLAMA_MODELS", [])
     monkeypatch.setattr(main.settings, "get", lambda k, d=None: "nomic-ai/nomic-embed-text-v1.5" if k == "EMBED_TEXT_MODEL" else d)
     monkeypatch.setattr(main, "get_configured_ollama_warm_models", lambda: ["ollama/gemma3:4b"])
+    monkeypatch.setattr(main, "fetch_ollama_tags", lambda force_refresh=True: _async_result([]))
     warmed = []
     async def _warm(model):
         warmed.append(model)
         return True
 
     monkeypatch.setattr(main, "warm_ollama_model_runtime", _warm)
+    stream_calls = {"count": 0}
 
     class _Resp:
         def __init__(self, status_code=200, payload=None):
@@ -50,24 +57,17 @@ async def test_preload_ollama_models_download_flow(monkeypatch):
                 yield ""
 
     class _Client:
-        def __init__(self, timeout=None):
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, _url):
-            return _Resp(200, {"models": []})
-
-        def stream(self, method, url, json):
+        def stream(self, method, url, json, timeout=None):
+            stream_calls["count"] += 1
             return _StreamCtx()
 
-    monkeypatch.setattr(main.httpx, "AsyncClient", _Client)
+    async def _get_client():
+        return _Client()
+
+    monkeypatch.setattr(main, "get_http_client", _get_client)
     await main.preload_ollama_models()
     assert warmed == ["ollama/gemma3:4b"]
+    assert stream_calls["count"] >= 1
 
 
 @pytest.mark.asyncio
@@ -85,19 +85,16 @@ async def test_preload_ollama_models_skips_available_and_handles_lookup_error(mo
         lambda k, d=None: {"EMBED_TEXT_MODEL": "ollama/custom-embed", "OLLAMA_WARMUP_GENERATE_ENABLED": "1"}.get(k, d),
     )
     monkeypatch.setattr(main, "get_configured_ollama_warm_models", lambda: [])
+    async def _fetch_tags(force_refresh=True):
+        raise RuntimeError("lookup failed")
+
+    monkeypatch.setattr(main, "fetch_ollama_tags", _fetch_tags)
     warmed = []
     async def _warm(model):
         warmed.append(model)
         return True
 
     monkeypatch.setattr(main, "warm_ollama_model_runtime", _warm)
-
-    class _Resp:
-        def raise_for_status(self):
-            raise RuntimeError("lookup failed")
-
-        def json(self):
-            return {}
 
     class _StreamResp:
         def raise_for_status(self):
@@ -117,23 +114,14 @@ async def test_preload_ollama_models_skips_available_and_handles_lookup_error(mo
     calls = {"stream": 0}
 
     class _Client:
-        def __init__(self, timeout=None):
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, _url):
-            return _Resp()
-
-        def stream(self, method, url, json):
+        def stream(self, method, url, json, timeout=None):
             calls["stream"] += 1
             return _StreamCtx()
 
-    monkeypatch.setattr(main.httpx, "AsyncClient", _Client)
+    async def _get_client():
+        return _Client()
+
+    monkeypatch.setattr(main, "get_http_client", _get_client)
     await main.preload_ollama_models()
     assert calls["stream"] >= 1
     assert warmed

@@ -565,19 +565,29 @@
       },
       "targets": [
         {
-          "expr": "router_history_entries_total",
+          "expr": "router_history_entries_total or on() vector(0)",
           "legendFormat": "historico ativo",
           "refId": "A"
         },
         {
-          "expr": "ema_history_size",
+          "expr": "ema_history_size or on() vector(0)",
           "legendFormat": "EMA history",
           "refId": "B"
         },
         {
-          "expr": "predictor_accuracy{model=~\"$model\"}",
-          "legendFormat": "{{model}} accuracy",
+          "expr": "ema_batch_queue_size or on() vector(0)",
+          "legendFormat": "fila EMA",
           "refId": "C"
+        },
+        {
+          "expr": "increase(ema_batch_flushes_total[15m]) or on() vector(0)",
+          "legendFormat": "flushes EMA 15m",
+          "refId": "D"
+        },
+        {
+          "expr": "sum by (model) (increase(bandit_select_total[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} selecoes bandit",
+          "refId": "E"
         }
       ],
       "title": "Memoria e aprendizagem",

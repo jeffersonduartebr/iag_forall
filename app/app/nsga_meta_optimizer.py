@@ -28,7 +28,6 @@ import logging
 import subprocess
 from typing import Dict, Any
 
-import optuna
 import requests
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -145,8 +144,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     return eff
 
 
-def build_objective(modality: str):
+def build_objective(modality: str, reps: int):
     """Cria uma função objetivo isolada para cada modalidade."""
+    import optuna
 
     def objective(trial: optuna.trial.Trial) -> float:
         """Execute the objective routine.
@@ -160,7 +160,6 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         eta_c = trial.suggest_float("eta_c", 5.0, 40.0)
         eta_m = trial.suggest_float("eta_m", 5.0, 40.0)
 
-        reps = int(os.getenv("METAOPT_REPS", "5"))
         vals = []
         for _ in range(reps):
             try:
@@ -212,11 +211,13 @@ def run_scheduled_optimization(n_trials: int = None) -> Dict[str, Any]:
         Dict with results for each modality
     """
     from app.settings_dynamic import settings
+    import optuna
 
     modal_list = ["text", "vision", "multimodal"]
 
     if n_trials is None:
         n_trials = settings.META_OPT_SCHEDULED_TRIALS
+    reps = int(os.getenv("METAOPT_SCHEDULED_REPS", os.getenv("METAOPT_REPS", "2")))
 
     STORAGE = os.getenv("OPTUNA_STORAGE", "sqlite:///metaopt.db")
 
@@ -239,7 +240,7 @@ def run_scheduled_optimization(n_trials: int = None) -> Dict[str, Any]:
             )
 
             study.optimize(
-                build_objective(modality),
+                build_objective(modality, reps=reps),
                 n_trials=n_trials,
                 n_jobs=1,
             )
@@ -312,36 +313,32 @@ def start_scheduled_optimizer():
     return t
 
 
-# ============================================================
-# 🚀 Execução principal
-# ============================================================
-
-if __name__ == "__main__":
-
+def run_manual_oneshot() -> None:
+    """Run the original one-shot optimization batch and exit."""
+    import optuna
     modal_list = ["text", "vision", "multimodal"]
-
-    N_TRIALS = int(os.getenv("METAOPT_TRIALS", "100"))
-    STORAGE = os.getenv("OPTUNA_STORAGE", "sqlite:///metaopt.db")
+    n_trials = int(os.getenv("METAOPT_TRIALS", "100"))
+    reps = int(os.getenv("METAOPT_REPS", "5"))
+    storage = os.getenv("OPTUNA_STORAGE", "sqlite:///metaopt.db")
 
     logger.info("[metaopt] Iniciando meta-otimização MULTIMODAL...")
 
     for modality in modal_list:
-
-        STUDY_NAME = f"nsga_metaopt_{modality}"
+        study_name = f"nsga_metaopt_{modality}"
 
         logger.info(f"[metaopt] --- OPTIMIZING MODALITY: {modality} ---")
 
         study = optuna.create_study(
-            storage=STORAGE,
-            study_name=STUDY_NAME,
+            storage=storage,
+            study_name=study_name,
             direction="maximize",
             load_if_exists=True,
             sampler=optuna.samplers.TPESampler(seed=42),
         )
 
         study.optimize(
-            build_objective(modality),
-            n_trials=N_TRIALS,
+            build_objective(modality, reps=reps),
+            n_trials=n_trials,
             n_jobs=1
         )
 
@@ -351,7 +348,6 @@ if __name__ == "__main__":
         )
         logger.info(f"[metaopt] [{modality}] BEST params={study.best_trial.params}")
 
-    # Final: rodar script de publicação multimodal
     script_path = os.getenv(
         "NSGA_UPDATE_SCRIPT",
         "/app/app/update_nsga_best_params.py"
@@ -363,3 +359,24 @@ if __name__ == "__main__":
         logger.info("[metaopt] Publicação dos parâmetros MULTIMODAIS concluída.")
     except Exception as e:
         logger.warning(f"[metaopt] Falha ao executar update_nsga_best_params.py: {e}")
+
+
+def main() -> int:
+    """Start the meta optimizer in scheduled or one-shot mode."""
+    mode = os.getenv("META_OPT_MODE", "scheduler").strip().lower()
+    if mode == "oneshot":
+        run_manual_oneshot()
+        return 0
+
+    logger.info("[metaopt] Starting scheduler mode")
+    start_scheduled_optimizer()
+    while True:
+        time.sleep(3600)
+
+
+# ============================================================
+# 🚀 Execução principal
+# ============================================================
+
+if __name__ == "__main__":
+    raise SystemExit(main())

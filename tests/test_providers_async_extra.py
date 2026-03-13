@@ -168,6 +168,11 @@ The constructor keeps setup local to the object so callers can use it without ad
 This helper encapsulates one focused step used by the surrounding workflow."""
             return self._payload
 
+        def raise_for_status(self):
+            """Raise a synthetic HTTP error when the mocked status is unsuccessful."""
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError("bad status", request=None, response=None)
+
     class _Client:
         """Represent `_Client` within this module.
 
@@ -226,3 +231,41 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     monkeypatch.setattr(pa, "get_http_client", _boom)
     assert await pa._ensure_ollama_model_async("phi4:latest") is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_ollama_tags_cache_and_probe(monkeypatch):
+    """fetch_ollama_tags should reuse cached tags and expose a lightweight probe."""
+    calls = {"get": 0, "head": 0}
+
+    class _Resp:
+        def __init__(self, payload=None):
+            self._payload = payload or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        async def get(self, *args, **kwargs):
+            calls["get"] += 1
+            return _Resp({"models": [{"name": "qwen3.5:2b"}]})
+
+        async def head(self, *args, **kwargs):
+            calls["head"] += 1
+            return _Resp()
+
+    async def _client():
+        return _Client()
+
+    pa.reset_ollama_tags_cache()
+    monkeypatch.setattr(pa, "get_http_client", _client)
+    tags_first = await pa.fetch_ollama_tags(force_refresh=True, ttl_seconds=60)
+    tags_second = await pa.fetch_ollama_tags(force_refresh=False, ttl_seconds=60)
+    await pa.probe_ollama_liveness()
+
+    assert tags_first == tags_second
+    assert calls["get"] == 1
+    assert calls["head"] == 1

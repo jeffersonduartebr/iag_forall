@@ -449,14 +449,19 @@
       },
       "targets": [
         {
-          "expr": "sum by (model) (increase(provider_timeout_errors_total[15m]))",
-          "legendFormat": "{{model}} timeout",
+          "expr": "sum by (model, outcome) (increase(router_query_outcome_total{outcome=~\"provider_.*\"}[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} {{outcome}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (model) (increase(provider_rate_limit_errors_total[15m]))",
-          "legendFormat": "{{model}} rate-limit",
+          "expr": "sum by (model) (increase(provider_timeout_errors_total[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} timeout",
           "refId": "B"
+        },
+        {
+          "expr": "sum by (model) (increase(provider_rate_limit_errors_total[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} rate-limit",
+          "refId": "C"
         }
       ],
       "title": "Erros do provider",
@@ -578,22 +583,22 @@
       },
       "targets": [
         {
-          "expr": "query_drift_score",
+          "expr": "query_drift_score or on() vector(0)",
           "legendFormat": "drift",
           "refId": "A"
         },
         {
-          "expr": "increase(query_drift_detected_total[15m])",
+          "expr": "increase(query_drift_detected_total[15m]) or on() vector(0)",
           "legendFormat": "deteccoes 15m",
           "refId": "B"
         },
         {
-          "expr": "cascade_severity_level",
+          "expr": "cascade_severity_level or on() vector(0)",
           "legendFormat": "severidade cascata",
           "refId": "C"
         },
         {
-          "expr": "cascade_failed_model_ratio",
+          "expr": "cascade_failed_model_ratio or on() vector(0)",
           "legendFormat": "ratio falha",
           "refId": "D"
         }

@@ -197,6 +197,18 @@ NSGA_LAST_TS = Gauge("nsga_last_run_ts", "Timestamp da última execução", ["mo
 NSGA_UQ_THRESH = Gauge("nsga_uq_threshold", "Limiar de Incerteza otimizado", [])
 NSGA_CONVERGENCE_SCORE = Gauge("nsga_worker_convergence_score", "Convergence score from worker", ["modality"])
 NSGA_OPTIMIZATION_HEALTH = Gauge("nsga_worker_optimization_health", "Optimization health from worker", ["modality"])
+JUDGE_FEEDBACK_ERROR_RATE = Gauge(
+    "judge_feedback_error_rate_judged_only",
+    "Fraction of judged query_log records with quality below the configured threshold",
+)
+JUDGE_FEEDBACK_SAMPLED_TOTAL = Counter(
+    "judge_feedback_sampled_total",
+    "Number of judged query_log rows considered by the judge-feedback tuning logic",
+)
+JUDGE_FEEDBACK_PROXY_TOTAL = Counter(
+    "judge_feedback_proxy_total",
+    "Number of proxy-quality query_log rows ignored by the judge-feedback tuning logic",
+)
 
 
 # ============================================================
@@ -769,24 +781,57 @@ def tune_weights_from_judge_feedback() -> None:
     """
     try:
         with engine.connect() as conn:
-            # Query recent judge logs for error rate (last 1 hour)
-            result = conn.execute(
+            min_samples = int(settings.get("JUDGE_FEEDBACK_MIN_SAMPLES", 30))
+            threshold = float(settings.get("JUDGE_FEEDBACK_ERROR_THRESHOLD", 5.0))
+
+            judged_result = conn.execute(
                 text("""
                     SELECT
                         COUNT(*) as total,
-                        SUM(CASE WHEN quality < 5.0 THEN 1 ELSE 0 END) as errors
+                        SUM(CASE WHEN quality < :threshold THEN 1 ELSE 0 END) as errors
                     FROM query_log
                     WHERE created_at > NOW() - INTERVAL 1 HOUR
                     AND quality IS NOT NULL
+                    AND quality_source = 'judge'
                 """)
+                ,
+                {"threshold": threshold},
+            ).fetchone()
+            proxy_result = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM query_log
+                    WHERE created_at > NOW() - INTERVAL 1 HOUR
+                    AND quality IS NOT NULL
+                    AND quality_source <> 'judge'
+                    """
+                )
             ).fetchone()
 
-            if not result or result[0] == 0:
+            proxy_total = int((proxy_result[0] if proxy_result else 0) or 0)
+            if proxy_total:
+                JUDGE_FEEDBACK_PROXY_TOTAL.inc(proxy_total)
+
+            if not judged_result or judged_result[0] == 0:
+                JUDGE_FEEDBACK_ERROR_RATE.set(0.0)
                 return
 
-            total = int(result[0])
-            errors = int(result[1] or 0)
+            total = int(judged_result[0])
+            errors = int(judged_result[1] or 0)
+            JUDGE_FEEDBACK_SAMPLED_TOTAL.inc(total)
+
+            if total < min_samples:
+                JUDGE_FEEDBACK_ERROR_RATE.set(0.0)
+                logger.info(
+                    "[Judge-Feedback] Skipping tune: only %s judged samples available (min=%s).",
+                    total,
+                    min_samples,
+                )
+                return
+
             error_rate = errors / total
+            JUDGE_FEEDBACK_ERROR_RATE.set(error_rate)
 
             logger.info(f"[Judge-Feedback] Error rate: {error_rate:.2%} ({errors}/{total})")
 

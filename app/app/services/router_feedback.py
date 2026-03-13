@@ -50,6 +50,7 @@ async def process_background_feedback_impl(
         )
 
         should_judge = deps["random"].random() < prob_judge
+        quality_source = "bandit_proxy"
 
         if should_judge:
             try:
@@ -59,18 +60,23 @@ async def process_background_feedback_impl(
                 judge_scores = await deps["judge_answer"](query, answer)
                 valid_scores = [score["score"] for score in judge_scores if "score" in score]
                 final_quality = round((float(np.mean(valid_scores)) if valid_scores else 5.0) * 10.0, 2)
+                quality_source = "judge"
                 is_correct_label = final_quality >= 7.0
                 predictor.learn(query_embedding, is_correct_label)
                 predictor.record_outcome(predicted_error_prob, not is_correct_label)
                 predictor.save()
             except Exception:
                 final_quality = 5.0
+                quality_source = "fallback_default"
                 try:
                     deps["FEEDBACK_TASK_FAILURES"].labels(stage="judge").inc()
                 except Exception:
                     pass
         else:
-            final_quality = model_stats.get("mean", 0.5) * 10.0
+            # The bandit "mean" tracks average reward, not literal quality. We
+            # keep it as a cheap proxy for persistence, but explicitly mark the
+            # source so downstream consumers do not treat it as judged quality.
+            final_quality = max(0.0, min(10.0, model_stats.get("mean", 0.5) * 10.0))
 
         try:
             reward = deps["compute_reward"](chosen_model, final_quality, latency_s, cost_val)
@@ -151,6 +157,9 @@ async def process_background_feedback_impl(
                 latency_s=latency_s,
                 cost_per_1k=cost_val,
                 quality=final_quality,
+                quality_source=quality_source,
+                judge_sampled=should_judge,
+                predicted_error_prob=float(predicted_error_prob),
                 reward=reward,
                 context_label="async_processed",
                 raw_payload=raw_payload,

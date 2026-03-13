@@ -95,6 +95,10 @@ services:
       timeout: 5s
       retries: 20
       start_period: 20s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
 
 
     depends_on:
@@ -141,7 +145,7 @@ services:
       bash -c "
         echo '🧩 Aguardando serviços dependentes...';
         sleep 3;
-        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --limit-concurrency 400 --limit-max-requests 10000
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --limit-concurrency 400 --limit-max-requests 10000
       "
 
     networks:
@@ -179,6 +183,9 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+      - META_OPT_MODE=scheduler
+      - META_OPT_ENABLED=1
+      - METAOPT_SCHEDULED_REPS=2
 
     volumes:
       - ./app/app:/app/app
@@ -238,6 +245,10 @@ services:
     container_name: ollama
     restart: unless-stopped
     gpus: all
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
 
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
@@ -407,6 +418,10 @@ services:
       timeout: 15s
       retries: 3
       start_period: 45s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     
     depends_on:
       mariadb:

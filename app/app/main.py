@@ -27,11 +27,11 @@ import json
 import time
 import asyncio
 import logging
+import resource
 import concurrent.futures
 from contextlib import asynccontextmanager
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, Response, Request, APIRouter
 from fastapi.responses import StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -73,6 +73,9 @@ from .observability import (
 from .router_core import start_background_services, stop_background_services
 from .providers_async import (
     close_http_client,
+    fetch_ollama_tags,
+    get_http_client,
+    log_process_file_descriptor_limit,
     start_provider_runtime_services,
     stop_provider_runtime_services,
     get_configured_ollama_warm_models,
@@ -195,10 +198,11 @@ VLM_OLLAMA_MODELS = list(getattr(settings, "VLM_OLLAMA_MODELS", []))
 
 async def preload_ollama_models():
     """
-    Preload Ollama models asynchronously using httpx.
+    Preload Ollama models asynchronously using the shared provider HTTP client.
 
-    Uses httpx.AsyncClient for better performance compared to
-    synchronous requests in async context.
+    Model discovery and downloads are routed through the provider runtime so
+    startup warmup does not create extra ad hoc HTTP clients or duplicate
+    `/api/tags` polling pressure.
     """
     try:
         logger.info("[ollama-preload] Iniciando verificação...")
@@ -237,14 +241,10 @@ async def preload_ollama_models():
         if not all_models:
             return
 
-        # Use httpx.AsyncClient for async HTTP requests
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                resp = await client.get(f"{OLLAMA_HOST}/api/tags")
-                resp.raise_for_status()
-                available = {m["name"] for m in resp.json().get("models", [])}
-            except Exception:
-                available = set()
+        try:
+            available = {m["name"] for m in await fetch_ollama_tags(force_refresh=True)}
+        except Exception:
+            available = set()
 
         for model in all_models:
             name = model.split("/", 1)[1]
@@ -254,17 +254,17 @@ async def preload_ollama_models():
 
             logger.info(f"[ollama-preload] Baixando '{name}'...")
             try:
-                # Use longer timeout for model downloads
-                async with httpx.AsyncClient(timeout=1200.0) as client:
-                    async with client.stream(
-                        "POST",
-                        f"{OLLAMA_HOST}/api/pull",
-                        json={"name": name},
-                    ) as response:
-                        response.raise_for_status()
-                        # Consume the stream to complete the download
-                        async for _ in response.aiter_lines():
-                            pass
+                client = await get_http_client()
+                async with client.stream(
+                    "POST",
+                    f"{OLLAMA_HOST}/api/pull",
+                    json={"name": name},
+                    timeout=1200.0,
+                ) as response:
+                    response.raise_for_status()
+                    # Consume the stream to complete the download
+                    async for _ in response.aiter_lines():
+                        pass
                 logger.info(f"[ollama-preload] '{name}' OK.")
             except Exception as e:
                 logger.error(f"[ollama-preload] Falha ao baixar '{name}': {e}")
@@ -315,6 +315,12 @@ async def startup_event():
         raise RuntimeError("Invalid critical settings: " + "; ".join(config_errors))
 
     try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        logger.info("[startup] RLIMIT_NOFILE soft=%s hard=%s", soft, hard)
+    except Exception as e:
+        logger.warning(f"[startup] Failed to read RLIMIT_NOFILE: {e}")
+
+    try:
         ensure_runtime_support_tables()
     except Exception as e:
         logger.warning(f"[startup] Failed to ensure roadmap tables: {e}")
@@ -328,6 +334,7 @@ async def startup_event():
     logger.info(f"[startup] ThreadPoolExecutor configured with {executor_workers} workers")
     start_reload_listener()
     start_background_services()
+    log_process_file_descriptor_limit("startup")
     await start_provider_runtime_services()
 
     # Start periodic cleanup task for rate limiting

@@ -144,6 +144,9 @@ def ensure_query_log() -> None:
 
         -- metadados
         quality FLOAT,
+        quality_source VARCHAR(32) DEFAULT 'unknown',
+        judge_sampled TINYINT DEFAULT 0,
+        predicted_error_prob FLOAT NULL,
         latency_s FLOAT,
         cost_per_1k FLOAT,
         reward FLOAT,
@@ -165,6 +168,32 @@ def ensure_query_log() -> None:
     try:
         with engine.begin() as conn:
             conn.execute(text(ddl))
+            # Keep existing deployments compatible when the table predates the
+            # newer feedback attribution fields.
+            conn.execute(
+                text(
+                    """
+                    ALTER TABLE query_log
+                    ADD COLUMN IF NOT EXISTS quality_source VARCHAR(32) DEFAULT 'unknown'
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    ALTER TABLE query_log
+                    ADD COLUMN IF NOT EXISTS judge_sampled TINYINT DEFAULT 0
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    ALTER TABLE query_log
+                    ADD COLUMN IF NOT EXISTS predicted_error_prob FLOAT NULL
+                    """
+                )
+            )
         logger.info("[query_service] Tabela 'query_log' pronta (EXTENDIDA multimodal).")
     except SQLAlchemyError as exc:
         logger.warning("[query_service] Falha ao criar tabela query_log: %s", exc)
@@ -186,7 +215,10 @@ def insert_query_log(
     cost_per_1k: float,
     quality: float,
     reward: float,
-    context_label: Optional[str],
+    quality_source: str = "unknown",
+    judge_sampled: bool = False,
+    predicted_error_prob: Optional[float] = None,
+    context_label: Optional[str] = None,
     raw_payload: dict | list | str | None = None,
 
     # embeddings
@@ -210,13 +242,15 @@ def insert_query_log(
                     (query_text, chosen_model, modality, image_provided,
                      answer, image_output_b64,
                      query_embedding, answer_embedding,
-                     quality, latency_s, cost_per_1k, reward,
+                     quality, quality_source, judge_sampled, predicted_error_prob,
+                     latency_s, cost_per_1k, reward,
                      context_label, raw_payload)
                     VALUES
                     (:q, :m, :mod, :ip,
                      :ans, :img,
                      :qemb, :aemb,
-                     :qual, :lat, :cost, :rew,
+                     :qual, :quality_source, :judge_sampled, :predicted_error_prob,
+                     :lat, :cost, :rew,
                      :ctx, :payload)
                 """),
                 {
@@ -229,6 +263,9 @@ def insert_query_log(
                     "qemb": _to_blob(query_embedding),
                     "aemb": _to_blob(answer_embedding),
                     "qual": quality,
+                    "quality_source": quality_source,
+                    "judge_sampled": 1 if judge_sampled else 0,
+                    "predicted_error_prob": predicted_error_prob,
                     "lat": latency_s,
                     "cost": cost_per_1k,
                     "rew": reward,

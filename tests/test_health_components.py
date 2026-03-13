@@ -8,6 +8,7 @@ handling for the corresponding runtime component.
 
 import sys
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -91,35 +92,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     )
     monkeypatch.setitem(sys.modules, "chromadb", fake_chromadb)
 
-    class _AsyncClient:
-        """Represent `_AsyncClient` within this module.
-
-The class groups the state and behavior required for AsyncClient."""
-        def __init__(self, timeout):
-            """Initialize the internal state required by this instance.
-
-The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            """Execute the aenter routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            """Execute the aexit routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return False
-
-        async def get(self, _url):
-            """Execute the get routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return _Response({"models": [{"name": "m1"}, {"name": "m2"}]})
-
-    monkeypatch.setattr(health.httpx, "AsyncClient", _AsyncClient)
+    client = SimpleNamespace(head=AsyncMock(return_value=_Response({"models": [{"name": "m1"}, {"name": "m2"}]})))
+    monkeypatch.setattr("app.providers_async.get_http_client", AsyncMock(return_value=client))
 
     manager = SimpleNamespace(get_all_statuses=lambda: [{"model": "a", "state": "closed"}])
     monkeypatch.setattr("app.reliability.get_circuit_breaker_manager", lambda: manager)
@@ -133,7 +107,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert redis.healthy and redis.details["pool_size"] == 4
     assert db.healthy
     assert chroma.healthy and chroma.details["collections"] == 2
-    assert ollama.healthy and ollama.details["models_loaded"] == 2
+    assert ollama.healthy and ollama.details["probe"] == "HEAD /"
     assert cb.healthy is True
 
 
@@ -144,35 +118,8 @@ async def test_component_health_error_paths_and_cache(monkeypatch):
     redis = await health.check_redis_health()
     assert redis.healthy is False
 
-    class _BadAsyncClient:
-        """Represent `_BadAsyncClient` within this module.
-
-The class groups the state and behavior required for BadAsyncClient."""
-        def __init__(self, timeout):
-            """Initialize the internal state required by this instance.
-
-The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            """Execute the aenter routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            """Execute the aexit routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return False
-
-        async def get(self, _url):
-            """Execute the get routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return _Response(fail=True)
-
-    monkeypatch.setattr(health.httpx, "AsyncClient", _BadAsyncClient)
+    client = SimpleNamespace(head=AsyncMock(return_value=_Response(fail=True)))
+    monkeypatch.setattr("app.providers_async.get_http_client", AsyncMock(return_value=client))
     ollama = await health.check_ollama_health()
     assert ollama.healthy is False
 
