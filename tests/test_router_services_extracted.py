@@ -184,11 +184,11 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
     async def _judge_answer(query, answer):
         return [{"score": 0.8}, {"score": 1.0}]
 
-    async def _store_cache(**kwargs):
-        stored.append(kwargs)
-
     async def _to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
+
+    async def _store_cache(**kwargs):
+        stored.append(kwargs)
 
     deps = {
         "_get_ctx_stats": lambda _ctx: {"m1": {"count": 4, "mean": 0.6}},
@@ -210,6 +210,7 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
         "FEEDBACK_PROCESSING_LATENCY": metric_latency,
         "FEEDBACK_BACKLOG_AGE": metric_latency,
         "FEEDBACK_TASK_FAILURES": metric_latency,
+        "should_throttle_background_judge": lambda: False,
     }
     state = {"EMA_HISTORY": _History()}
 
@@ -247,6 +248,60 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
     assert logged[-1]["quality_source"] == "bandit_proxy"
     assert logged[-1]["judge_sampled"] is False
     assert metric_latency.values
+
+
+@pytest.mark.asyncio
+async def test_router_feedback_skips_judge_when_background_is_throttled():
+    """Background judge work should yield under provider pressure when throttling is enabled."""
+    metric = _Metric()
+    logged = []
+
+    class _Pred:
+        def predict_error_probability(self, emb):
+            return 0.9
+
+    async def _to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    async def _store_cache(**kwargs):
+        return None
+
+    deps = {
+        "_get_ctx_stats": lambda _ctx: {"m1": {"count": 8, "mean": 0.7}},
+        "get_predictor": lambda model: _Pred(),
+        "asyncio": SimpleNamespace(to_thread=_to_thread, create_task=lambda coro: coro.close() if hasattr(coro, "close") else None),
+        "random": SimpleNamespace(random=lambda: 0.0),
+        "embed_text": lambda q: [0.1],
+        "compute_judge_probability": lambda **kwargs: 1.0,
+        "settings": SimpleNamespace(JUDGE_MIN_SAMPLE_RATE=0.0, get=lambda key, default=None: {"JUDGE_BACKGROUND_THROTTLE_ENABLED": "1"}.get(key, default)),
+        "logger": SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, exception=lambda *a, **k: None),
+        "judge_answer": lambda *a, **k: (_ for _ in ()).throw(RuntimeError("judge should not run")),
+        "compute_reward": lambda *a, **k: 0.5,
+        "bandit_update": lambda **kwargs: None,
+        "_persist_ema": lambda *a, **k: None,
+        "store_cache": _store_cache,
+        "insert_query_log": lambda **kwargs: logged.append(kwargs),
+        "ROUTER_QUALITY_AVG": metric,
+        "ROUTER_LOCAL_USAGE_RATIO": metric,
+        "FEEDBACK_PROCESSING_LATENCY": metric,
+        "FEEDBACK_BACKLOG_AGE": metric,
+        "FEEDBACK_TASK_FAILURES": metric,
+        "should_throttle_background_judge": lambda: True,
+    }
+    state = {"EMA_HISTORY": SimpleNamespace(get=lambda key: None, set=lambda key, value: None)}
+
+    await process_background_feedback_impl(
+        deps=deps,
+        state=state,
+        query="q",
+        answer="a",
+        chosen_model="ollama/m1",
+        modality="text",
+        latency_s=0.2,
+        cost_val=0.01,
+    )
+    assert logged[-1]["quality_source"] == "bandit_proxy"
+    assert logged[-1]["judge_sampled"] is False
 
 
 @pytest.mark.asyncio
@@ -326,6 +381,101 @@ async def test_router_execution_covers_cache_uq_and_metadata_error_paths():
     assert out["metadata"]["prompt_tokens"] == 0
     assert out["cost_per_1k"] == 0.0
     assert any("UQ fail" in msg or "Metadata error" in msg for msg in warnings)
+
+
+@pytest.mark.asyncio
+async def test_router_execution_passes_light_retrieval_hints():
+    """Execution helper should forward light-retrieval hints to the RAG builder."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+    captured = {}
+
+    async def _build_augmented_prompt(query, modality="text", image_b64=None, **kwargs):
+        captured.update(kwargs)
+        return "ctx"
+
+    async def _call_model(**kwargs):
+        return "ok", {"prompt_tokens": 1, "completion_tokens": 1, "cost_per_1k": 0.0}
+
+    deps["build_augmented_prompt"] = _build_augmented_prompt
+    deps["call_model"] = _call_model
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="Cite a policy oficial sobre recuperação paralela.",
+        system_prompt="SYS",
+        use_rag=True,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+        runtime_hints={
+            "workload_class": "knowledge_lookup",
+            "retrieval_mode": "light_retrieval",
+            "rag_top_k": 2,
+            "rag_context_token_budget": 320,
+            "rag_rerank_enabled": False,
+            "max_fallbacks": 1,
+        },
+    )
+
+    assert out["answer"] == "ok"
+    assert captured["k"] == 2
+    assert captured["retrieval_mode"] == "light_retrieval"
+    assert captured["context_token_budget"] == 320
+    assert captured["rerank_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_router_execution_avoids_augmented_prompt_when_retrieval_bundle_is_weak():
+    """Weak retrieval bundles should fall back to the plain query prompt and record the skip reason."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+
+    async def _build_retrieval_bundle(*args, **kwargs):
+        return {
+            "augmented_prompt": "ctx",
+            "context": "",
+            "citations": [],
+            "evidence_snippets": [],
+            "grounded": False,
+            "knowledge_version": "kv1",
+            "retrieval_mode": "light_retrieval",
+            "retrieval_skipped_reason": "insufficient_context_quality",
+        }
+
+    async def _call_model(**kwargs):
+        return "ok", {"prompt_tokens": 1, "completion_tokens": 1, "cost_per_1k": 0.0}
+
+    deps["build_retrieval_bundle"] = _build_retrieval_bundle
+    deps["call_model"] = _call_model
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="Cite a policy oficial sobre recuperação paralela.",
+        system_prompt="SYS",
+        use_rag=True,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+        runtime_hints={
+            "workload_class": "knowledge_lookup",
+            "retrieval_mode": "light_retrieval",
+            "rag_top_k": 2,
+            "rag_context_token_budget": 320,
+            "rag_rerank_enabled": False,
+            "needs_retrieval": True,
+        },
+    )
+
+    assert out["answer"] == "ok"
+    assert out["metadata"]["retrieval_skipped_reason"] == "insufficient_context_quality"
+    assert out["metadata"]["grounded"] is False
 
 
 @pytest.mark.asyncio

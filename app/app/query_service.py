@@ -147,7 +147,16 @@ def ensure_query_log() -> None:
         quality_source VARCHAR(32) DEFAULT 'unknown',
         judge_sampled TINYINT DEFAULT 0,
         predicted_error_prob FLOAT NULL,
+        confidence_score FLOAT NULL,
+        confidence_band VARCHAR(16) DEFAULT NULL,
+        abstained TINYINT DEFAULT 0,
+        abstain_reason VARCHAR(64) DEFAULT NULL,
+        grounded TINYINT DEFAULT 0,
+        verification_status VARCHAR(32) DEFAULT NULL,
+        knowledge_version VARCHAR(255) DEFAULT NULL,
+        review_status VARCHAR(32) DEFAULT NULL,
         latency_s FLOAT,
+        estimated_cost_usd FLOAT NULL,
         cost_per_1k FLOAT,
         reward FLOAT,
 
@@ -194,6 +203,15 @@ def ensure_query_log() -> None:
                     """
                 )
             )
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS confidence_score FLOAT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS confidence_band VARCHAR(16) DEFAULT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS abstained TINYINT DEFAULT 0"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS abstain_reason VARCHAR(64) DEFAULT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS grounded TINYINT DEFAULT 0"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS verification_status VARCHAR(32) DEFAULT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS knowledge_version VARCHAR(255) DEFAULT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status VARCHAR(32) DEFAULT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS estimated_cost_usd FLOAT NULL"))
         logger.info("[query_service] Tabela 'query_log' pronta (EXTENDIDA multimodal).")
     except SQLAlchemyError as exc:
         logger.warning("[query_service] Falha ao criar tabela query_log: %s", exc)
@@ -212,12 +230,20 @@ def insert_query_log(
     answer: str,
     image_output_b64: Optional[str],
     latency_s: float,
-    cost_per_1k: float,
+    estimated_cost_usd: float,
     quality: float,
     reward: float,
     quality_source: str = "unknown",
     judge_sampled: bool = False,
     predicted_error_prob: Optional[float] = None,
+    confidence_score: Optional[float] = None,
+    confidence_band: Optional[str] = None,
+    abstained: bool = False,
+    abstain_reason: Optional[str] = None,
+    grounded: bool = False,
+    verification_status: Optional[str] = None,
+    knowledge_version: Optional[str] = None,
+    review_status: Optional[str] = None,
     context_label: Optional[str] = None,
     raw_payload: dict | list | str | None = None,
 
@@ -243,14 +269,18 @@ def insert_query_log(
                      answer, image_output_b64,
                      query_embedding, answer_embedding,
                      quality, quality_source, judge_sampled, predicted_error_prob,
-                     latency_s, cost_per_1k, reward,
+                     confidence_score, confidence_band, abstained, abstain_reason,
+                     grounded, verification_status, knowledge_version, review_status,
+                     latency_s, estimated_cost_usd, cost_per_1k, reward,
                      context_label, raw_payload)
                     VALUES
-                    (:q, :m, :mod, :ip,
+                     (:q, :m, :mod, :ip,
                      :ans, :img,
                      :qemb, :aemb,
                      :qual, :quality_source, :judge_sampled, :predicted_error_prob,
-                     :lat, :cost, :rew,
+                     :confidence_score, :confidence_band, :abstained, :abstain_reason,
+                     :grounded, :verification_status, :knowledge_version, :review_status,
+                     :lat, :estimated_cost_usd, :cost, :rew,
                      :ctx, :payload)
                 """),
                 {
@@ -266,8 +296,17 @@ def insert_query_log(
                     "quality_source": quality_source,
                     "judge_sampled": 1 if judge_sampled else 0,
                     "predicted_error_prob": predicted_error_prob,
+                    "confidence_score": confidence_score,
+                    "confidence_band": confidence_band,
+                    "abstained": 1 if abstained else 0,
+                    "abstain_reason": abstain_reason,
+                    "grounded": 1 if grounded else 0,
+                    "verification_status": verification_status,
+                    "knowledge_version": knowledge_version,
+                    "review_status": review_status,
                     "lat": latency_s,
-                    "cost": cost_per_1k,
+                    "estimated_cost_usd": estimated_cost_usd,
+                    "cost": estimated_cost_usd,
                     "rew": reward,
                     "ctx": context_label,
                     "payload": _safe_json(raw_payload),
@@ -276,7 +315,7 @@ def insert_query_log(
 
         logger.info(
             f"[query_service] log inserido: model={model}, modality={modality}, "
-            f"reward={reward:.2f}, quality={quality:.2f}"
+            f"reward={reward:.2f}, quality={quality:.2f}, estimated_cost_usd={estimated_cost_usd:.4f}"
         )
 
     except SQLAlchemyError as exc:

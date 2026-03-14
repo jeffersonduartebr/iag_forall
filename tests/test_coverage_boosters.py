@@ -119,7 +119,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         answer="a",
         image_output_b64=None,
         latency_s=0.1,
-        cost_per_1k=0.0,
+        estimated_cost_usd=0.0,
         quality=8.0,
         reward=0.8,
         context_label="ctx",

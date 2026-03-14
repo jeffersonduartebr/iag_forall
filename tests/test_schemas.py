@@ -339,15 +339,14 @@ class TestQueryResponse:
 
     def test_valid_query_response(self):
         """Test valid QueryResponse creation."""
-        from app.schemas import QueryResponse, RouteDecision
+        from app.schemas import QueryResponse, ResponseDiagnostics, RouteDecision
 
         response = QueryResponse(
             answer="This is the answer to your question.",
             model="gpt-4o",
             modality="text",
             correlation_id="abc-123",
-            route=RouteDecision(chosen_model="gpt-4o"),
-            candidates=[],
+            diagnostics=ResponseDiagnostics(route=RouteDecision(chosen_model="gpt-4o"), candidates=[]),
         )
 
         assert response.answer == "This is the answer to your question."
@@ -356,38 +355,66 @@ class TestQueryResponse:
 
     def test_response_with_image(self):
         """Test QueryResponse with image output."""
-        from app.schemas import QueryResponse, RouteDecision
+        from app.schemas import QueryResponse, ResponseDiagnostics, RouteDecision
 
         response = QueryResponse(
             answer="Here's the generated image",
             model="dall-e-3",
             modality="vision",
             image_output_b64="base64imagedata",
-            route=RouteDecision(
-                chosen_model="dall-e-3",
-                modality_selected="vision",
-                is_multimodal_route=True,
+            diagnostics=ResponseDiagnostics(
+                route=RouteDecision(
+                    chosen_model="dall-e-3",
+                    modality_selected="vision",
+                    is_multimodal_route=True,
+                ),
             ),
         )
 
         assert response.image_output_b64 == "base64imagedata"
-        assert response.route.is_multimodal_route is True
+        assert response.diagnostics.route.is_multimodal_route is True
 
     def test_response_with_candidates(self):
         """Test QueryResponse with candidate results."""
-        from app.schemas import QueryResponse, RouteDecision, CandidateResult
+        from app.schemas import CandidateResult, QueryResponse, ResponseDiagnostics, RouteDecision
 
         response = QueryResponse(
             answer="Final answer",
             model="gpt-4o",
-            route=RouteDecision(chosen_model="gpt-4o"),
-            candidates=[
-                CandidateResult(model="gpt-4o", output="Answer 1"),
-                CandidateResult(model="claude-3", output="Answer 2"),
-            ],
+            diagnostics=ResponseDiagnostics(
+                route=RouteDecision(chosen_model="gpt-4o"),
+                candidates=[
+                    CandidateResult(model="gpt-4o", output="Answer 1"),
+                    CandidateResult(model="claude-3", output="Answer 2"),
+                ],
+            ),
         )
 
-        assert len(response.candidates) == 2
+        assert len(response.diagnostics.candidates) == 2
+
+    def test_response_with_grounding_and_review_metadata(self):
+        """QueryResponse should accept confidence, grounding, and review fields."""
+        from app.schemas import ConfidenceBand, EvidenceSnippet, QueryResponse, ResponseCitation, ResponseDiagnostics, ResponseProvenance, ReviewStatus, RouteDecision, VerificationStatus
+
+        response = QueryResponse(
+            answer="A fotossintese transforma luz em energia quimica.",
+            model="ollama/qwen3.5:4b",
+            diagnostics=ResponseDiagnostics(route=RouteDecision(chosen_model="ollama/qwen3.5:4b")),
+            confidence_score=0.82,
+            confidence_band=ConfidenceBand.HIGH,
+            provenance=ResponseProvenance(
+                grounded=True,
+                citations=[ResponseCitation(doc_id="doc-1", rank=1, source="manual", snippet="A fotossintese converte luz...", score=0.91)],
+                evidence_snippets=[EvidenceSnippet(doc_id="doc-1", text="A fotossintese converte luz em energia.", rank=1)],
+                knowledge_version="text_embeddings_nomic_embed_text|sparse_v1",
+            ),
+            verification_status=VerificationStatus.SUPPORTED,
+            review_status=ReviewStatus.AUTO_APPROVED,
+        )
+
+        assert response.provenance.grounded is True
+        assert response.provenance.citations[0].doc_id == "doc-1"
+        assert response.review_status == ReviewStatus.AUTO_APPROVED
 
 
 class TestSchemaJsonSerialization:
@@ -407,19 +434,41 @@ class TestSchemaJsonSerialization:
 
     def test_query_response_to_json(self):
         """Test QueryResponse JSON serialization."""
-        from app.schemas import QueryResponse, RouteDecision
+        from app.schemas import QueryResponse, ResponseDiagnostics, RouteDecision
         import json
 
         response = QueryResponse(
             answer="Test answer",
             model="test-model",
-            route=RouteDecision(chosen_model="test-model"),
+            diagnostics=ResponseDiagnostics(route=RouteDecision(chosen_model="test-model")),
         )
         json_str = response.model_dump_json()
         parsed = json.loads(json_str)
 
         assert parsed["answer"] == "Test answer"
-        assert parsed["route"]["chosen_model"] == "test-model"
+        assert parsed["diagnostics"]["route"]["chosen_model"] == "test-model"
+
+    def test_query_response_serializes_citations(self):
+        """Grounding metadata should survive JSON serialization."""
+        from app.schemas import QueryResponse, ResponseDiagnostics, ResponseProvenance, RouteDecision
+        import json
+
+        response = QueryResponse(
+            answer="Resposta ancorada",
+            model="test-model",
+            diagnostics=ResponseDiagnostics(route=RouteDecision(chosen_model="test-model")),
+            provenance=ResponseProvenance(
+                grounded=True,
+                citations=[{"doc_id": "doc-1", "rank": 1, "source": "kb"}],
+                evidence_snippets=[{"doc_id": "doc-1", "text": "trecho", "rank": 1}],
+            ),
+            verification_status="supported",
+        )
+        parsed = json.loads(response.model_dump_json())
+
+        assert parsed["provenance"]["grounded"] is True
+        assert parsed["provenance"]["citations"][0]["doc_id"] == "doc-1"
+        assert parsed["verification_status"] == "supported"
 
 
 class TestSchemaEdgeCases:
@@ -470,14 +519,14 @@ class TestSchemaEdgeCases:
 
     def test_very_long_answer(self):
         """Test that very long answers are accepted."""
-        from app.schemas import QueryResponse, RouteDecision
+        from app.schemas import QueryResponse, ResponseDiagnostics, RouteDecision
 
         long_answer = "x" * 100000  # 100K chars
 
         response = QueryResponse(
             answer=long_answer,
             model="test",
-            route=RouteDecision(chosen_model="test"),
+            diagnostics=ResponseDiagnostics(route=RouteDecision(chosen_model="test")),
         )
 
         assert len(response.answer) == 100000

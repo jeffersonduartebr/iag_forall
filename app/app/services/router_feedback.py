@@ -33,6 +33,14 @@ async def process_background_feedback_impl(
             deps["FEEDBACK_BACKLOG_AGE"].set(max(0.0, time.time() - float(enqueued_at)))
         except Exception:
             pass
+    confidence_score = raw_payload_dict.get("confidence_score")
+    confidence_band = raw_payload_dict.get("confidence_band")
+    grounded = bool(raw_payload_dict.get("grounded"))
+    abstained = bool(raw_payload_dict.get("abstained"))
+    abstain_reason = raw_payload_dict.get("abstain_reason")
+    verification_status = raw_payload_dict.get("verification_status")
+    knowledge_version = raw_payload_dict.get("knowledge_version")
+    review_status = raw_payload_dict.get("review_status")
     try:
         stats = deps["_get_ctx_stats"]("global")
         model_stats = stats.get(chosen_model, {})
@@ -48,9 +56,17 @@ async def process_background_feedback_impl(
             chosen_model=chosen_model,
             min_sample_rate=deps["settings"].JUDGE_MIN_SAMPLE_RATE,
         )
-
-        should_judge = deps["random"].random() < prob_judge
-        quality_source = "bandit_proxy"
+        background_throttle_enabled = str(getattr(deps["settings"], "get", lambda k, d=None: d)("JUDGE_BACKGROUND_THROTTLE_ENABLED", "1")).strip() == "1"
+        if background_throttle_enabled and deps.get("should_throttle_background_judge", lambda: False)():
+            should_judge = False
+            quality_source = "bandit_proxy"
+            try:
+                deps["logger"].info("[Background] Judge throttled to preserve interactive Ollama capacity")
+            except Exception:
+                pass
+        else:
+            should_judge = deps["random"].random() < prob_judge
+            quality_source = "bandit_proxy"
 
         if should_judge:
             try:
@@ -155,11 +171,19 @@ async def process_background_feedback_impl(
                 answer=answer,
                 image_output_b64=None,
                 latency_s=latency_s,
-                cost_per_1k=cost_val,
+                estimated_cost_usd=cost_val,
                 quality=final_quality,
                 quality_source=quality_source,
                 judge_sampled=should_judge,
                 predicted_error_prob=float(predicted_error_prob),
+                confidence_score=float(confidence_score) if confidence_score is not None else None,
+                confidence_band=str(confidence_band) if confidence_band else None,
+                abstained=abstained,
+                abstain_reason=str(abstain_reason) if abstain_reason else None,
+                grounded=grounded,
+                verification_status=str(verification_status) if verification_status else None,
+                knowledge_version=str(knowledge_version) if knowledge_version else None,
+                review_status=str(review_status) if review_status else None,
                 reward=reward,
                 context_label="async_processed",
                 raw_payload=raw_payload,

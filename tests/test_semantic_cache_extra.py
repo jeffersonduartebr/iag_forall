@@ -161,6 +161,39 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert any(item[0] == "observe" for item in metric_latency.values)
 
 
+@pytest.mark.asyncio
+async def test_check_cache_handles_l1_and_metric_failures(monkeypatch):
+    """Cache lookup should survive L1 hits and instrumentation failures without breaking the result."""
+    class _BrokenMetric:
+        def inc(self, *args, **kwargs):
+            raise RuntimeError("metric fail")
+
+        def set(self, *args, **kwargs):
+            raise RuntimeError("metric fail")
+
+        def labels(self, **kwargs):
+            raise RuntimeError("metric fail")
+
+        def observe(self, *args, **kwargs):
+            raise RuntimeError("metric fail")
+
+    class _L1:
+        def get(self, key):
+            return {"text": "cached", "model_used": "m"}
+
+        def stats(self):
+            return {"size": 1}
+
+    monkeypatch.setattr(sc, "_l1_cache", _L1())
+    monkeypatch.setattr(sc, "L1_CACHE_HITS", _BrokenMetric())
+    monkeypatch.setattr(sc, "L1_CACHE_SIZE", _BrokenMetric())
+    monkeypatch.setattr(sc, "SEMANTIC_CACHE_LOOKUP_TOTAL", _BrokenMetric())
+    monkeypatch.setattr(sc, "SEMANTIC_CACHE_LATENCY", _BrokenMetric())
+
+    out = await sc.check_cache("q")
+    assert out["text"] == "cached"
+
+
 def test_extract_first_result_guards_partial_payloads():
     """Testa extração defensiva do primeiro resultado do Chroma."""
     assert sc._extract_first_result({}) == (None, None)
@@ -249,3 +282,92 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     sc.reset_cache_stats()
     assert l1._hits == 0
     assert l1._misses == 0
+
+
+@pytest.mark.asyncio
+async def test_store_cache_handles_metric_and_judge_failures(monkeypatch):
+    """Cache storage should keep working when metrics and judge calibration updates fail."""
+    stored = []
+
+    class _L1:
+        def __init__(self):
+            self.saved = []
+
+        def store(self, key, value):
+            self.saved.append((key, value))
+
+        def stats(self):
+            return {"hits": 0, "misses": 0, "size": 1, "maxsize": 10}
+
+    class _BrokenMetric:
+        def set(self, value):
+            raise RuntimeError("metric down")
+
+    async def _add_document(**kwargs):
+        stored.append(kwargs)
+        return True
+
+    monkeypatch.setattr(sc, "_l1_cache", _L1())
+    monkeypatch.setattr(sc, "L1_CACHE_SIZE", _BrokenMetric())
+    monkeypatch.setattr(sc, "add_document", _add_document)
+
+    import builtins
+    real_import = builtins.__import__
+
+    def _import(name, *args, **kwargs):
+        if name.endswith(".judges") or name == "app.judges":
+            raise RuntimeError("judge import fail")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+    await sc.store_cache("q2", "a2", model_used="m2")
+    assert stored and stored[0]["modality"] == "cache"
+
+
+@pytest.mark.asyncio
+async def test_store_cache_and_tuning_failure_paths(monkeypatch):
+    """Storage and threshold tuning should degrade gracefully on downstream failures."""
+    class _L1:
+        def __init__(self):
+            self._hits = 55
+            self._misses = 45
+            self._lock = threading.Lock()
+
+        def store(self, key, value):
+            return None
+
+        def stats(self):
+            return {"hits": self._hits, "misses": self._misses, "size": 0, "maxsize": 10}
+
+    async def _broken_add_document(**kwargs):
+        raise RuntimeError("persist fail")
+
+    monkeypatch.setattr(sc, "_l1_cache", _L1())
+    monkeypatch.setattr(sc, "add_document", _broken_add_document)
+    await sc.store_cache("q3", "a3")
+
+    fake_settings = SimpleNamespace(
+        CACHE_THRESHOLD_ADAPT_ENABLED=True,
+        CACHE_HIT_RATE_TARGET=0.5,
+        CACHE_THRESHOLD_MIN=0.7,
+        CACHE_THRESHOLD_MAX=0.99,
+        get=lambda k, d=None: 0.7 if k == "CACHE_THRESHOLD" else d,
+        set=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("set fail")),
+    )
+    monkeypatch.setattr(sc, "settings", fake_settings)
+    assert await sc.tune_cache_threshold() is None
+
+    fake_settings2 = SimpleNamespace(
+        CACHE_THRESHOLD_ADAPT_ENABLED=True,
+        CACHE_HIT_RATE_TARGET=0.5,
+        CACHE_THRESHOLD_MIN=0.7,
+        CACHE_THRESHOLD_MAX=0.99,
+        get=lambda k, d=None: 0.8 if k == "CACHE_THRESHOLD" else d,
+        set=lambda *a, **k: None,
+    )
+    monkeypatch.setattr(sc, "settings", fake_settings2)
+    monkeypatch.setattr(sc, "get_cache_threshold", lambda: 0.8)
+    monkeypatch.setattr(sc.logger, "debug", lambda *a, **k: None)
+    sc._l1_cache._hits = 1
+    sc._l1_cache._misses = 1
+    assert await sc.tune_cache_threshold() is None

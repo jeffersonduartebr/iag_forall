@@ -183,6 +183,30 @@ FALLBACK_USED = Counter(
     ["first_model", "second_model"],
     registry=registry,
 )
+RESPONSE_ABSTAIN_TOTAL = Counter(
+    "router_response_abstain_total",
+    "Responses intentionally abstained for safety or low confidence",
+    ["reason"],
+    registry=registry,
+)
+RESPONSE_GROUNDED_TOTAL = Counter(
+    "router_response_grounded_total",
+    "Grounded versus ungrounded final responses",
+    ["grounded"],
+    registry=registry,
+)
+RESPONSE_VERIFICATION_STATUS = Counter(
+    "router_response_verification_total",
+    "Verification outcomes for final responses",
+    ["status"],
+    registry=registry,
+)
+RESPONSE_REVIEW_STATUS = Counter(
+    "router_response_review_total",
+    "Review lifecycle state assigned to final responses",
+    ["status"],
+    registry=registry,
+)
 
 # ------------------------------------------------------------
 # 3. CANDIDATOS & JUÍZES
@@ -383,6 +407,67 @@ RATE_LIMIT_EXCEEDED = Counter(
     "Total requests rejected due to rate limiting",
     ["client_ip"],
     registry=registry,
+)
+ADAPTIVE_LIMITER_STATE = Gauge(
+    "adaptive_limiter_state",
+    "Current adaptive admission-control state (0=normal, 1=elevated, 2=congested)",
+    registry=registry,
+)
+ADAPTIVE_LIMITER_REJECTIONS = Counter(
+    "adaptive_limiter_rejections_total",
+    "Total requests rejected by the adaptive admission limiter",
+    ["route_class", "identity_type", "reason", "pressure_state"],
+    registry=registry,
+)
+ADAPTIVE_LIMITER_IDENTITY_BUCKETS = Gauge(
+    "adaptive_limiter_identity_buckets",
+    "Approximate number of active adaptive-limiter identity buckets by backend",
+    ["backend"],
+    registry=registry,
+)
+ADAPTIVE_LIMITER_OVERLOAD_EVENTS = Counter(
+    "adaptive_limiter_overload_events_total",
+    "Total adaptive-limiter overload state transitions",
+    ["pressure_state"],
+    registry=registry,
+)
+QUERY_JOBS_QUEUED = Counter(
+    "query_jobs_queued_total",
+    "Total query requests deferred to the async job queue",
+    ["reason"],
+    registry=registry,
+)
+QUERY_JOBS_COMPLETED = Counter(
+    "query_jobs_completed_total",
+    "Total async query jobs completed successfully",
+    registry=registry,
+)
+QUERY_JOBS_FAILED = Counter(
+    "query_jobs_failed_total",
+    "Total async query jobs that ended in failure",
+    registry=registry,
+)
+QUERY_JOBS_EXPIRED = Counter(
+    "query_jobs_expired_total",
+    "Total async query jobs that expired before retrieval",
+    registry=registry,
+)
+QUERY_JOB_QUEUE_SIZE = Gauge(
+    "query_job_queue_size",
+    "Approximate number of queued query jobs waiting or running",
+    registry=registry,
+)
+QUERY_JOB_WAIT_SECONDS = Histogram(
+    "query_job_wait_seconds",
+    "Time spent waiting in the async query queue before execution",
+    registry=registry,
+    buckets=(0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+)
+QUERY_JOB_EXECUTION_SECONDS = Histogram(
+    "query_job_execution_seconds",
+    "Execution time for queued query jobs",
+    registry=registry,
+    buckets=(0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
 )
 
 # ------------------------------------------------------------

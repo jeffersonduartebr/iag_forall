@@ -57,5 +57,6 @@ celery_app.conf.update(
     task_routes={
         "app.tasks.task_process_feedback": {"queue": "feedback_queue"},
         "app.tasks.task_execute_eval_run": {"queue": "feedback_queue"},
+        "app.tasks.task_execute_query_job": {"queue": "celery"},
     }
 )

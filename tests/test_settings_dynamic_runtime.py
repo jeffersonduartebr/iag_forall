@@ -208,3 +208,81 @@ def test_load_json_list_and_resilient_failures(monkeypatch):
 
     monkeypatch.setattr(sd, "engine", SimpleNamespace(pool=property(lambda self: None)))
     assert sd.get_db_pool_stats()["size"] == 0
+
+
+def test_bootstrap_engine_proxy_and_snapshot_resilience(monkeypatch):
+    """Bootstrap helpers should fall back cleanly and snapshot should tolerate getter failures."""
+    class _Engine:
+        pool = "pool-obj"
+
+        def begin(self):
+            return "begin"
+
+        def connect(self):
+            return "connect"
+
+    monkeypatch.setitem(__import__("sys").modules, "app.db", SimpleNamespace(get_engine=lambda: _Engine()))
+    assert sd._get_settings_engine().pool == "pool-obj"
+    assert sd.engine.begin() == "begin"
+    assert sd.engine.connect() == "connect"
+    assert sd.engine.pool == "pool-obj"
+
+    monkeypatch.delitem(__import__("sys").modules, "app.db", raising=False)
+    captured = {}
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "sqlalchemy",
+        SimpleNamespace(create_engine=lambda url, **kwargs: captured.setdefault("value", (url, kwargs)) or "engine"),
+    )
+    fallback = sd._get_settings_engine()
+    assert fallback == captured["value"]
+
+    settings = sd.DynamicSettings()
+    monkeypatch.setattr(settings, "get", lambda key, default=None: (_ for _ in ()).throw(RuntimeError("lookup fail")) if key == "DB_HOST" else f"value:{key}")
+    snap = settings.snapshot(only_known=False)
+    assert snap["DB_HOST"] is None
+    assert snap["DB_USER"] == "value:DB_USER"
+
+
+def test_set_snapshot_keys_and_listener_guards(monkeypatch):
+    """Dynamic settings helpers should tolerate DB/Redis publish failures and listener reentry."""
+    warnings = []
+    infos = []
+    monkeypatch.setattr(sd.logger, "warning", lambda msg: warnings.append(msg))
+    monkeypatch.setattr(sd.logger, "info", lambda msg: infos.append(msg))
+
+    class _BrokenConn:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("db fail")
+
+    class _Ctx:
+        def __enter__(self):
+            return _BrokenConn()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Redis:
+        def set(self, *args, **kwargs):
+            return None
+
+        def publish(self, *args, **kwargs):
+            raise RuntimeError("publish fail")
+
+    monkeypatch.setattr(sd, "engine", SimpleNamespace(begin=lambda: _Ctx()))
+    monkeypatch.setattr(sd, "_get_rds", lambda: _Redis())
+    invalidated = []
+    monkeypatch.setattr(sd, "_invalidate_cache", lambda: invalidated.append(True))
+
+    settings = sd.DynamicSettings()
+    settings.set("MAX_TOKENS_DEFAULT", "2048", actor="test", source="unit")
+    assert invalidated
+    assert warnings
+    assert infos
+
+    keys = settings.keys("runtime")
+    assert "MAX_TOKENS_DEFAULT" in keys
+    assert settings.metadata("MAX_TOKENS_DEFAULT")
+
+    sd._reload_listener_thread = SimpleNamespace(is_alive=lambda: True)
+    sd.start_reload_listener()

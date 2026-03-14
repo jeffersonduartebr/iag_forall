@@ -30,6 +30,7 @@ from .providers_async import (
     _ensure_ollama_model,
     ProviderCallError,
     apply_ollama_performance_preferences,
+    should_throttle_background_judge,
 )
 from .router_strategy import choose_top2_models
 from .semantic_cache import check_cache, store_cache
@@ -38,7 +39,7 @@ from .db import get_engine
 from .bandits import select_model, bandit_update, compute_reward, _get_ctx_stats
 from .judges import judge_answer
 from .metrics_collector import update_model_metrics
-from .rag_local import build_augmented_prompt
+from .rag_local import build_augmented_prompt, build_retrieval_bundle
 from .embeddings import embed_text
 from .query_service import insert_query_log, ensure_query_log
 from .online_predictor import get_predictor  # <--- NOVO IMPORT
@@ -429,6 +430,7 @@ async def _route_and_answer_internal(
     image_b64: str | None = None,
     rag_modality: str = "text",
     use_cache: bool = True,
+    runtime_hints: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Internal implementation of route_and_answer.
@@ -460,6 +462,7 @@ async def _route_and_answer_internal(
             "apply_ollama_performance_preferences": apply_ollama_performance_preferences,
             "_ensure_ollama_model": _ensure_ollama_model,
             "build_augmented_prompt": build_augmented_prompt,
+            "build_retrieval_bundle": build_retrieval_bundle,
             "build_final_prompt": build_final_prompt,
             "_safe_setting_bool": _safe_setting_bool,
             "_safe_setting_int": _safe_setting_int,
@@ -478,6 +481,7 @@ async def _route_and_answer_internal(
         image_b64=image_b64,
         rag_modality=rag_modality,
         use_cache=use_cache,
+        runtime_hints=runtime_hints,
     )
 
 
@@ -493,6 +497,7 @@ async def route_and_answer(
     use_cache: bool = True,
     timeout_seconds: int | None = None,
     deduplicate: bool = True,
+    runtime_hints: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Execute the route and answer routine.
 
@@ -513,6 +518,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             image_b64=image_b64,
             rag_modality=rag_modality,
             use_cache=use_cache,
+            runtime_hints=runtime_hints,
         )
 
     try:
@@ -602,6 +608,7 @@ async def process_background_feedback(
             "FEEDBACK_PROCESSING_LATENCY": FEEDBACK_PROCESSING_LATENCY,
             "FEEDBACK_BACKLOG_AGE": FEEDBACK_BACKLOG_AGE,
             "FEEDBACK_TASK_FAILURES": FEEDBACK_TASK_FAILURES,
+            "should_throttle_background_judge": should_throttle_background_judge,
         },
         state={"EMA_HISTORY": EMA_HISTORY},
         query=query,

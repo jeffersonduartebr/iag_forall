@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException
 
@@ -13,6 +13,7 @@ from ..ab_testing import ExperimentCreateRequest, ExperimentStatus, get_ab_test_
 from ..api.deps import require_admin
 from ..reliability import get_cascade_detector, get_circuit_breaker_manager
 from ..runtime_state import reset_runtime_state
+from ..schemas import AdminSettingsUpdateRequest
 from ..settings_dynamic import settings
 
 router = APIRouter()
@@ -38,10 +39,11 @@ def get_settings_catalog(x_admin_token: Optional[str] = Header(None)):
 
 
 @router.put("/admin/settings", tags=["Admin"])
-def update_settings(payload: Dict[str, Any], x_admin_token: Optional[str] = Header(None)):
+def update_settings(payload: AdminSettingsUpdateRequest, x_admin_token: Optional[str] = Header(None)):
     """Update dynamic settings."""
     require_admin(x_admin_token)
-    validation = settings.validate_runtime_updates(payload)
+    updates = dict(payload.settings or {})
+    validation = settings.validate_runtime_updates(updates)
     if validation["unknown"]:
         raise HTTPException(
             status_code=400,
@@ -58,7 +60,7 @@ def update_settings(payload: Dict[str, Any], x_admin_token: Optional[str] = Head
                 "keys": validation["requires_restart"],
             },
         )
-    for key, value in payload.items():
+    for key, value in updates.items():
         serialized = value if isinstance(value, str) else json.dumps(value) if isinstance(value, (list, dict)) else str(value)
         settings.set(key, serialized, actor="api", source="admin")
     return {"status": "updated", "applied": validation["runtime_safe"]}

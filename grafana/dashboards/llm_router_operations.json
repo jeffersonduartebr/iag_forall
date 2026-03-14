@@ -631,18 +631,18 @@
       },
       "targets": [
         {
-          "expr": "dependency_circuit_state",
-          "legendFormat": "{{dependency}} state",
+          "expr": "component_health_status",
+          "legendFormat": "{{component}} health",
           "refId": "A"
         },
         {
-          "expr": "sum by (dependency) (increase(dependency_failures_total[15m]))",
-          "legendFormat": "{{dependency}} falhas",
+          "expr": "sum by (model, outcome) (increase(router_query_outcome_total{outcome=~\"provider_.*\"}[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} {{outcome}}",
           "refId": "B"
         },
         {
-          "expr": "sum by (stage) (increase(feedback_task_failures_total[15m]))",
-          "legendFormat": "{{stage}} feedback",
+          "expr": "ollama_dynamic_concurrency_telemetry_failures_total or on() vector(0)",
+          "legendFormat": "telemetria concorrencia ollama",
           "refId": "C"
         }
       ],
@@ -669,7 +669,7 @@
           "type": "prometheus",
           "uid": "prometheus_llm_router"
         },
-        "definition": "label_values(providers_model_requests_total, model)",
+        "definition": "label_values(provider_inflight_requests, model)",
         "hide": 0,
         "includeAll": true,
         "label": "Modelo",
@@ -677,7 +677,7 @@
         "name": "model",
         "options": [],
         "query": {
-          "query": "label_values(providers_model_requests_total, model)",
+          "query": "label_values(provider_inflight_requests, model)",
           "refId": "Prometheus-model"
         },
         "refresh": 1,

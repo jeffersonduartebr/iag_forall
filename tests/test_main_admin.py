@@ -57,6 +57,7 @@ def test_require_admin(monkeypatch):
 def test_admin_settings_endpoints(monkeypatch):
     """Settings endpoints live in admin_routes and preserve payload behavior."""
     from app.api import admin_routes
+    from app.schemas import AdminSettingsUpdateRequest
 
     _set_admin_token(monkeypatch, "abc")
     monkeypatch.setattr(admin_routes.settings, "snapshot", lambda: {"ok": True})
@@ -80,7 +81,7 @@ def test_admin_settings_endpoints(monkeypatch):
     catalog = admin_routes.get_settings_catalog("abc")
     assert catalog["settings"]["MAX_TOKENS_DEFAULT"]["mutability"] == "runtime_safe"
 
-    out = admin_routes.update_settings({"a": 1, "b": {"k": "v"}}, "abc")
+    out = admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"a": 1, "b": {"k": "v"}}), "abc")
     assert out["status"] == "updated"
     assert out["applied"] == ["a", "b"]
     assert calls[0] == ("a", "1", "api", "admin")
@@ -90,6 +91,7 @@ def test_admin_settings_endpoints(monkeypatch):
 def test_admin_settings_reject_unknown_or_restart_required(monkeypatch):
     """Admin settings updates should reject unknown or restart-only keys."""
     from app.api import admin_routes
+    from app.schemas import AdminSettingsUpdateRequest
 
     _set_admin_token(monkeypatch, "abc")
 
@@ -99,7 +101,7 @@ def test_admin_settings_reject_unknown_or_restart_required(monkeypatch):
         lambda payload: {"runtime_safe": [], "requires_restart": ["OLLAMA_HOST"], "unknown": []},
     )
     with pytest.raises(HTTPException) as exc:
-        admin_routes.update_settings({"OLLAMA_HOST": "http://x"}, "abc")
+        admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"OLLAMA_HOST": "http://x"}), "abc")
     assert exc.value.status_code == 409
 
     monkeypatch.setattr(
@@ -108,7 +110,7 @@ def test_admin_settings_reject_unknown_or_restart_required(monkeypatch):
         lambda payload: {"runtime_safe": [], "requires_restart": [], "unknown": ["CUSTOM_X"]},
     )
     with pytest.raises(HTTPException) as exc:
-        admin_routes.update_settings({"CUSTOM_X": "1"}, "abc")
+        admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"CUSTOM_X": "1"}), "abc")
     assert exc.value.status_code == 400
 
 

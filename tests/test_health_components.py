@@ -154,3 +154,35 @@ async def test_component_to_dict_and_liveness():
 
     live = await health.get_liveness_check()
     assert live["status"] == "alive"
+
+
+@pytest.mark.asyncio
+async def test_full_health_handles_exception_results_and_degraded_readiness(monkeypatch):
+    """Full health should classify exception entries and readiness should honor degraded mode."""
+    async def _redis():
+        return health.ComponentHealth(name="redis", healthy=False)
+
+    async def _db():
+        return health.ComponentHealth(name="mariadb", healthy=True)
+
+    async def _vector_fail():
+        raise RuntimeError("vector fail")
+
+    monkeypatch.setattr(health, "check_redis_health", _redis)
+    monkeypatch.setattr(health, "check_database_health", _db)
+    monkeypatch.setattr(health, "check_vectorstore_health", _vector_fail)
+    monkeypatch.setattr(health, "check_ollama_health", _db)
+    monkeypatch.setattr(health, "check_circuit_breakers_health", _db)
+
+    health.invalidate_health_cache()
+    result = await health.get_full_health_check(force_refresh=True)
+    assert result["status"] in {"degraded", "unhealthy"}
+    assert "unknown" in result["components"]
+
+    monkeypatch.setenv("READINESS_MODE", "degraded")
+    ready = await health.get_readiness_check()
+    assert ready["status"] == "ready"
+
+    monkeypatch.setenv("READINESS_MODE", "strict")
+    not_ready = await health.get_readiness_check()
+    assert not_ready["status"] == "not_ready"

@@ -36,6 +36,59 @@ def test_vectorstore_helpers_and_collection_name(monkeypatch):
     assert vs._ensure_list_of_floats("x") == [0.0]
 
 
+def test_connect_local_get_client_and_init_paths(monkeypatch, tmp_path):
+    """Vectorstore bootstrap helpers should handle success, caching, and startup failures."""
+    created_paths = []
+    logged_errors = []
+
+    class _Client:
+        def __init__(self):
+            self.collections = []
+
+        def get_or_create_collection(self, name, metadata=None):
+            self.collections.append((name, metadata))
+            return {"name": name}
+
+    client = _Client()
+    monkeypatch.setattr(vs, "CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(vs.os, "makedirs", lambda path, exist_ok=False: created_paths.append((path, exist_ok)))
+    monkeypatch.setattr(vs.chromadb, "PersistentClient", lambda path: client)
+    monkeypatch.setattr(vs.logger, "error", lambda msg: logged_errors.append(msg))
+    monkeypatch.setattr(vs, "chroma_client", None)
+
+    connected = vs._connect_local()
+    assert connected is client
+    assert created_paths
+
+    calls = {"count": 0}
+
+    def _connect_once():
+        calls["count"] += 1
+        return client
+
+    monkeypatch.setattr(vs, "_connect_local", _connect_once)
+    vs.reset_vectorstore_runtime_state()
+    assert vs.get_chroma_client() is client
+    assert vs.get_chroma_client() is client
+    assert calls["count"] == 1
+
+    vs.init_vectorstore()
+    assert len(client.collections) == 4
+
+    def _boom():
+        raise RuntimeError("boot fail")
+
+    monkeypatch.setattr(vs, "_connect_local", _boom)
+    vs.reset_vectorstore_runtime_state()
+    with pytest.raises(RuntimeError, match="boot fail"):
+        vs.get_chroma_client()
+
+    monkeypatch.setattr(vs, "get_chroma_client", lambda: (_ for _ in ()).throw(RuntimeError("init fail")))
+    with pytest.raises(RuntimeError, match="init fail"):
+        vs.init_vectorstore()
+    assert logged_errors
+
+
 @pytest.mark.asyncio
 async def test_get_or_create_collection_async_with_versioning(monkeypatch):
     """Testa get or create collection async with versioning."""
@@ -173,6 +226,18 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(vs, "chroma_client", qother_client)
     assert vs._query_embedding_sync("cq2", [1, 2], 3) == {}
 
+    class _QDeleteFail(_ColOK):
+        def query(self, **kwargs):
+            raise RuntimeError("dimension does not match")
+
+    class _DeleteFailClient(_Client):
+        def delete_collection(self, name):
+            raise RuntimeError("delete failed")
+
+    qdelete_client = _DeleteFailClient(_QDeleteFail())
+    monkeypatch.setattr(vs, "chroma_client", qdelete_client)
+    assert vs._query_embedding_sync("cq3", [1, 2], 3) == {}
+
 
 @pytest.mark.asyncio
 async def test_add_query_reset_and_health(monkeypatch):
@@ -241,3 +306,5 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(vs, "chroma_client", _BadClient())
     await vs.reset_collections()
     assert await vs.health_async() is False
+    vs.reset_vectorstore_runtime_state()
+    assert vs.chroma_client is None

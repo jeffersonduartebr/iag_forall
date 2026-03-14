@@ -96,7 +96,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(router_response_empty_total[15m]))",
+          "expr": "sum(increase(router_query_outcome_total{outcome=\"empty_answer\"}[15m])) or on() vector(0)",
           "refId": "A"
         }
       ],
@@ -137,7 +137,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(router_retry_total[15m]))",
+          "expr": "sum(increase(router_retry_total[15m])) or on() vector(0)",
           "refId": "A"
         }
       ],
@@ -178,7 +178,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(router_fallback_used_total[15m]))",
+          "expr": "sum(increase(router_query_outcome_total{outcome=\"fallback_success\"}[15m])) or on() vector(0)",
           "refId": "A"
         }
       ],
@@ -219,7 +219,7 @@
       },
       "targets": [
         {
-          "expr": "max by (policy_version) (policy_version_active)",
+          "expr": "max by (policy_version) (policy_version_active) or on() vector(0)",
           "refId": "A"
         }
       ],
@@ -284,8 +284,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason, model) (increase(router_response_empty_total{model=~\"$model\"}[15m]))",
-          "legendFormat": "{{model}} {{reason}}",
+          "expr": "sum by (model) (increase(router_query_outcome_total{outcome=\"empty_answer\",model=~\"$model\", modality=~\"$modality\"}[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} empty_answer",
           "refId": "A"
         }
       ],
@@ -360,8 +360,8 @@
           "refId": "A"
         },
         {
-          "expr": "sum by (first_model, second_model) (increase(router_fallback_used_total[15m])) or on() vector(0)",
-          "legendFormat": "{{first_model}} -> {{second_model}}",
+          "expr": "sum by (model) (increase(router_query_outcome_total{outcome=\"fallback_success\",model=~\"$model\", modality=~\"$modality\"}[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} fallback_success",
           "refId": "B"
         },
         {
@@ -489,8 +489,8 @@
           "refId": "B"
         },
         {
-          "expr": "sum by (experiment_id, variant) (increase(ab_experiment_assignments_total[15m])) or on() vector(0)",
-          "legendFormat": "{{experiment_id}} {{variant}}",
+          "expr": "vector(0)",
+          "legendFormat": "experimentos inativos",
           "refId": "C"
         }
       ],
@@ -575,13 +575,13 @@
           "refId": "A"
         },
         {
-          "expr": "sum by (stage) (increase(feedback_task_failures_total[15m]))",
-          "legendFormat": "{{stage}} falhas",
+          "expr": "sum(rate(feedback_processing_latency_seconds_sum[5m])) / clamp_min(sum(rate(feedback_processing_latency_seconds_count[5m])), 1) or on() vector(0)",
+          "legendFormat": "latencia media feedback",
           "refId": "B"
         },
         {
-          "expr": "increase(user_feedback_received_total[15m]) by (feedback_type)",
-          "legendFormat": "{{feedback_type}}",
+          "expr": "user_feedback_quality_avg or on() vector(0)",
+          "legendFormat": "qualidade percebida",
           "refId": "C"
         }
       ],

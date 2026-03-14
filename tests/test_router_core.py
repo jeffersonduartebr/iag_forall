@@ -213,7 +213,7 @@ class TestRAGIntegration:
              patch("app.router_core.choose_top2_models") as mock_choose, \
              patch("app.router_core.select_model") as mock_select, \
              patch("app.router_core.get_uncertainty_score") as mock_uq, \
-             patch("app.router_core.build_augmented_prompt", new_callable=AsyncMock) as mock_rag, \
+             patch("app.router_core.build_retrieval_bundle", new_callable=AsyncMock) as mock_rag, \
              patch("app.router_core._ensure_ollama_model"):
 
             mock_cache.return_value = None
@@ -221,12 +221,23 @@ class TestRAGIntegration:
             mock_choose.return_value = ["ollama/phi4:latest"]
             mock_select.return_value = "ollama/phi4:latest"
             mock_uq.return_value = 0.4
-            mock_rag.return_value = "Augmented: What is NSGA-II? Context: NSGA-II is..."
+            mock_rag.return_value = {
+                "query": "What is NSGA-II?",
+                "augmented_prompt": "Augmented: What is NSGA-II? Context: NSGA-II is...",
+                "context": "NSGA-II is...",
+                "citations": [],
+                "evidence_snippets": [],
+                "grounded": False,
+                "knowledge_version": "kv1",
+                "retrieval_mode": "full_retrieval",
+                "retrieval_skipped_reason": None,
+            }
 
             from app.router_core import route_and_answer
             result = await route_and_answer(
                 query="What is NSGA-II?",
-                use_rag=True
+                use_rag=True,
+                runtime_hints={"retrieval_mode": "full_retrieval", "needs_retrieval": True},
             )
 
             mock_rag.assert_called_once()

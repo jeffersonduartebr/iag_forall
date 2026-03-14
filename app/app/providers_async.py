@@ -350,9 +350,14 @@ DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN = 1
 DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS = 3
 DEFAULT_OLLAMA_GPU_INDEX = 0
 DEFAULT_OLLAMA_WARM_MODELS: List[str] = []
+DEFAULT_OLLAMA_INTERACTIVE_WARM_MODELS: List[str] = []
 DEFAULT_OLLAMA_WARMUP_GENERATE_ENABLED = True
 DEFAULT_OLLAMA_LOAD_PENALTY_ENABLED = True
+DEFAULT_OLLAMA_BACKGROUND_LOAD_SHEDDING_ENABLED = True
 DEFAULT_OLLAMA_ROUTE_CANDIDATE_LIMIT = 3
+DEFAULT_PROVIDER_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS = 30
+DEFAULT_BACKGROUND_THROTTLE_INFLIGHT_THRESHOLD = 4
+DEFAULT_BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS = 750
 DEFAULT_ADAPTIVE_TIMEOUT_ENABLED = True
 DEFAULT_BASE_TIMEOUT = 60
 DEFAULT_MAX_TIMEOUT = 1200
@@ -389,9 +394,14 @@ def _runtime_provider_settings() -> Dict[str, Any]:
         "ollama_concurrency_stable_windows": DEFAULT_OLLAMA_CONCURRENCY_STABLE_WINDOWS,
         "ollama_gpu_index": DEFAULT_OLLAMA_GPU_INDEX,
         "ollama_warm_models": list(DEFAULT_OLLAMA_WARM_MODELS),
+        "ollama_interactive_warm_models": list(DEFAULT_OLLAMA_INTERACTIVE_WARM_MODELS),
         "ollama_warmup_generate_enabled": DEFAULT_OLLAMA_WARMUP_GENERATE_ENABLED,
         "ollama_load_penalty_enabled": DEFAULT_OLLAMA_LOAD_PENALTY_ENABLED,
+        "ollama_background_load_shedding_enabled": DEFAULT_OLLAMA_BACKGROUND_LOAD_SHEDDING_ENABLED,
         "ollama_route_candidate_limit": DEFAULT_OLLAMA_ROUTE_CANDIDATE_LIMIT,
+        "provider_unavailable_negative_cache_ttl_seconds": DEFAULT_PROVIDER_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS,
+        "background_throttle_inflight_threshold": DEFAULT_BACKGROUND_THROTTLE_INFLIGHT_THRESHOLD,
+        "background_throttle_queue_wait_p95_ms": DEFAULT_BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS,
         "adaptive_timeout_enabled": DEFAULT_ADAPTIVE_TIMEOUT_ENABLED,
         "base_timeout": DEFAULT_BASE_TIMEOUT,
         "max_timeout": DEFAULT_MAX_TIMEOUT,
@@ -427,9 +437,42 @@ def _runtime_provider_settings() -> Dict[str, Any]:
             for model in parsed_warm_models
             if str(model).strip()
         ]
+        interactive_warm_models_raw = dynamic_settings.get("OLLAMA_INTERACTIVE_WARM_MODELS", "[]")
+        interactive_model_set_raw = dynamic_settings.get("OLLAMA_INTERACTIVE_MODEL_SET", "[]")
+        if str(interactive_model_set_raw).strip() not in {"", "[]"}:
+            interactive_warm_models_raw = interactive_model_set_raw
+        if isinstance(interactive_warm_models_raw, str):
+            try:
+                parsed_interactive_warm_models = json.loads(interactive_warm_models_raw)
+            except Exception:
+                parsed_interactive_warm_models = [item.strip() for item in interactive_warm_models_raw.split(",") if item.strip()]
+        elif isinstance(interactive_warm_models_raw, (list, tuple, set)):
+            parsed_interactive_warm_models = list(interactive_warm_models_raw)
+        else:
+            parsed_interactive_warm_models = []
+        out["ollama_interactive_warm_models"] = [
+            (str(model).strip() if str(model).strip().startswith("ollama/") else f"ollama/{str(model).strip()}")
+            for model in parsed_interactive_warm_models
+            if str(model).strip()
+        ]
         out["ollama_warmup_generate_enabled"] = str(dynamic_settings.get("OLLAMA_WARMUP_GENERATE_ENABLED", "1")).strip() in ("1", "true", "True")
         out["ollama_load_penalty_enabled"] = str(dynamic_settings.get("OLLAMA_LOAD_PENALTY_ENABLED", "1")).strip() in ("1", "true", "True")
+        out["ollama_background_load_shedding_enabled"] = str(dynamic_settings.get("OLLAMA_BACKGROUND_LOAD_SHEDDING_ENABLED", "1")).strip() in ("1", "true", "True")
         out["ollama_route_candidate_limit"] = max(2, int(dynamic_settings.get("OLLAMA_ROUTE_CANDIDATE_LIMIT", str(DEFAULT_OLLAMA_ROUTE_CANDIDATE_LIMIT))))
+        out["provider_unavailable_negative_cache_ttl_seconds"] = max(
+            0,
+            int(
+                dynamic_settings.get(
+                    "PROVIDER_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS",
+                    dynamic_settings.get(
+                        "MODEL_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS",
+                        str(DEFAULT_PROVIDER_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS),
+                    ),
+                )
+            ),
+        )
+        out["background_throttle_inflight_threshold"] = max(1, int(dynamic_settings.get("BACKGROUND_THROTTLE_INFLIGHT_THRESHOLD", str(DEFAULT_BACKGROUND_THROTTLE_INFLIGHT_THRESHOLD))))
+        out["background_throttle_queue_wait_p95_ms"] = max(1, int(dynamic_settings.get("BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS", str(DEFAULT_BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS))))
         out["adaptive_timeout_enabled"] = str(dynamic_settings.get("ADAPTIVE_TIMEOUT_ENABLED", "1")).strip() in ("1", "true", "True")
         out["base_timeout"] = max(1, int(dynamic_settings.get("MIN_TIMEOUT", str(DEFAULT_BASE_TIMEOUT))))
         out["max_timeout"] = max(out["base_timeout"], int(dynamic_settings.get("MAX_TIMEOUT", str(DEFAULT_MAX_TIMEOUT))))
@@ -625,6 +668,7 @@ class OllamaConcurrencyController:
 
 _ollama_concurrency_controller = OllamaConcurrencyController()
 _ollama_runtime_state: Dict[str, Dict[str, Any]] = {}
+_provider_unavailable_until: Dict[str, float] = {}
 
 
 def _normalize_ollama_model_name(model_name: str) -> str:
@@ -644,12 +688,20 @@ def _ensure_ollama_runtime_entry(model_name: str) -> Dict[str, Any]:
             "loaded": False,
             "inflight": 0,
             "last_load_seconds": 0.0,
+            "last_queue_wait_seconds": 0.0,
             "last_used_at": 0.0,
         },
     )
 
 
-def _mark_ollama_model_state(model_name: str, *, loaded: bool | None = None, load_seconds: float | None = None, inflight_delta: int = 0) -> None:
+def _mark_ollama_model_state(
+    model_name: str,
+    *,
+    loaded: bool | None = None,
+    load_seconds: float | None = None,
+    inflight_delta: int = 0,
+    queue_wait_seconds: float | None = None,
+) -> None:
     """Update one Ollama model runtime snapshot used for routing preferences."""
     state = _ensure_ollama_runtime_entry(model_name)
     if loaded is not None:
@@ -658,6 +710,8 @@ def _mark_ollama_model_state(model_name: str, *, loaded: bool | None = None, loa
         state["last_load_seconds"] = max(0.0, float(load_seconds))
     if inflight_delta:
         state["inflight"] = max(0, int(state.get("inflight", 0)) + inflight_delta)
+    if queue_wait_seconds is not None:
+        state["last_queue_wait_seconds"] = max(0.0, float(queue_wait_seconds))
     state["last_used_at"] = time.time()
 
 
@@ -667,7 +721,14 @@ def get_configured_ollama_warm_models() -> List[str]:
     return list(cfg.get("ollama_warm_models", []) or [])
 
 
-def apply_ollama_performance_preferences(candidates: List[str]) -> List[str]:
+def get_interactive_ollama_models() -> List[str]:
+    """Return the preferred interactive warm-model set, falling back to the global warm list."""
+    cfg = _runtime_provider_settings()
+    interactive = list(cfg.get("ollama_interactive_warm_models", []) or [])
+    return interactive or get_configured_ollama_warm_models()
+
+
+def apply_ollama_performance_preferences(candidates: List[str], runtime_hints: Dict[str, Any] | None = None) -> List[str]:
     """Reorder and trim local candidates so routing prefers warm, less-saturated Ollama models."""
     cfg = _runtime_provider_settings()
     if not bool(cfg["ollama_load_penalty_enabled"]):
@@ -678,22 +739,31 @@ def apply_ollama_performance_preferences(candidates: List[str]) -> List[str]:
         return list(candidates)
 
     warm_set = set(get_configured_ollama_warm_models())
+    interactive_warm_set = set(get_interactive_ollama_models())
     route_limit = max(2, int(cfg["ollama_route_candidate_limit"]))
     current_limit = max(1, int(_ollama_concurrency_controller.get_effective_limit()))
+    workload_class = str((runtime_hints or {}).get("workload_class", "") or "").strip()
+    interactive_priority = str((runtime_hints or {}).get("interactive_priority", "") or "").strip()
 
     def _score(candidate: str) -> tuple[float, int]:
         state = _ensure_ollama_runtime_entry(candidate)
         inflight = int(state.get("inflight", 0))
         loaded = bool(state.get("loaded", False))
         last_load_seconds = float(state.get("last_load_seconds", 0.0) or 0.0)
+        last_queue_wait_seconds = float(state.get("last_queue_wait_seconds", 0.0) or 0.0)
         penalty = 0.0
         if not loaded:
-            penalty += 5.0
+            penalty += 7.0
         if candidate not in warm_set:
             penalty += 0.5
+        if workload_class in {"simple_text", "knowledge_lookup"} and candidate not in interactive_warm_set:
+            penalty += 2.5
+        if interactive_priority == "high" and candidate in interactive_warm_set:
+            penalty -= 1.5
         penalty += float(inflight) * 2.0
         if inflight >= max(1, current_limit - 1):
             penalty += 3.0
+        penalty += min(4.0, last_queue_wait_seconds * 2.0)
         penalty += min(3.0, last_load_seconds / 5.0)
         return penalty, candidates.index(candidate)
 
@@ -751,6 +821,84 @@ async def start_provider_runtime_services() -> None:
 async def stop_provider_runtime_services() -> None:
     """Stop background provider-side runtime services."""
     await _ollama_concurrency_controller.stop()
+
+
+def mark_provider_unavailable(model_name: str, *, ttl_seconds: int | None = None) -> None:
+    """Remember a temporarily unavailable model to avoid hammering the same failing path."""
+    cfg = _runtime_provider_settings()
+    ttl = int(ttl_seconds if ttl_seconds is not None else cfg.get("provider_unavailable_negative_cache_ttl_seconds", cfg.get("model_unavailable_negative_cache_ttl_seconds", DEFAULT_PROVIDER_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS)))
+    if ttl <= 0:
+        return
+    _provider_unavailable_until[str(model_name)] = time.time() + ttl
+
+
+def clear_provider_unavailable(model_name: str) -> None:
+    """Clear temporary negative-cache state after a successful call."""
+    _provider_unavailable_until.pop(str(model_name), None)
+
+
+def is_provider_temporarily_unavailable(model_name: str) -> bool:
+    """Return whether one model is still inside the negative-cache cooldown window."""
+    expires_at = float(_provider_unavailable_until.get(str(model_name), 0.0) or 0.0)
+    if expires_at <= 0:
+        return False
+    if expires_at <= time.time():
+        _provider_unavailable_until.pop(str(model_name), None)
+        return False
+    return True
+
+
+def should_throttle_background_judge() -> bool:
+    """Return whether background judge work should yield to interactive Ollama traffic."""
+    cfg = _runtime_provider_settings()
+    if not bool(cfg["ollama_background_load_shedding_enabled"]):
+        return False
+    current_limit = max(1, int(_ollama_concurrency_controller.get_effective_limit()))
+    total_inflight = sum(int(state.get("inflight", 0) or 0) for state in _ollama_runtime_state.values())
+    inflight_threshold = max(1, min(current_limit, int(cfg.get("background_throttle_inflight_threshold", current_limit))))
+    if total_inflight >= inflight_threshold:
+        return True
+    if any(
+        float(state.get("last_queue_wait_seconds", 0.0) or 0.0) * 1000.0 >= float(cfg.get("background_throttle_queue_wait_p95_ms", DEFAULT_BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS))
+        for state in _ollama_runtime_state.values()
+    ):
+        return True
+    ratio = float(getattr(_ollama_concurrency_controller, "_latest_ratio", 0.0) or 0.0)
+    if ratio >= float(cfg["ollama_vram_high_watermark"]):
+        return True
+    return False
+
+
+def get_ollama_admission_snapshot() -> Dict[str, float | int | str]:
+    """Return a compact snapshot of Ollama pressure for adaptive admission control.
+
+    The middleware layer cannot read Prometheus samples directly, so it uses this
+    runtime snapshot derived from the same in-process state that powers provider
+    throttling and warm-model selection.
+    """
+    cfg = _runtime_provider_settings()
+    current_limit = max(1, int(_ollama_concurrency_controller.get_effective_limit()))
+    total_inflight = sum(int(state.get("inflight", 0) or 0) for state in _ollama_runtime_state.values())
+    max_queue_wait_ms = 0.0
+    for state in _ollama_runtime_state.values():
+        max_queue_wait_ms = max(max_queue_wait_ms, float(state.get("last_queue_wait_seconds", 0.0) or 0.0) * 1000.0)
+    utilization = min(2.0, float(total_inflight) / float(current_limit)) if current_limit > 0 else 0.0
+    vram_ratio = float(getattr(_ollama_concurrency_controller, "_latest_ratio", 0.0) or 0.0)
+    elevated_utilization = float(cfg.get("ollama_vram_target_utilization", DEFAULT_OLLAMA_VRAM_TARGET_UTILIZATION))
+    congested_utilization = float(cfg.get("ollama_vram_high_watermark", DEFAULT_OLLAMA_VRAM_HIGH_WATERMARK))
+    pressure_state = "normal"
+    if utilization >= 1.0 or max_queue_wait_ms >= float(cfg.get("background_throttle_queue_wait_p95_ms", DEFAULT_BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS)) or vram_ratio >= congested_utilization:
+        pressure_state = "congested"
+    elif utilization >= elevated_utilization or max_queue_wait_ms >= max(100.0, float(cfg.get("background_throttle_queue_wait_p95_ms", DEFAULT_BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS)) * 0.5):
+        pressure_state = "elevated"
+    return {
+        "current_limit": current_limit,
+        "total_inflight": total_inflight,
+        "max_queue_wait_ms": round(max_queue_wait_ms, 3),
+        "utilization": round(utilization, 4),
+        "vram_ratio": round(vram_ratio, 4),
+        "pressure_state": pressure_state,
+    }
 
 
 def _get_adaptive_timeout(model: str) -> float:
@@ -852,7 +1000,7 @@ class BaseProvider(ABC):
         await self.semaphore.acquire()
         waited = time.time() - wait_started_at
         if self.name == "ollama":
-            _mark_ollama_model_state(model, inflight_delta=1)
+            _mark_ollama_model_state(model, inflight_delta=1, queue_wait_seconds=waited)
         try:
             PROVIDER_QUEUE_WAIT.labels(model=model).observe(waited)
             PROVIDER_INFLIGHT_REQUESTS.labels(model=model).inc()
@@ -1311,6 +1459,13 @@ async def call_model(
     legacy `(text, metadata)` tuple expected by existing callers.
     """
     try:
+        if is_provider_temporarily_unavailable(model):
+            raise ProviderCallError(
+                model=model,
+                message="Model temporarily marked unavailable after recent failure",
+                category="provider_unavailable",
+                retryable=True,
+            )
         provider = ProviderFactory.get_provider(model)
         real_name = model.split("/", 1)[1] if "/" in model else model
 
@@ -1323,6 +1478,7 @@ async def call_model(
         )
 
         meta = _build_response_meta(result)
+        clear_provider_unavailable(model)
         return result.text, meta
 
     except pybreaker.CircuitBreakerError as e:
@@ -1346,6 +1502,8 @@ async def call_model(
                 PROVIDER_RATE_LIMIT_ERRORS.labels(model=model).inc()
             except Exception:
                 pass
+        elif category == "provider_unavailable":
+            mark_provider_unavailable(model)
         raise ProviderCallError(model=model, message=str(e), category=category, retryable=True) from e
 
 
@@ -1460,3 +1618,6 @@ def reset_provider_runtime_state() -> None:
     _ollama_concurrency_controller._latest_ratio = 0.0
     _ollama_concurrency_controller._telemetry_ok = False
     _ollama_concurrency_controller._stable_low_windows = 0
+    _ollama_runtime_state.clear()
+    _provider_unavailable_until.clear()
+    reset_ollama_tags_cache()

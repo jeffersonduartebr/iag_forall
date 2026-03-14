@@ -3,6 +3,7 @@
 
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -23,6 +24,15 @@ def _make_request():
     from app.schemas import QueryRequest
 
     return QueryRequest(query="teste", modality="text")
+
+
+def _make_http_request(path="/query", *, defer=False, reason="ollama_overloaded", pressure_state="congested"):
+    state = SimpleNamespace()
+    if defer:
+        state.defer_to_query_job = True
+        state.query_job_reason = reason
+        state.query_job_pressure_state = pressure_state
+    return SimpleNamespace(state=state, url=SimpleNamespace(path=path))
 
 
 @pytest.mark.asyncio
@@ -129,6 +139,29 @@ async def test_route_query_uses_main_wiring(monkeypatch):
     monkeypatch.setattr(main, "record_query_side_effects", lambda req, result, image_input: None)
     out = await main.route_query(_make_request())
     assert out.answer == "ok"
+
+
+@pytest.mark.asyncio
+async def test_route_query_enqueues_async_job_when_request_marked(monkeypatch):
+    """main.route_query should return HTTP 202 with the accepted job payload when middleware defers execution."""
+    _stabilize_settings_get(monkeypatch)
+    from app import main
+    from app.schemas import QueuedQueryAcceptedResponse
+
+    monkeypatch.setattr(
+        main,
+        "enqueue_query_job",
+        lambda **kwargs: QueuedQueryAcceptedResponse(
+            job_id="job-1",
+            poll_url="/query/jobs/job-1",
+            result_url="/query/jobs/job-1/result",
+            expires_at=123.0,
+        ),
+    )
+
+    out = await main.route_query(_make_request(), _make_http_request(defer=True))
+    assert out.status_code == 202
+    assert b"job-1" in out.body
 
 
 @pytest.mark.asyncio

@@ -33,7 +33,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Response, Request, APIRouter
-from fastapi.responses import StreamingResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -49,7 +50,21 @@ from .correlation import (
 from .metrics_collector import _ensure_model_metrics_table
 from .settings_dynamic import settings, start_reload_listener, stop_reload_listener
 from .settings_dynamic import validate_critical_settings
-from .schemas import QueryRequest, QueryResponse, CandidateResult, RouteDecision
+from .schemas import (
+    CandidateResult,
+    ConfidenceBand,
+    EvidenceSnippet,
+    QueryJobStatusResponse,
+    QueryRequest,
+    QueryResponse,
+    QueuedQueryAcceptedResponse,
+    ResponseDiagnostics,
+    ResponseCitation,
+    ResponseProvenance,
+    ReviewStatus,
+    RouteDecision,
+    VerificationStatus,
+)
 from .config.constants import GZIP_MIN_SIZE
 from .middleware.rate_limit import (
     RateLimitMiddleware,
@@ -83,8 +98,10 @@ from .providers_async import (
 )
 from .utils.redis_client import get_redis, close_redis
 from .db import close_engine
+from .query_jobs import enqueue_query_job, get_query_job_result, get_query_job_status
 from .routers import rag_router
 from .vectorstore import init_vectorstore, add_document as vs_add_document
+from .services.query_response_builder import build_query_response
 from .services.query_runtime import process_query_request, record_query_side_effects
 from .services.governance_runtime import ensure_runtime_support_tables
 from .router_core import route_and_answer
@@ -172,21 +189,6 @@ app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(BackpressureMiddleware)  # Global concurrency limit
 app.add_middleware(RateLimitMiddleware)  # Uses Redis-based rate limiting
 app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_SIZE)
-
-
-# --- HELPER DE CONVERSÃO ---
-def safe_parse_json(payload: Any) -> Any:
-    """Decode a JSON string when possible, otherwise return the original value.
-
-    This helper is used on metadata fields that may already be parsed objects in
-    some paths and raw JSON strings in others.
-    """
-    if isinstance(payload, str):
-        try:
-            return json.loads(payload)
-        except Exception:
-            return payload
-    return payload
 
 
 OLLAMA_HOST = os.getenv(
@@ -441,8 +443,7 @@ async def shutdown_event():
     logger.info("[shutdown] Shutdown completo.")
 
 
-@app.post("/query", response_model=QueryResponse)
-async def route_query(req: QueryRequest):
+async def route_query(req: QueryRequest, request: Request | None = None):
     """Handle the primary synchronous query endpoint.
 
     The route delegates most orchestration to `process_query_request`, then
@@ -453,6 +454,17 @@ async def route_query(req: QueryRequest):
     start = time.time()
     API_REQUESTS.inc()
 
+    if request is not None and getattr(request.state, "defer_to_query_job", False):
+        queued = enqueue_query_job(
+            req=req,
+            correlation_id=get_correlation_id(),
+            reason=str(getattr(request.state, "query_job_reason", "overloaded")),
+            pressure_state=str(getattr(request.state, "query_job_pressure_state", "elevated")),
+            route_path=request.url.path,
+            identity_key=request.client.host if getattr(request, "client", None) else None,
+        )
+        return JSONResponse(status_code=202, content=jsonable_encoder(queued))
+
     processed = await process_query_request(req)
     result = processed["result"]
     image_input = processed["image_input"]
@@ -461,12 +473,13 @@ async def route_query(req: QueryRequest):
     API_LATENCY.observe(duration)
 
     chosen_model = result["model"]
+    estimated_cost_usd = result.get("estimated_cost_usd", result.get("cost_per_1k", 0.0))
     ROUTER_CHOSEN.labels(model=chosen_model).inc()
-    CANDIDATE_COST.observe(result["cost_per_1k"])
+    CANDIDATE_COST.observe(estimated_cost_usd)
     CANDIDATE_LAT.observe(result["latency_s"])
 
     # Track detailed cost metrics
-    cost_usd = result.get("cost_per_1k", 0)
+    cost_usd = estimated_cost_usd
     TOTAL_COST_USD.inc(cost_usd)
 
     # Extract provider from model name
@@ -480,31 +493,15 @@ async def route_query(req: QueryRequest):
     TOKENS_INPUT_TOTAL.labels(model=chosen_model).inc(prompt_tokens)
     TOKENS_OUTPUT_TOTAL.labels(model=chosen_model).inc(completion_tokens)
 
+    correlation_id = get_correlation_id()
     metadata = result.get("metadata", {})
-    raw_payload_str = metadata.get("raw_payload")
-    prompt_tokens = metadata.get("prompt_tokens", 0)
-    completion_tokens = metadata.get("completion_tokens", 0)
+    metadata["correlation_id"] = correlation_id
 
     record_query_side_effects(req, result, image_input)
-
-    parsed_payload = safe_parse_json(raw_payload_str)
-    route_raw = result.get("route", {})
-    candidates_raw = result.get("candidates", [])
-
-    return QueryResponse(
-        answer=result["answer"],
-        model=chosen_model,
-        modality=result["modality"],
-        image_output_b64=result.get("image_output_b64"),
-        correlation_id=get_correlation_id(),
-        route=RouteDecision(**route_raw),
-        candidates=[CandidateResult(**c) for c in candidates_raw],
-        payload=parsed_payload
-    )
+    return build_query_response(result, correlation_id)
 
 
-@app.post("/query/stream", tags=["Query"])
-async def route_query_stream(req: QueryRequest):
+async def route_query_stream(req: QueryRequest, request: Request | None = None):
     """Expose a simple Server-Sent Events wrapper around the standard query flow.
 
     The current implementation does not stream provider tokens directly. It
@@ -513,6 +510,17 @@ async def route_query_stream(req: QueryRequest):
     chunks, and a terminal completion event to consumers expecting an SSE
     contract.
     """
+    if request is not None and getattr(request.state, "defer_to_query_job", False):
+        queued = enqueue_query_job(
+            req=req,
+            correlation_id=get_correlation_id(),
+            reason=str(getattr(request.state, "query_job_reason", "overloaded")),
+            pressure_state=str(getattr(request.state, "query_job_pressure_state", "elevated")),
+            route_path=request.url.path,
+            identity_key=request.client.host if getattr(request, "client", None) else None,
+        )
+        return JSONResponse(status_code=202, content=jsonable_encoder(queued))
+
     processed = await process_query_request(req)
     result = processed["result"]
     answer = result.get("answer", "")
@@ -533,19 +541,48 @@ async def route_query_stream(req: QueryRequest):
     return StreamingResponse(_event_gen(), media_type="text/event-stream")
 
 
+@app.post("/query", response_model=QueryResponse | QueuedQueryAcceptedResponse)
+async def http_route_query(req: QueryRequest, request: Request):
+    """Bind the primary query helper to the public HTTP route."""
+    return await route_query(req, request)
+
+
+@app.post("/query/stream", tags=["Query"])
+async def http_route_query_stream(req: QueryRequest, request: Request):
+    """Bind the streaming query helper to the public HTTP route."""
+    return await route_query_stream(req, request)
+
+
 # ==============================================================================
 # API Version 1 Routes (for future versioning)
 # ==============================================================================
 
-@v1_router.post("/query", response_model=QueryResponse)
-async def v1_route_query(req: QueryRequest):
+@app.get("/query/jobs/{job_id}", response_model=QueryJobStatusResponse, tags=["Query"])
+async def query_job_status(job_id: str):
+    """Return the current status of one queued query job."""
+    return get_query_job_status(job_id)
+
+
+@app.get("/query/jobs/{job_id}/result", response_model=QueryResponse, tags=["Query"])
+async def query_job_result(job_id: str):
+    """Return the completed result of one queued query job."""
+    return get_query_job_result(job_id)
+
+
+async def v1_route_query(req: QueryRequest, request: Request | None = None):
     """Provide the versioned alias for the primary query endpoint.
 
     Version one currently preserves the exact behavior of `/query`; the wrapper
     exists so clients can pin to an explicit API version before future route
     evolution introduces incompatible changes.
     """
-    return await route_query(req)
+    return await route_query(req, request)
+
+
+@v1_router.post("/query", response_model=QueryResponse | QueuedQueryAcceptedResponse)
+async def v1_http_route_query(req: QueryRequest, request: Request):
+    """Bind the versioned query helper to the public HTTP route."""
+    return await v1_route_query(req, request)
 
 
 @v1_router.get("/health")
@@ -554,6 +591,18 @@ async def v1_health():
     from .api.ops_routes import health
 
     return await health()
+
+
+@v1_router.get("/query/jobs/{job_id}", response_model=QueryJobStatusResponse)
+async def v1_query_job_status(job_id: str):
+    """Provide the versioned alias for queued-query status lookups."""
+    return get_query_job_status(job_id)
+
+
+@v1_router.get("/query/jobs/{job_id}/result", response_model=QueryResponse)
+async def v1_query_job_result(job_id: str):
+    """Provide the versioned alias for queued-query result lookups."""
+    return get_query_job_result(job_id)
 
 
 # Include versioned router

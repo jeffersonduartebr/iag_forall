@@ -20,6 +20,7 @@ from .vectorstore import (
     query_embedding,
     add_document,
     health_async,
+    _collection_for_modality,
 )
 
 # Importamos o call_model para gerar a descrição da imagem (Ponte Visual)
@@ -102,6 +103,27 @@ def _trim_context_to_budget(documents: List[str], token_budget: int) -> List[str
             trimmed.append(shortened)
         break
     return trimmed
+
+
+def _min_docs_for_grounded_context() -> int:
+    """Return the minimum number of useful documents required for strong grounding."""
+    return max(1, _get_int_setting("RAG_CONTEXT_QUALITY_MIN_DOCS", 2))
+
+
+def _snippet(text: str, limit: int = 220) -> str:
+    """Return one compact evidence snippet extracted from a retrieved document."""
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _knowledge_version(modality: str) -> str:
+    """Build one stable knowledge version label for the active retrieval collections."""
+    normalized = _auto_modality(modality, None)
+    collection_name = _collection_for_modality("text" if normalized == "vision" else normalized)
+    sparse_version = getattr(sparse_index, "index_version", None) or getattr(sparse_index, "version", None) or "sparse_v1"
+    return f"{collection_name}|{sparse_version}"
 
 
 def _hash_image(image_b64: str) -> str:
@@ -275,21 +297,61 @@ async def build_augmented_prompt(
     modality: str = "text",
     image_b64: Optional[str] = None,
     k: int = 3,
+    retrieval_mode: Optional[str] = None,
+    context_token_budget: Optional[int] = None,
+    rerank_enabled: Optional[bool] = None,
 ) -> str:
     """Execute the build augmented prompt routine.
 
 This helper encapsulates one focused step used by the surrounding workflow."""
+    bundle = await build_retrieval_bundle(
+        query=query,
+        modality=modality,
+        image_b64=image_b64,
+        k=k,
+        retrieval_mode=retrieval_mode,
+        context_token_budget=context_token_budget,
+        rerank_enabled=rerank_enabled,
+    )
+    return str(bundle.get("augmented_prompt") or bundle.get("query") or "")
+
+
+async def build_retrieval_bundle(
+    query: str,
+    modality: str = "text",
+    image_b64: Optional[str] = None,
+    k: int = 3,
+    retrieval_mode: Optional[str] = None,
+    context_token_budget: Optional[int] = None,
+    rerank_enabled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Return retrieved context plus structured provenance for one query."""
+    retrieval_skipped_reason = None
     query = (query or "").strip()
     if not query and not image_b64:
-        return ""
+        return {
+            "query": query,
+            "augmented_prompt": "",
+            "context": "",
+            "citations": [],
+            "evidence_snippets": [],
+            "grounded": False,
+            "knowledge_version": _knowledge_version(modality or "text"),
+            "retrieval_mode": (retrieval_mode or "full_retrieval").strip().lower(),
+            "retrieval_skipped_reason": "empty_query",
+        }
 
     rag_mode = _auto_modality(modality, image_b64)
     target_collection_modality = "text" if rag_mode == "vision" else rag_mode
+    retrieval_mode = (retrieval_mode or "full_retrieval").strip().lower()
+    dense_k = _get_int_setting("RAG_LIGHT_VECTOR_TOP_K", 6) if retrieval_mode == "light_retrieval" else 20
+    sparse_k = _get_int_setting("RAG_LIGHT_SPARSE_TOP_K", 6) if retrieval_mode == "light_retrieval" else 20
 
     # --- 1. Busca Vetorial (Dense Retrieval) ---
     emb = await _compute_embedding(query, rag_mode, image_b64)
     vector_doc_ids = []
     vector_docs_map = {} # ID -> Texto
+    vector_meta_map: Dict[str, Dict[str, Any]] = {}
 
     if emb is not None:
         try:
@@ -297,14 +359,16 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             res = await query_embedding(
                 modality=target_collection_modality,
                 embedding=emb,
-                n_results=20 
+                n_results=dense_k
             )
             if res and res.get("ids"):
                 ids = res["ids"][0]
                 docs = res["documents"][0]
+                metadatas = (res.get("metadatas") or [[]])[0]
                 vector_doc_ids = ids
                 for i, doc_id in enumerate(ids):
                     vector_docs_map[doc_id] = docs[i]
+                    vector_meta_map[doc_id] = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
                 try:
                     distances = (res.get("distances") or [[]])[0]
                     if distances:
@@ -319,17 +383,20 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # --- 2. Busca por Palavras-Chave (Sparse Retrieval - BM25) ---
     bm25_doc_ids = []
     bm25_docs_map = {}
+    bm25_meta_map: Dict[str, Dict[str, Any]] = {}
     
     # Só faz sentido BM25 se houver query textual
     if query:
         try:
             # Busca Top-20 no BM25
-            bm25_res = await asyncio.to_thread(sparse_index.search, query, top_k=20)
+            bm25_res = await asyncio.to_thread(sparse_index.search, query, top_k=sparse_k)
             bm25_doc_ids = [item[0] for item in bm25_res]
             for doc_id, _ in bm25_res:
                 # Recupera o texto do índice esparso
                 text = sparse_index.get_text(doc_id)
-                if text: bm25_docs_map[doc_id] = text
+                if text:
+                    bm25_docs_map[doc_id] = text
+                    bm25_meta_map[doc_id] = {"source": "bm25"}
         except Exception as e:
             logger.warning(f"[rag_local] Erro BM25 Search: {e}")
 
@@ -337,35 +404,80 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     merged_ids = reciprocal_rank_fusion(vector_doc_ids, bm25_doc_ids)
     
     # Recupera os textos dos IDs vencedores
-    candidate_texts = []
+    candidate_items: List[Tuple[str, str, Dict[str, Any]]] = []
     for doc_id in merged_ids:
         # Tenta pegar do mapa vetorial ou do mapa BM25
         txt = vector_docs_map.get(doc_id) or bm25_docs_map.get(doc_id)
         if txt:
-            candidate_texts.append(txt)
+            candidate_items.append((doc_id, txt, vector_meta_map.get(doc_id) or bm25_meta_map.get(doc_id) or {}))
     
     # Se não achou nada, retorna query original
-    if not candidate_texts:
+    if not candidate_items:
         try:
             if RETRIEVAL_DOCUMENTS_RETURNED:
                 RETRIEVAL_DOCUMENTS_RETURNED.labels(modality=rag_mode).observe(0)
         except Exception:
             pass
-        return query
+        return {
+            "query": query,
+            "augmented_prompt": query,
+            "context": "",
+            "citations": [],
+            "evidence_snippets": [],
+            "grounded": False,
+            "knowledge_version": _knowledge_version(rag_mode),
+            "retrieval_mode": retrieval_mode,
+            "retrieval_skipped_reason": "no_candidates",
+        }
 
     # --- 4. Re-Ranking (Cross-Encoder) ---
-    rerank_enabled = _is_enabled("RERANK_ENABLED", "1")
+    if rerank_enabled is None:
+        rerank_enabled = _is_enabled("RERANK_ENABLED", "1")
     rerank_min_candidates = max(1, _get_int_setting("RAG_RERANK_MIN_CANDIDATES", 3))
-    rerank_candidates = candidate_texts[: max(k, 5)]
+    candidate_texts = [item[1] for item in candidate_items]
+    rerank_candidates = candidate_texts[: max(k, 5 if retrieval_mode != "light_retrieval" else max(3, k))]
 
     if rerank_enabled and len(rerank_candidates) >= rerank_min_candidates:
         final_docs = await asyncio.to_thread(rerank_documents, query, rerank_candidates, k)
     else:
         final_docs = candidate_texts[:k]
 
-    context_token_budget = _get_int_setting("RAG_CONTEXT_TOKEN_BUDGET", 1200)
-    final_docs = _trim_context_to_budget(final_docs, context_token_budget)
+    final_items: List[Tuple[str, str, Dict[str, Any]]] = []
+    used_doc_ids = set()
+    for final_doc in final_docs:
+        for doc_id, candidate_text, candidate_meta in candidate_items:
+            if doc_id in used_doc_ids:
+                continue
+            if candidate_text == final_doc:
+                final_items.append((doc_id, candidate_text, candidate_meta))
+                used_doc_ids.add(doc_id)
+                break
+
+    if context_token_budget is None:
+        budget_key = "RAG_LIGHT_CONTEXT_TOKEN_BUDGET" if retrieval_mode == "light_retrieval" else "RAG_FULL_CONTEXT_TOKEN_BUDGET"
+        context_token_budget = _get_int_setting(budget_key, _get_int_setting("RAG_CONTEXT_TOKEN_BUDGET", 1200))
+    final_docs = _trim_context_to_budget(final_docs, int(context_token_budget))
+    trimmed_items: List[Tuple[str, str, Dict[str, Any]]] = []
+    remaining_chars = int(context_token_budget) * 4 if context_token_budget else 0
+    for doc_id, candidate_text, candidate_meta in final_items:
+        if remaining_chars <= 0:
+            break
+        if len(candidate_text) <= remaining_chars:
+            trimmed_items.append((doc_id, candidate_text, candidate_meta))
+            remaining_chars -= len(candidate_text)
+            continue
+        shortened = candidate_text[:remaining_chars].rstrip()
+        if shortened:
+            trimmed_items.append((doc_id, shortened, candidate_meta))
+        break
     context = "\n\n".join(final_docs)
+    min_docs_for_grounded_context = _min_docs_for_grounded_context()
+    useful_doc_count = len([doc for doc in final_docs if str(doc or "").strip()])
+    if retrieval_mode == "light_retrieval" and useful_doc_count < min_docs_for_grounded_context:
+        retrieval_skipped_reason = "insufficient_context_quality"
+        context = ""
+        final_docs = []
+        trimmed_items = []
     try:
         if RETRIEVAL_DOCUMENTS_RETURNED:
             RETRIEVAL_DOCUMENTS_RETURNED.labels(modality=rag_mode).observe(len(final_docs))
@@ -375,14 +487,50 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         pass
     logger.info(f"[rag_local] Hybrid RAG: {len(final_docs)} docs finais (Vector={len(vector_doc_ids)}, BM25={len(bm25_doc_ids)}).")
 
-    return (
-        "INSTRUÇÃO DE CONTEXTO (RAG):\n"
-        "Use as informações técnicas abaixo recuperadas do banco de dados para auxiliar na sua resposta.\n"
-        "------ CONTEXTO RECUPERADO (Híbrido + Re-rank) ------\n"
-        f"{context}\n"
-        "---------------------------------\n"
-        f"PERGUNTA DO USUÁRIO: {query}"
-    )
+    citations = []
+    evidence_snippets = []
+    for rank, (doc_id, doc_text, doc_meta) in enumerate(trimmed_items or final_items[: len(final_docs)], start=1):
+        source = str(doc_meta.get("source") or doc_meta.get("title") or doc_meta.get("uri") or "vectorstore")
+        citations.append(
+            {
+                "doc_id": str(doc_id),
+                "rank": rank,
+                "source": source,
+                "snippet": _snippet(doc_text),
+                "score": None,
+            }
+        )
+        evidence_snippets.append(
+            {
+                "doc_id": str(doc_id),
+                "rank": rank,
+                "source": source,
+                "text": _snippet(doc_text, limit=320),
+            }
+        )
+
+    if context:
+        augmented_prompt = (
+            "INSTRUÇÃO DE CONTEXTO (RAG):\n"
+            "Use as informações técnicas abaixo recuperadas do banco de dados para auxiliar na sua resposta.\n"
+            "------ CONTEXTO RECUPERADO (Híbrido + Re-rank) ------\n"
+            f"{context}\n"
+            "---------------------------------\n"
+            f"PERGUNTA DO USUÁRIO: {query}"
+        )
+    else:
+        augmented_prompt = query
+    return {
+        "query": query,
+        "augmented_prompt": augmented_prompt,
+        "context": context,
+        "citations": citations,
+        "evidence_snippets": evidence_snippets,
+        "grounded": bool(citations),
+        "knowledge_version": _knowledge_version(rag_mode),
+        "retrieval_mode": retrieval_mode,
+        "retrieval_skipped_reason": retrieval_skipped_reason,
+    }
 
 
 # ================================================================

@@ -135,6 +135,7 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
 
     # Paths that bypass backpressure (health checks, metrics)
     BYPASS_PATHS = {"/health", "/healthz", "/ready", "/metrics"}
+    QUERY_PATHS = {"/query", "/query/stream", "/v1/query"}
 
     async def dispatch(self, request: Request, call_next) -> Response:
         # Check if backpressure is enabled
@@ -148,12 +149,20 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         if request.url.path in self.BYPASS_PATHS:
             return await call_next(request)
 
+        if getattr(request.state, "defer_to_query_job", False):
+            return await call_next(request)
+
         backpressure = get_backpressure()
 
         # Try to acquire a processing slot
         acquired = await backpressure.acquire()
 
         if not acquired:
+            if request.url.path in self.QUERY_PATHS:
+                request.state.defer_to_query_job = True
+                request.state.query_job_reason = "backpressure"
+                request.state.query_job_pressure_state = "congested"
+                return await call_next(request)
             # System at capacity
             BACKPRESSURE_REJECTED.inc()
             logger.warning(

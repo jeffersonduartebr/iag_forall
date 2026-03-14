@@ -175,6 +175,39 @@ class TestEncoderFallback:
         expected = max(1, len(text) // 3)
         assert result == expected
 
+    def test_get_encoder_returns_none_when_tiktoken_missing(self, monkeypatch):
+        """Missing tiktoken should return None and force heuristic fallback."""
+        from app.utils import token_utils as tu
+
+        tu.clear_encoder_cache()
+        monkeypatch.setattr(tu, "tiktoken", None)
+        assert tu._get_encoder("gpt-4o") is None
+
+    def test_get_encoder_returns_none_on_unexpected_error(self, monkeypatch):
+        """Unexpected tokenizer initialization errors should be swallowed."""
+        from app.utils import token_utils as tu
+
+        tu.clear_encoder_cache()
+
+        class _Tik:
+            def encoding_for_model(self, _model):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(tu, "tiktoken", _Tik())
+        assert tu._get_encoder("gpt-4o") is None
+
+    def test_count_tokens_falls_back_when_encoder_encode_fails(self, monkeypatch):
+        """Encoding failures should fall back to the 4-char heuristic."""
+        from app.utils import token_utils as tu
+
+        class _Enc:
+            def encode(self, _text):
+                raise RuntimeError("encode fail")
+
+        monkeypatch.setattr(tu, "_get_encoder", lambda model: _Enc())
+        text = "abcdefghij"
+        assert tu.count_tokens(text, model_name="gpt-4o") == max(1, len(text) // 4)
+
 
 class TestTokenCountingAccuracy:
     """Tests for token counting accuracy."""

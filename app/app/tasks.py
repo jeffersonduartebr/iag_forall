@@ -12,9 +12,11 @@ import threading
 import time
 from typing import Optional, Any
 
+from fastapi import HTTPException
 from celery.signals import worker_process_init, worker_process_shutdown
 
 from .celery_app import celery_app
+from .schemas import QueryJobStatus
 
 # Importamos a lógica do core aqui dentro para evitar ciclos de importação no topo
 # se o router_core importar tasks.py
@@ -24,6 +26,7 @@ from .roadmap_features import (
     update_eval_run_status,
     add_eval_result,
 )
+from .query_jobs import finalize_query_job, update_query_job_record
 from .router_core import route_and_answer
 
 logger = logging.getLogger("celery_tasks")
@@ -182,7 +185,7 @@ def task_execute_eval_run(
                 meta = resp.get("metadata", {})
                 q = float(meta.get("quality", 0.0) or 0.0)
                 l = float(resp.get("latency_s", 0.0) or 0.0)
-                c = float(resp.get("cost_per_1k", 0.0) or 0.0)
+                c = float(resp.get("estimated_cost_usd", resp.get("cost_per_1k", 0.0)) or 0.0)
                 add_eval_result(
                     run_id=run_id,
                     prompt_text=str(prompt),
@@ -190,7 +193,14 @@ def task_execute_eval_run(
                     quality=q,
                     latency_s=l,
                     cost_usd=c,
-                    metadata={"policy_version": run.get("policy_version")},
+                    metadata={
+                        "policy_version": run.get("policy_version"),
+                        "grounded": bool(meta.get("grounded")),
+                        "verification_status": meta.get("verification_status"),
+                        "abstained": bool(meta.get("abstained")),
+                        "knowledge_version": meta.get("knowledge_version"),
+                        "confidence_score": meta.get("confidence_score"),
+                    },
                 )
                 quality_scores.append(q)
                 latency_scores.append(l)
@@ -221,3 +231,55 @@ def task_execute_eval_run(
         update_eval_run_status(run_id, "failed", {"error": str(e), "failed_at": time.time()})
         logger.error("[Celery] Eval run failed %s: %s", run_id, e)
         raise self.retry(exc=e)
+
+
+@celery_app.task(bind=True, queue="celery", max_retries=0)
+def task_execute_query_job(
+    self,
+    job_id: str,
+    request_payload: dict[str, Any],
+    correlation_id: Optional[str] = None,
+):
+    """Execute one queued query job and persist its terminal status/result."""
+    from .correlation import CorrelationIdContext
+    from .services.query_response_builder import build_query_response
+    from .services.query_runtime import process_query_request, record_query_side_effects
+    from .schemas import QueryRequest
+
+    logger.info("[Celery] Running queued query job_id=%s", job_id)
+    started_at = time.time()
+    update_query_job_record(job_id, status="running", started_at=started_at)
+
+    try:
+        req = QueryRequest.model_validate(request_payload)
+        with CorrelationIdContext(correlation_id):
+            processed = run_async(process_query_request(req))
+            result = processed["result"]
+            image_input = processed["image_input"]
+            metadata = result.setdefault("metadata", {})
+            metadata["correlation_id"] = correlation_id
+            record_query_side_effects(req, result, image_input)
+            response_model = build_query_response(result, correlation_id)
+        finalize_query_job(
+            job_id,
+            status=QueryJobStatus.COMPLETED,
+            result=response_model.model_dump(mode="json"),
+        )
+        return {"status": "completed", "job_id": job_id}
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": True, "message": str(exc.detail)}
+        finalize_query_job(
+            job_id,
+            status=QueryJobStatus.FAILED,
+            error={"status_code": exc.status_code, **detail},
+        )
+        logger.warning("[Celery] Queued query job failed %s with HTTPException %s", job_id, exc.status_code)
+        return {"status": "failed", "job_id": job_id}
+    except Exception as exc:
+        logger.exception("[Celery] Queued query job failed %s: %s", job_id, exc)
+        finalize_query_job(
+            job_id,
+            status=QueryJobStatus.FAILED,
+            error={"error": True, "message": str(exc), "status_code": 500},
+        )
+        return {"status": "failed", "job_id": job_id}

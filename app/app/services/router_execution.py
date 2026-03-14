@@ -25,11 +25,19 @@ def _should_bypass_rag(
     image_b64: str | None,
     use_rag: bool,
     uncertainty_score: float,
+    runtime_hints: Dict[str, Any] | None,
 ) -> bool:
     """Return whether retrieval should be skipped for the current request."""
     if not use_rag:
         return True
     if image_b64 or modality in {"vision", "multimodal"}:
+        return False
+    retrieval_mode = (runtime_hints or {}).get("retrieval_mode")
+    if retrieval_mode == "no_retrieval":
+        return True
+    if (runtime_hints or {}).get("needs_retrieval") is False:
+        return True
+    if retrieval_mode in {"light_retrieval", "full_retrieval"}:
         return False
     if str(_setting_value(deps["settings"], "RAG_SIMPLE_QUERY_BYPASS_ENABLED", "1")).strip() != "1":
         return False
@@ -55,6 +63,7 @@ async def route_and_answer_internal_impl(
     image_b64: str | None,
     rag_modality: str,
     use_cache: bool,
+    runtime_hints: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Execute the synchronous routing path using injected dependencies."""
     start_time = time.time()
@@ -109,6 +118,7 @@ async def route_and_answer_internal_impl(
                 "answer": cached.get("text", ""),
                 "image_output_b64": cached.get("image_output_b64"),
                 "latency_s": round(time.time() - start_time, 3),
+                "estimated_cost_usd": 0.0,
                 "cost_per_1k": 0.0,
                 "metadata": {"cached": True},
                 "route": {
@@ -154,7 +164,7 @@ async def route_and_answer_internal_impl(
     valid_models = filter_configured_model_names(valid_models)
     if "apply_ollama_performance_preferences" in deps:
         try:
-            valid_models = deps["apply_ollama_performance_preferences"](valid_models)
+            valid_models = deps["apply_ollama_performance_preferences"](valid_models, runtime_hints=runtime_hints)
         except Exception as exc:
             deps["logger"].warning(f"[router] Failed to apply Ollama performance preferences: {exc}")
 
@@ -189,18 +199,50 @@ async def route_and_answer_internal_impl(
         image_b64=image_b64,
         use_rag=use_rag,
         uncertainty_score=float(uncertainty_score or 0.0),
+        runtime_hints=runtime_hints,
     )
+
+    retrieval_bundle: Dict[str, Any] = {
+        "citations": [],
+        "evidence_snippets": [],
+        "grounded": False,
+        "knowledge_version": None,
+        "retrieval_mode": (runtime_hints or {}).get("retrieval_mode", "no_retrieval"),
+        "retrieval_skipped_reason": "bypassed",
+    }
 
     if not should_skip_rag:
         retrieval_started_at = time.time()
         try:
             rag_mode = rag_modality if not (image_b64 and modality != "text") else modality
-            aug = await deps["build_augmented_prompt"](query, modality=rag_mode, image_b64=image_b64)
+            if "build_retrieval_bundle" in deps:
+                retrieval_bundle = await deps["build_retrieval_bundle"](
+                    query,
+                    modality=rag_mode,
+                    image_b64=image_b64,
+                    k=int((runtime_hints or {}).get("rag_top_k", 3)),
+                    retrieval_mode=(runtime_hints or {}).get("retrieval_mode"),
+                    context_token_budget=(runtime_hints or {}).get("rag_context_token_budget"),
+                    rerank_enabled=(runtime_hints or {}).get("rag_rerank_enabled"),
+                )
+                aug = retrieval_bundle.get("augmented_prompt") or query
+            else:
+                aug = await deps["build_augmented_prompt"](
+                    query,
+                    modality=rag_mode,
+                    image_b64=image_b64,
+                    k=int((runtime_hints or {}).get("rag_top_k", 3)),
+                    retrieval_mode=(runtime_hints or {}).get("retrieval_mode"),
+                    context_token_budget=(runtime_hints or {}).get("rag_context_token_budget"),
+                    rerank_enabled=(runtime_hints or {}).get("rag_rerank_enabled"),
+                )
+            if not retrieval_bundle.get("context"):
+                retrieval_bundle["grounded"] = False
             final_prompt = deps["build_final_prompt"](
                 query=query,
                 system_prompt=system_prompt,
-                use_rag=True,
-                rag_text=aug,
+                use_rag=bool(retrieval_bundle.get("context")),
+                rag_text=aug if retrieval_bundle.get("context") else None,
             )
         except Exception as exc:
             deps["logger"].warning(f"[router] RAG fail: {exc}")
@@ -210,9 +252,18 @@ async def route_and_answer_internal_impl(
                 use_rag=True,
                 rag_text=None,
             )
+            retrieval_bundle = {
+                "citations": [],
+                "evidence_snippets": [],
+                "grounded": False,
+                "knowledge_version": None,
+                "retrieval_mode": (runtime_hints or {}).get("retrieval_mode", "full_retrieval"),
+                "retrieval_skipped_reason": "rag_failure",
+            }
         finally:
             _observe_stage("retrieval", retrieval_started_at)
     else:
+        retrieval_bundle["retrieval_skipped_reason"] = "runtime_bypass"
         final_prompt = deps["build_final_prompt"](
             query=query,
             system_prompt=system_prompt,
@@ -226,7 +277,7 @@ async def route_and_answer_internal_impl(
     fallback_errors = []
 
     if use_fallback_chain:
-        max_fallbacks = deps["_safe_setting_int"]("REQUEST_MAX_FALLBACKS", 2)
+        max_fallbacks = int((runtime_hints or {}).get("max_fallbacks", deps["_safe_setting_int"]("REQUEST_MAX_FALLBACKS", 2)))
 
         async def _execute_provider(model_name: str):
             return await deps["call_model"](
@@ -341,6 +392,7 @@ async def route_and_answer_internal_impl(
         "image_output_b64": meta_safe.get("image_output_b64"),
         "latency_s": latency_s,
         "load_time_s": load_time_s,
+        "estimated_cost_usd": total_cost,
         "cost_per_1k": total_cost,
         "metadata": {
             "raw_payload": meta_safe.get("raw_payload"),
@@ -348,6 +400,12 @@ async def route_and_answer_internal_impl(
             "completion_tokens": c_tok,
             "load_time": load_time_s,
             "uncertainty_score": uncertainty_score,
+            "citations": retrieval_bundle.get("citations", []),
+            "evidence_snippets": retrieval_bundle.get("evidence_snippets", []),
+            "grounded": bool(retrieval_bundle.get("grounded")),
+            "knowledge_version": retrieval_bundle.get("knowledge_version"),
+            "retrieval_mode": retrieval_bundle.get("retrieval_mode"),
+            "retrieval_skipped_reason": retrieval_bundle.get("retrieval_skipped_reason"),
         },
         "route": {
             "chosen_model": chosen,

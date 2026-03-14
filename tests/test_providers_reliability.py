@@ -251,6 +251,78 @@ class TestOllamaProvider:
             assert result.text == "Resposta final"
             assert result.reasoning == "Etapas internas de raciocinio"
 
+    def test_apply_ollama_performance_preferences_prefers_interactive_warm_models(self):
+        """Interactive traffic should prefer warm, resident local models."""
+        from app import providers_async as pa
+
+        pa._ollama_runtime_state.clear()
+        pa._mark_ollama_model_state("ollama/qwen3.5:4b", loaded=True, load_seconds=0.2, inflight_delta=0, queue_wait_seconds=0.0)
+        pa._mark_ollama_model_state("ollama/ministral-3:3b", loaded=False, load_seconds=8.0, inflight_delta=0, queue_wait_seconds=0.8)
+
+        with patch("app.providers_async._runtime_provider_settings", return_value={
+            "ollama_load_penalty_enabled": True,
+            "ollama_route_candidate_limit": 3,
+            "ollama_concurrency_limit": 5,
+            "ollama_dynamic_concurrency_enabled": False,
+            "ollama_interactive_warm_models": ["ollama/qwen3.5:4b"],
+            "ollama_warm_models": ["ollama/qwen3.5:4b"],
+        }):
+            ordered = pa.apply_ollama_performance_preferences(
+                ["ollama/ministral-3:3b", "ollama/qwen3.5:4b"],
+                runtime_hints={"workload_class": "simple_text"},
+            )
+
+        assert ordered[0] == "ollama/qwen3.5:4b"
+
+    def test_provider_unavailable_negative_cache_roundtrip(self):
+        """Temporary unavailability cache should block only inside its TTL window."""
+        from app import providers_async as pa
+
+        pa._provider_unavailable_until.clear()
+        with patch("app.providers_async._runtime_provider_settings", return_value={"provider_unavailable_negative_cache_ttl_seconds": 30}):
+            pa.mark_provider_unavailable("ollama/qwen3.5:4b")
+        assert pa.is_provider_temporarily_unavailable("ollama/qwen3.5:4b") is True
+        pa.clear_provider_unavailable("ollama/qwen3.5:4b")
+        assert pa.is_provider_temporarily_unavailable("ollama/qwen3.5:4b") is False
+
+    def test_background_judge_throttle_activates_under_local_pressure(self):
+        """Background judge load shedding should activate when local inflight reaches the effective limit."""
+        from app import providers_async as pa
+
+        pa._ollama_runtime_state.clear()
+        pa._mark_ollama_model_state("ollama/qwen3.5:4b", loaded=True, inflight_delta=3)
+        pa._ollama_concurrency_controller._effective_limit = 3
+        pa._ollama_concurrency_controller._latest_ratio = 0.5
+
+        with patch("app.providers_async._runtime_provider_settings", return_value={
+            "ollama_background_load_shedding_enabled": True,
+            "ollama_concurrency_limit": 3,
+            "ollama_dynamic_concurrency_enabled": False,
+            "ollama_vram_high_watermark": 0.82,
+            "background_throttle_inflight_threshold": 3,
+            "background_throttle_queue_wait_p95_ms": 750,
+        }):
+            assert pa.should_throttle_background_judge() is True
+
+    def test_background_judge_throttle_activates_on_queue_wait_pressure(self):
+        """Background shedding should also activate when queue wait grows too high."""
+        from app import providers_async as pa
+
+        pa._ollama_runtime_state.clear()
+        pa._mark_ollama_model_state("ollama/qwen3.5:4b", loaded=True, queue_wait_seconds=1.2)
+        pa._ollama_concurrency_controller._effective_limit = 5
+        pa._ollama_concurrency_controller._latest_ratio = 0.4
+
+        with patch("app.providers_async._runtime_provider_settings", return_value={
+            "ollama_background_load_shedding_enabled": True,
+            "ollama_concurrency_limit": 5,
+            "ollama_dynamic_concurrency_enabled": False,
+            "ollama_vram_high_watermark": 0.82,
+            "background_throttle_inflight_threshold": 5,
+            "background_throttle_queue_wait_p95_ms": 700,
+        }):
+            assert pa.should_throttle_background_judge() is True
+
     @pytest.mark.asyncio
     async def test_ollama_provider_emits_queue_wait_and_load_metrics(self):
         """OllamaProvider should emit queue wait, inflight, load, and throughput metrics."""

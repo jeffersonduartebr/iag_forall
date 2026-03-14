@@ -251,12 +251,12 @@
       },
       "targets": [
         {
-          "expr": "increase(total_cost_usd[$__interval])",
+          "expr": "increase(total_cost_usd_total[$__interval]) or on() vector(0)",
           "legendFormat": "custo total",
           "refId": "A"
         },
         {
-          "expr": "sum by (provider) (increase(cost_by_provider_usd_total[$__interval]))",
+          "expr": "sum by (provider) (increase(cost_by_provider_usd_total[$__interval])) or on() vector(0)",
           "legendFormat": "{{provider}}",
           "refId": "B"
         }
@@ -365,13 +365,13 @@
       },
       "targets": [
         {
-          "expr": "sum by (model) (increase(tokens_input_total[15m]))",
-          "legendFormat": "{{model}} in",
+          "expr": "sum by (model) (increase(generation_tokens_per_second_count{model=~\"$model\"}[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} geracoes",
           "refId": "A"
         },
         {
-          "expr": "sum by (model) (increase(tokens_output_total[15m]))",
-          "legendFormat": "{{model}} out",
+          "expr": "sum by (model) (increase(ollama_model_load_seconds_count{model=~\"$model\"}[15m])) or on() vector(0)",
+          "legendFormat": "{{model}} warm loads",
           "refId": "B"
         }
       ],
@@ -527,13 +527,13 @@
       },
       "targets": [
         {
-          "expr": "sum by (model) (increase(bandit_select_total[15m]))",
-          "legendFormat": "{{model}} select",
+          "expr": "sum(increase(bandit_reward_count[15m])) or on() vector(0)",
+          "legendFormat": "reward events",
           "refId": "A"
         },
         {
-          "expr": "sum by (model) (increase(bandit_update_total[15m]))",
-          "legendFormat": "{{model}} update",
+          "expr": "sum(rate(bandit_reward_sum[15m])) / clamp_min(sum(rate(bandit_reward_count[15m])), 1) or on() vector(0)",
+          "legendFormat": "reward medio 15m",
           "refId": "B"
         }
       ],
@@ -585,8 +585,8 @@
           "refId": "D"
         },
         {
-          "expr": "sum by (model) (increase(bandit_select_total[15m])) or on() vector(0)",
-          "legendFormat": "{{model}} selecoes bandit",
+          "expr": "sum(increase(bandit_reward_count[15m])) or on() vector(0)",
+          "legendFormat": "eventos bandit",
           "refId": "E"
         }
       ],
@@ -613,7 +613,7 @@
           "type": "prometheus",
           "uid": "prometheus_llm_router"
         },
-        "definition": "label_values(providers_model_requests_total, model)",
+        "definition": "label_values(provider_inflight_requests, model)",
         "hide": 0,
         "includeAll": true,
         "label": "Modelo",
@@ -621,7 +621,7 @@
         "name": "model",
         "options": [],
         "query": {
-          "query": "label_values(providers_model_requests_total, model)",
+          "query": "label_values(provider_inflight_requests, model)",
           "refId": "Prometheus-model"
         },
         "refresh": 1,

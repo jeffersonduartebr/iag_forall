@@ -15,8 +15,8 @@ Suporta:
 """
 
 from __future__ import annotations
-from typing import List, Dict, Any, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field, field_validator, model_validator
 from enum import Enum
 
 
@@ -31,6 +31,52 @@ The class groups the state and behavior required for Modality."""
     TEXT = "text"
     VISION = "vision"
     MULTIMODAL = "multimodal"
+
+
+class ConfidenceBand(str, Enum):
+    """Represent supported confidence buckets exposed by the public response contract."""
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class VerificationStatus(str, Enum):
+    """Represent post-generation verification states for one answer."""
+    SUPPORTED = "supported"
+    WEAKLY_SUPPORTED = "weakly_supported"
+    UNSUPPORTED = "unsupported"
+
+
+class ReviewStatus(str, Enum):
+    """Represent the human-review lifecycle state for one answer."""
+    AUTO_APPROVED = "auto_approved"
+    NEEDS_REVIEW = "needs_review"
+    REVIEWED = "reviewed"
+    REJECTED = "rejected"
+
+
+class QueryJobStatus(str, Enum):
+    """Represent the lifecycle state of one asynchronously queued query."""
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+
+class AbstainReason(str, Enum):
+    """Represent machine-readable reasons for intentionally abstaining."""
+    EMPTY_ANSWER = "empty_answer"
+    LOW_CONFIDENCE = "low_confidence"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class QualitySource(str, Enum):
+    """Represent the provenance of one persisted quality signal."""
+    JUDGE = "judge"
+    BANDIT_PROXY = "bandit_proxy"
+    FALLBACK_DEFAULT = "fallback_default"
+    UNKNOWN = "unknown"
 
 
 # ============================================================
@@ -200,6 +246,24 @@ class CandidateResult(BaseModel):
     # Dados Brutos do Provider (flexível para aceitar Dict ou String JSON)
     payload: Optional[Any] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def map_legacy_cost_field(cls, value: Any) -> Any:
+        """Accept legacy candidate payloads that still expose `cost_per_1k`."""
+        if isinstance(value, dict) and "estimated_cost_usd" not in value and "cost_per_1k" in value:
+            cloned = dict(value)
+            cloned["estimated_cost_usd"] = cloned.get("cost_per_1k")
+            return cloned
+        return value
+
+    @field_validator("estimated_cost_usd", mode="before")
+    @classmethod
+    def normalize_estimated_cost_usd(cls, value: Any) -> float:
+        """Accept both the new public name and older internal aliases for candidate cost."""
+        if value is None:
+            return 0.0
+        return float(value)
+
 
 # ============================================================
 # 3. Decisão de Roteamento
@@ -229,6 +293,49 @@ class RouteDecision(BaseModel):
 # 4. Saída (Response)
 # ============================================================
 
+class ResponseCitation(BaseModel):
+    """Represent one evidence source attached to a grounded answer."""
+    doc_id: str
+    rank: int = 1
+    source: Optional[str] = None
+    snippet: Optional[str] = None
+    score: Optional[float] = None
+
+
+class EvidenceSnippet(BaseModel):
+    """Expose one short evidence excerpt used to support the response."""
+    doc_id: str
+    text: str
+    rank: int = 1
+    source: Optional[str] = None
+
+
+class ResponseProvenance(BaseModel):
+    """Group all grounding and evidence-related fields under one stable object."""
+    grounded: bool = False
+    knowledge_version: Optional[str] = None
+    citations: List[ResponseCitation] = Field(default_factory=list)
+    evidence_snippets: List[EvidenceSnippet] = Field(default_factory=list)
+
+
+class ResponseDiagnostics(BaseModel):
+    """Carry optional routing/debug details without polluting the public answer surface."""
+    route: Optional[RouteDecision] = None
+    candidates: List[CandidateResult] = Field(default_factory=list)
+    payload: Optional[Any] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    uncertainty_score: Optional[float] = None
+    guardrail_output_tags: List[str] = Field(default_factory=list)
+    experiment_id: Optional[str] = None
+    experiment_variant: Optional[Dict[str, Any]] = None
+    tenant_id: Optional[str] = None
+    perf_mode_enabled: Optional[bool] = None
+    retrieval_mode: Optional[str] = None
+    workload_class: Optional[str] = None
+    raw_payload: Optional[Any] = None
+
+
 class QueryResponse(BaseModel):
     """
     Resposta final enviada ao cliente.
@@ -245,12 +352,120 @@ class QueryResponse(BaseModel):
         description="Unique request correlation ID for end-to-end tracing"
     )
 
-    # Metadados de Decisão
-    route: RouteDecision
+    estimated_cost_usd: Optional[float] = Field(
+        None,
+        ge=0.0,
+        description="Estimated total cost in USD for the completed answer.",
+    )
 
-    # Detalhes dos Candidatos (se houver comparação ou fallback)
-    candidates: List[CandidateResult] = []
+    # Qualidade operacional e confiabilidade
+    confidence_score: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Normalized confidence score for the final answer.",
+    )
+    confidence_band: Optional[ConfidenceBand] = Field(
+        None,
+        description="Bucketed confidence label: high, medium, or low.",
+    )
+    abstained: bool = Field(
+        False,
+        description="Whether the system intentionally abstained instead of providing a normal answer.",
+    )
+    abstain_reason: Optional[AbstainReason] = Field(
+        None,
+        description="Short machine-readable reason for abstention.",
+    )
+    verification_status: Optional[VerificationStatus] = Field(
+        None,
+        description="Post-generation verification status such as supported, weakly_supported, or unsupported.",
+    )
+    review_status: Optional[ReviewStatus] = Field(
+        None,
+        description="Human-review lifecycle state for the answer.",
+    )
+    provenance: ResponseProvenance = Field(
+        default_factory=ResponseProvenance,
+        description="Grounding and provenance metadata for the answer.",
+    )
+    diagnostics: Optional[ResponseDiagnostics] = Field(
+        None,
+        description="Optional internal routing and debug information.",
+    )
 
-    # Payload bruto do provedor vencedor (para debug)
-    # Usamos Any para aceitar tanto Dict quanto String JSON sem quebrar a validação
-    payload: Optional[Any] = None
+
+class QueuedQueryAcceptedResponse(BaseModel):
+    """Return the accepted job contract when a query is deferred to the async queue."""
+    job_id: str
+    status: QueryJobStatus = QueryJobStatus.QUEUED
+    poll_url: str
+    result_url: str
+    expires_at: float
+    estimated_wait_seconds: Optional[float] = None
+
+
+class QueryJobStatusResponse(BaseModel):
+    """Expose the observable state of one queued query job."""
+    job_id: str
+    status: QueryJobStatus
+    created_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    expires_at: Optional[float] = None
+    error: Optional[Dict[str, Any]] = None
+
+
+class AdminSettingsUpdateRequest(BaseModel):
+    """Wrap dynamic setting updates behind an explicit request contract."""
+    settings: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TenantBudgetUpdateRequest(BaseModel):
+    """Represent the payload used to configure tenant budget limits."""
+    daily_usd_limit: float = 0.0
+    monthly_usd_limit: float = 0.0
+    enabled: bool = True
+
+
+class PolicyCreateRequest(BaseModel):
+    """Represent a policy upsert request."""
+    version: str = Field(..., min_length=1, max_length=128)
+    description: str = ""
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RoleGrantRequest(BaseModel):
+    """Represent a role-grant request payload."""
+    user_id: str = Field(..., min_length=1, max_length=128)
+    role_name: str = Field(..., min_length=1, max_length=64)
+    tenant_id: Optional[str] = Field(None, max_length=128)
+
+
+class RoleRevokeRequest(RoleGrantRequest):
+    """Represent a role-revoke request payload."""
+
+
+class ResponseReviewUpdateRequest(BaseModel):
+    """Represent one reviewer decision for an answer waiting in the review queue."""
+    review_status: ReviewStatus
+    reviewer_notes: Optional[str] = None
+    corrected_answer: Optional[str] = None
+
+
+class EvalRunCreateRequest(BaseModel):
+    """Represent the creation payload for one evaluation run."""
+    prompts: List[str] = Field(default_factory=list)
+    run_id: Optional[str] = Field(None, max_length=64)
+    policy_version: Optional[str] = Field(None, max_length=128)
+    tenant_id: Optional[str] = Field(None, max_length=128)
+    notes: str = ""
+    golden_set_id: Optional[str] = Field(None, max_length=128)
+
+
+class EvalRunExecuteRequest(BaseModel):
+    """Represent runtime overrides when enqueueing an eval run."""
+    modality: str = "text"
+    use_cache: bool = False
+    max_tokens: int = Field(512, ge=1, le=32000)
+    temperature: float = Field(0.5, ge=0.0, le=2.0)

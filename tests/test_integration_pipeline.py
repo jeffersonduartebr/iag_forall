@@ -53,6 +53,16 @@ def client():
                     "fallback": {"used": False, "models_tried": [], "errors": []},
                 },
                 "candidates": [],
+                "confidence_score": 0.82,
+                "confidence_band": "high",
+                "abstained": False,
+                "abstain_reason": None,
+                "verification_status": "supported",
+                "review_status": "auto_approved",
+                "grounded": False,
+                "citations": [],
+                "evidence_snippets": [],
+                "knowledge_version": None,
             },
             "image_input": None,
             "selected_policy": None,
@@ -80,7 +90,8 @@ class TestQueryEndpoint:
         data = response.json()
         assert "answer" in data
         assert "model" in data
-        assert "route" in data
+        assert "diagnostics" in data
+        assert "route" in data["diagnostics"]
 
     def test_query_includes_correlation_id(self, client):
         """Response should include a correlation ID."""
@@ -264,10 +275,12 @@ class TestResponseStructure:
         assert "answer" in data
         assert "model" in data
         assert "modality" in data
-        assert "route" in data
+        assert "diagnostics" in data
+        assert "route" in data["diagnostics"]
+        assert "provenance" in data
 
         # Route structure
-        route = data["route"]
+        route = data["diagnostics"]["route"]
         assert "chosen_model" in route
         assert "objectives" in route
 
@@ -282,4 +295,4 @@ class TestResponseStructure:
 
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data.get("candidates", []), list)
+        assert isinstance(data.get("diagnostics", {}).get("candidates", []), list)

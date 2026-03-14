@@ -25,6 +25,11 @@ def test_verdict_cache_and_helpers():
     assert judges._adaptive_threshold([0.2, 0.8], 0.3) >= 0.3
     assert judges._image_hash_from_b64(None) is None
     assert judges._image_hash_from_b64("abc") is not None
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(get=lambda key, default=None: (_ for _ in ()).throw(RuntimeError("boom"))))
+    assert judges._safe_setting_float("X", 1.2) == 1.2
+    assert judges._safe_setting_int("X", 3) == 3
+    monkeypatch.undo()
 
     s = judges.JudgeStats("m", avg_score=0.9, avg_cost=0.001, fitness=0.8)
     assert judges._score_candidate(s) > 0
@@ -90,6 +95,18 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(judges, "is_model_configured", lambda model: True)
     m = await judges._meta_evaluate_binary("q", "a", [("j1", 0.0), ("j2", 10.0)], "prompt", reference=None)
     assert m == 10.0
+
+    async def _query_empty(coll, vec, n_results=5):
+        return {}
+
+    monkeypatch.setattr(judges, "query_embedding", _query_empty)
+    assert await judges.get_rag_context("q") == ""
+
+    monkeypatch.setattr(judges, "embed_text", lambda q: (_ for _ in ()).throw(RuntimeError("embed fail")))
+    assert await judges.get_rag_context("q") == ""
+
+    monkeypatch.setattr(judges, "call_model", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("meta fail")))
+    assert await judges._meta_evaluate_binary("q", "a", [("j1", 0.0), ("j2", 10.0)], "prompt", reference="ref") == 0.0
 
 
 @pytest.mark.asyncio
@@ -249,6 +266,78 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert "j1" in metrics
     res = judges.calibrate_judges()
     assert res["status"] == "ok"
+
+
+def test_judge_stats_persistence_and_calibration_failures(monkeypatch):
+    """Judge persistence and calibration helpers should tolerate backend failures."""
+    warnings = []
+    monkeypatch.setattr(judges.logger, "warning", lambda msg, *args: warnings.append(msg % args if args else msg))
+    monkeypatch.setattr(judges.logger, "info", lambda *args, **kwargs: None)
+
+    class _BrokenCtx:
+        def __enter__(self):
+            raise RuntimeError("db down")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(judges, "engine", SimpleNamespace(begin=lambda: _BrokenCtx(), connect=lambda: _BrokenCtx()))
+    assert judges._load_judge_stats(10) == {}
+    judges._ensure_judge_calibration_table()
+    judges._persist_judge_metrics("j1", 0.8, 1.0, 0.01, 1.0, 0.9)
+    judges._persist_judge_log("q", "a", "j1", 8.0, "text")
+
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_CALIBRATION_ENABLED=True, JUDGE_CACHE_AGREEMENT_TARGET=0.9))
+    judges.record_judge_calibration("j1", "q", 7.0)
+    judges.update_calibration_cache_status("q")
+    assert judges.get_judge_calibration_metrics() == {}
+    assert judges.calibrate_judges()["status"] == "no_data"
+    assert warnings
+
+
+@pytest.mark.asyncio
+async def test_describe_image_and_llm_pair_edge_cases(monkeypatch):
+    """Judge helpers should handle empty candidate sets, single-judge results, and heuristic failures."""
+    monkeypatch.setattr(judges, "IMAGE_DESC_MODEL_HINT", "ollama/qwen3-vl:8b")
+    monkeypatch.setattr(judges, "VISION_VLM_CANDIDATES", [])
+    monkeypatch.setattr(judges, "MULTIMODAL_VLM_CANDIDATES", [])
+    monkeypatch.setattr(judges, "is_model_configured", lambda model: False)
+    assert await judges._describe_image_if_needed("img", "vision") == ""
+    assert judges.heuristic_score(None) == 0.0
+
+    judges._verdict_cache = judges.VerdictCache()
+    monkeypatch.setattr(judges, "_load_judge_stats", lambda w: {})
+    monkeypatch.setattr(judges, "_choose_two", lambda models, stats: [judges.SelectedJudge("j1", 1.0)])
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_MODELS=["j1"], JUDGES_MODE="llm"))
+    async def _get_rag_context(_q):
+        return ""
+
+    async def _describe(*args, **kwargs):
+        return ""
+
+    monkeypatch.setattr(judges, "get_rag_context", _get_rag_context)
+    monkeypatch.setattr(judges, "_describe_image_if_needed", _describe)
+    monkeypatch.setattr(judges, "_persist_judge_metrics", lambda **kwargs: None)
+    monkeypatch.setattr(judges, "_persist_judge_log", lambda **kwargs: None)
+
+    async def _call_model(**kwargs):
+        return "<verdict>CORRECT</verdict>", {"latency": 1.0, "cost_per_1k": 0.01}
+
+    monkeypatch.setattr(judges, "call_model", _call_model)
+    score = await judges.llm_based_score("q", "a", False, "text", None)
+    assert score == 1.0
+
+    monkeypatch.setattr(judges, "_choose_two", lambda models, stats: [])
+    judges._verdict_cache = judges.VerdictCache()
+    assert await judges.llm_based_score("q2", "a2", False, "text", None) == 0.0
+
+    async def _llm_fail(**kwargs):
+        raise RuntimeError("llm fail")
+
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGES_MODE="llm"))
+    monkeypatch.setattr(judges, "llm_based_score", _llm_fail)
+    with pytest.raises(RuntimeError, match="llm fail"):
+        await judges.judge_answer("q", "a")
 
 
 def test_judge_runtime_model_resolution(monkeypatch):

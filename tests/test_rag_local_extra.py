@@ -102,7 +102,11 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         """Execute the query routine.
 
 This helper encapsulates one focused step used by the surrounding workflow."""
-        return {"ids": [["d1", "d2"]], "documents": [["doc1", "doc2"]]}
+        return {
+            "ids": [["d1", "d2"]],
+            "documents": [["doc1", "doc2"]],
+            "metadatas": [[{"source": "kb-a"}, {"source": "kb-b"}]],
+        }
 
     monkeypatch.setattr(rl, "_compute_embedding", _emb)
     monkeypatch.setattr(
@@ -127,6 +131,11 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     prompt = await rl.build_augmented_prompt("como arrumar?", modality="text", image_b64=None, k=2)
     assert "CONTEXTO RECUPERADO" in prompt
     assert "doc1" in prompt or "doc2" in prompt
+
+    bundle = await rl.build_retrieval_bundle("como arrumar?", modality="text", image_b64=None, k=2)
+    assert bundle["grounded"] is True
+    assert bundle["citations"][0]["doc_id"] in {"d1", "d2"}
+    assert bundle["knowledge_version"]
 
     async def _emb_none(*a, **k):
         """Execute the emb none routine.
@@ -188,6 +197,7 @@ async def test_build_prompt_skips_rerank_and_trims_context(monkeypatch):
             "ids": [["d1", "d2"]],
             "documents": [["A" * 320, "B" * 320]],
             "distances": [[0.1, 0.2]],
+            "metadatas": [[{"source": "kb-a"}, {"source": "kb-b"}]],
         }
 
     rerank_calls = {"count": 0}
@@ -217,3 +227,42 @@ async def test_build_prompt_skips_rerank_and_trims_context(monkeypatch):
     assert rerank_calls["count"] == 0
     assert "CONTEXTO RECUPERADO" in prompt
     assert len(prompt) < 420
+
+
+@pytest.mark.asyncio
+async def test_build_retrieval_bundle_drops_weak_context_under_quality_floor(monkeypatch):
+    """Weak retrieval bundles should avoid injecting low-value context and report the skip reason."""
+    async def _emb(*a, **k):
+        return [0.1, 0.2]
+
+    async def _query(**kwargs):
+        return {
+            "ids": [["d1"]],
+            "documents": [["Documento curto demais"]],
+            "distances": [[0.2]],
+            "metadatas": [[{"source": "kb-a"}]],
+        }
+
+    monkeypatch.setattr(rl, "_compute_embedding", _emb)
+    monkeypatch.setattr(rl, "query_embedding", _query)
+    monkeypatch.setattr(rl.sparse_index, "search", lambda q, top_k=20: [])
+    monkeypatch.setattr(rl.sparse_index, "get_text", lambda did: "")
+    monkeypatch.setattr(rl, "rerank_documents", lambda q, docs, k: docs[:k])
+    monkeypatch.setattr(
+        rl.settings,
+        "get",
+        lambda key, default=None: {
+            "RERANK_ENABLED": "0",
+            "RAG_RERANK_MIN_CANDIDATES": "3",
+            "RAG_CONTEXT_QUALITY_MIN_DOCS": "2",
+            "RAG_LIGHT_CONTEXT_TOKEN_BUDGET": "80",
+        }.get(key, default),
+        raising=False,
+    )
+
+    bundle = await rl.build_retrieval_bundle("Explique a norma.", modality="text", k=1, retrieval_mode="light_retrieval")
+
+    assert bundle["context"] == ""
+    assert bundle["grounded"] is False
+    assert bundle["retrieval_skipped_reason"] == "insufficient_context_quality"
+    assert bundle["augmented_prompt"] == "Explique a norma."

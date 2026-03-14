@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import httpx
 import pybreaker
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app import providers_async as pa
 
@@ -72,6 +73,8 @@ def test_timeout_quality_tokens_and_factory(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_model_success_and_error_categories(monkeypatch):
     """Testa call model success and error categories."""
+    pa.reset_provider_runtime_state()
+
     class _P:
         """Represent `_P` within this module.
 
@@ -146,6 +149,160 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     with pytest.raises(pa.ProviderCallError) as exc2:
         await pa.call_model("openai/gpt-4o", "x")
     assert exc2.value.category == "provider_rate_limit"
+
+
+def test_runtime_provider_settings_parses_string_and_csv_forms(monkeypatch):
+    """Runtime provider settings should normalize JSON/csv warm-model inputs and aliases."""
+    fake_settings = SimpleNamespace(
+        get=lambda key, default=None: {
+            "OLLAMA_CONCURRENCY_LIMIT": "7",
+            "OLLAMA_DYNAMIC_CONCURRENCY_ENABLED": "1",
+            "OLLAMA_WARM_MODELS": "qwen3.5:4b, ollama/phi4:latest",
+            "OLLAMA_INTERACTIVE_MODEL_SET": '["ministral-3:3b"]',
+            "MODEL_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS": "45",
+        }.get(key, default)
+    )
+    monkeypatch.setitem(__import__("sys").modules, "app.settings_dynamic", SimpleNamespace(settings=fake_settings))
+
+    cfg = pa._runtime_provider_settings()
+    assert cfg["ollama_concurrency_limit"] == 7
+    assert cfg["ollama_dynamic_concurrency_enabled"] is True
+    assert "ollama/qwen3.5:4b" in cfg["ollama_warm_models"]
+    assert cfg["ollama_interactive_warm_models"] == ["ollama/ministral-3:3b"]
+    assert cfg["provider_unavailable_negative_cache_ttl_seconds"] == 45
+
+
+def test_provider_runtime_state_helpers_and_expiry(monkeypatch):
+    """Runtime state helpers should normalize names and expire unavailable entries."""
+    pa.reset_provider_runtime_state()
+    assert pa._normalize_ollama_model_name("") == "ollama/unknown"
+    assert pa._normalize_ollama_model_name("phi4:latest") == "ollama/phi4:latest"
+
+    pa._mark_ollama_model_state("phi4:latest", loaded=True, load_seconds=1.5, inflight_delta=2, queue_wait_seconds=0.4)
+    entry = pa._ensure_ollama_runtime_entry("ollama/phi4:latest")
+    assert entry["loaded"] is True
+    assert entry["inflight"] == 2
+    assert entry["last_queue_wait_seconds"] == 0.4
+
+    pa._provider_unavailable_until["ollama/phi4:latest"] = 1.0
+    monkeypatch.setattr(pa.time, "time", lambda: 10.0)
+    assert pa.is_provider_temporarily_unavailable("ollama/phi4:latest") is False
+
+
+@pytest.mark.asyncio
+async def test_concurrency_controller_static_start_and_failed_refresh(monkeypatch):
+    """Controller should publish fallback state in static mode and survive telemetry failure."""
+    controller = pa.OllamaConcurrencyController()
+    metric = MagicMock()
+    monkeypatch.setattr(pa, "OLLAMA_DYNAMIC_CONCURRENCY_LIMIT", metric)
+    monkeypatch.setattr(pa, "OLLAMA_DYNAMIC_CONCURRENCY_MODE", metric)
+    monkeypatch.setattr(
+        pa,
+        "_runtime_provider_settings",
+        lambda: {
+            "ollama_concurrency_limit": 4,
+            "ollama_dynamic_concurrency_enabled": False,
+            "ollama_concurrency_min": 1,
+            "ollama_concurrency_max": 4,
+        },
+    )
+    await controller.start()
+    assert controller.get_effective_limit() == 4
+
+    monkeypatch.setattr(
+        pa,
+        "_runtime_provider_settings",
+        lambda: {
+            "ollama_concurrency_limit": 4,
+            "ollama_dynamic_concurrency_enabled": True,
+            "ollama_concurrency_min": 1,
+            "ollama_concurrency_max": 4,
+            "ollama_gpu_index": 0,
+            "ollama_vram_high_watermark": 0.8,
+            "ollama_vram_low_watermark": 0.5,
+            "ollama_concurrency_step_up": 1,
+            "ollama_concurrency_step_down": 1,
+            "ollama_concurrency_stable_windows": 2,
+        },
+    )
+    monkeypatch.setattr(controller, "_read_vram_snapshot", lambda gpu_index: None)
+    await controller.force_refresh()
+    assert controller.get_effective_limit() == 4
+
+
+def test_controller_snapshot_reader_and_interactive_model_fallback(monkeypatch):
+    """Helper methods should parse nvidia-smi output and fall back to global warm models."""
+    controller = pa.OllamaConcurrencyController()
+    monkeypatch.setattr(
+        pa.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(stdout="123, 456\n"),
+    )
+    used, total = controller._read_vram_snapshot(0)
+    assert used == 123 * 1024 * 1024
+    assert total == 456 * 1024 * 1024
+
+    monkeypatch.setattr(pa.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert controller._read_vram_snapshot(0) is None
+
+    monkeypatch.setattr(pa, "_runtime_provider_settings", lambda: {"ollama_interactive_warm_models": [], "ollama_warm_models": ["ollama/phi4:latest"]})
+    assert pa.get_interactive_ollama_models() == ["ollama/phi4:latest"]
+
+
+@pytest.mark.asyncio
+async def test_warm_ollama_model_runtime_success_and_failure(monkeypatch):
+    """Warmup should update runtime state on success and return False on failure."""
+    metric = MagicMock()
+    metric.labels.return_value = metric
+    monkeypatch.setattr(pa, "OLLAMA_MODEL_LOAD_SECONDS", metric)
+    monkeypatch.setattr(pa, "OLLAMA_MODEL_LOADED", metric)
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"load_duration": 1_000_000_000}
+    client = AsyncMock()
+    client.post.return_value = response
+    monkeypatch.setattr(pa, "get_http_client", AsyncMock(return_value=client))
+    monkeypatch.setattr(pa, "_get_adaptive_timeout", lambda model: 30.0)
+    pa.reset_provider_runtime_state()
+    assert await pa.warm_ollama_model_runtime("qwen3.5:4b") is True
+    assert pa._ensure_ollama_runtime_entry("ollama/qwen3.5:4b")["loaded"] is True
+
+    client.post.side_effect = RuntimeError("down")
+    assert await pa.warm_ollama_model_runtime("qwen3.5:4b") is False
+
+
+def test_base_provider_metrics_helpers():
+    """BaseProvider metric helpers should safely handle zero-token and failure paths."""
+    class _Metric:
+        def __init__(self):
+            self.calls = []
+        def labels(self, **kwargs):
+            self.calls.append(("labels", kwargs))
+            return self
+        def inc(self, value=1):
+            self.calls.append(("inc", value))
+        def observe(self, value):
+            self.calls.append(("observe", value))
+
+    req = _Metric()
+    ok = _Metric()
+    err = _Metric()
+    lat = _Metric()
+    cost = _Metric()
+    tps = _Metric()
+    with patch.object(pa, "PROV_REQ", req), patch.object(pa, "PROV_OK", ok), patch.object(pa, "PROV_ERR", err), patch.object(pa, "PROV_LAT", lat), patch.object(pa, "PROV_COST", cost), patch.object(pa, "GENERATION_TOKENS_PER_SECOND", tps):
+        class _Provider(pa.BaseProvider):
+            async def generate(self, prompt, image_b64=None, **kwargs):
+                return pa.LLMResponse(text="x", latency=0.1, cost=0.0, prompt_tokens=1, completion_tokens=1, model_used="m")
+        provider = _Provider("test", 1)
+        provider._record_metrics("m", 0.2, 0.3, True)
+        provider._record_metrics("m", 0.2, 0.0, False)
+        provider._record_generation_metrics("m", 0, 1.0)
+        provider._record_generation_metrics("m", 4, 2.0)
+    assert any(call[0] == "observe" for call in lat.calls)
+    assert any(call[0] == "inc" for call in err.calls)
+    assert any(call[0] == "observe" for call in tps.calls)
 
 
 @pytest.mark.asyncio

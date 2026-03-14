@@ -91,6 +91,7 @@ DDL_STATEMENTS = [
         notes TEXT,
         prompts_json LONGTEXT,
         summary_json LONGTEXT,
+        metadata_json LONGTEXT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_status_created (status, created_at)
@@ -121,6 +122,30 @@ DDL_STATEMENTS = [
         UNIQUE KEY uq_user_role_tenant (user_id, role_name, tenant_id),
         INDEX idx_user (user_id),
         INDEX idx_role (role_name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS response_reviews (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        correlation_id VARCHAR(128) NULL,
+        tenant_id VARCHAR(128) NULL,
+        query_text TEXT,
+        answer LONGTEXT,
+        chosen_model VARCHAR(255),
+        confidence_score FLOAT NULL,
+        confidence_band VARCHAR(16) NULL,
+        grounded TINYINT DEFAULT 0,
+        verification_status VARCHAR(32) NULL,
+        review_status VARCHAR(32) NOT NULL DEFAULT 'needs_review',
+        review_reason VARCHAR(64) NULL,
+        reviewer_id VARCHAR(128) NULL,
+        reviewer_notes LONGTEXT NULL,
+        corrected_answer LONGTEXT NULL,
+        metadata_json LONGTEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_review_status_created (review_status, created_at),
+        INDEX idx_tenant_review_created (tenant_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     """,
 ]
@@ -155,6 +180,7 @@ def ensure_roadmap_tables() -> None:
         with get_engine().begin() as conn:
             for ddl in DDL_STATEMENTS:
                 conn.execute(text(ddl))
+            conn.execute(text("ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS metadata_json LONGTEXT NULL"))
     except Exception as e:
         logger.warning("[roadmap_features] failed to ensure tables: %s", e)
 
@@ -397,14 +423,21 @@ def list_policy_versions(limit: int = 100) -> List[Dict[str, Any]]:
     return out
 
 
-def create_eval_run(run_id: str, prompts: List[str], policy_version: Optional[str] = None, tenant_id: Optional[str] = None, notes: str = "") -> None:
+def create_eval_run(
+    run_id: str,
+    prompts: List[str],
+    policy_version: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    notes: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
     """Create eval run header."""
     with get_engine().begin() as conn:
         conn.execute(
             text(
                 """
-                INSERT INTO eval_runs (id, status, policy_version, tenant_id, notes, prompts_json, summary_json)
-                VALUES (:i, 'queued', :p, :t, :n, :pr, '{}')
+                INSERT INTO eval_runs (id, status, policy_version, tenant_id, notes, prompts_json, summary_json, metadata_json)
+                VALUES (:i, 'queued', :p, :t, :n, :pr, '{}', :md)
                 """
             ),
             {
@@ -413,6 +446,7 @@ def create_eval_run(run_id: str, prompts: List[str], policy_version: Optional[st
                 "t": tenant_id,
                 "n": notes,
                 "pr": json.dumps(prompts, ensure_ascii=False),
+                "md": json.dumps(metadata or {}, ensure_ascii=False),
             },
         )
 
@@ -478,7 +512,7 @@ def get_eval_run(run_id: str) -> Optional[Dict[str, Any]]:
     """Fetch eval run with aggregated stats."""
     with get_engine().connect() as conn:
         head = conn.execute(
-            text("SELECT id, status, policy_version, tenant_id, notes, prompts_json, summary_json, created_at, updated_at FROM eval_runs WHERE id=:i"),
+            text("SELECT id, status, policy_version, tenant_id, notes, prompts_json, summary_json, metadata_json, created_at, updated_at FROM eval_runs WHERE id=:i"),
             {"i": run_id},
         ).mappings().first()
         if not head:
@@ -505,6 +539,10 @@ def get_eval_run(run_id: str) -> Optional[Dict[str, Any]]:
         out["summary"] = json.loads(out.pop("summary_json") or "{}")
     except Exception:
         out["summary"] = {}
+    try:
+        out["metadata"] = json.loads(out.pop("metadata_json") or "{}")
+    except Exception:
+        out["metadata"] = {}
     out["aggregate"] = dict(agg or {})
     return out
 
@@ -513,10 +551,125 @@ def list_eval_runs(limit: int = 50) -> List[Dict[str, Any]]:
     """List latest eval runs."""
     with get_engine().connect() as conn:
         rows = conn.execute(
-            text("SELECT id, status, policy_version, tenant_id, notes, created_at, updated_at FROM eval_runs ORDER BY created_at DESC LIMIT :l"),
+            text("SELECT id, status, policy_version, tenant_id, notes, metadata_json, created_at, updated_at FROM eval_runs ORDER BY created_at DESC LIMIT :l"),
             {"l": max(1, min(int(limit), 500))},
         ).mappings().all()
-    return [dict(r) for r in rows]
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        except Exception:
+            item["metadata"] = {}
+        out.append(item)
+    return out
+
+
+def create_response_review(
+    *,
+    correlation_id: Optional[str],
+    tenant_id: Optional[str],
+    query_text: str,
+    answer: str,
+    chosen_model: str,
+    confidence_score: Optional[float],
+    confidence_band: Optional[str],
+    grounded: bool,
+    verification_status: Optional[str],
+    review_reason: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Insert one answer into the human-review queue and return its identifier."""
+    with get_engine().begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO response_reviews (
+                    correlation_id, tenant_id, query_text, answer, chosen_model,
+                    confidence_score, confidence_band, grounded, verification_status,
+                    review_status, review_reason, metadata_json
+                )
+                VALUES (
+                    :cid, :tenant_id, :query_text, :answer, :chosen_model,
+                    :confidence_score, :confidence_band, :grounded, :verification_status,
+                    'needs_review', :review_reason, :metadata_json
+                )
+                """
+            ),
+            {
+                "cid": correlation_id,
+                "tenant_id": tenant_id,
+                "query_text": query_text,
+                "answer": answer,
+                "chosen_model": chosen_model,
+                "confidence_score": confidence_score,
+                "confidence_band": confidence_band,
+                "grounded": 1 if grounded else 0,
+                "verification_status": verification_status,
+                "review_reason": review_reason,
+                "metadata_json": json.dumps(metadata or {}, ensure_ascii=False),
+            },
+        )
+        return int(result.lastrowid or 0)
+
+
+def list_response_reviews(status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """List queued or completed response reviews for human follow-up."""
+    sql = """
+        SELECT id, correlation_id, tenant_id, query_text, answer, chosen_model,
+               confidence_score, confidence_band, grounded, verification_status,
+               review_status, review_reason, reviewer_id, reviewer_notes, corrected_answer,
+               metadata_json, created_at, updated_at
+        FROM response_reviews
+    """
+    params: Dict[str, Any] = {"l": max(1, min(int(limit), 1000))}
+    if status:
+        sql += " WHERE review_status=:s"
+        params["s"] = status
+    sql += " ORDER BY id DESC LIMIT :l"
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        except Exception:
+            item["metadata"] = {}
+        out.append(item)
+    return out
+
+
+def update_response_review(
+    review_id: int,
+    *,
+    review_status: str,
+    reviewer_id: Optional[str] = None,
+    reviewer_notes: Optional[str] = None,
+    corrected_answer: Optional[str] = None,
+) -> bool:
+    """Apply a reviewer decision to one queued response review item."""
+    with get_engine().begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                UPDATE response_reviews
+                SET review_status=:status,
+                    reviewer_id=:reviewer_id,
+                    reviewer_notes=:reviewer_notes,
+                    corrected_answer=:corrected_answer
+                WHERE id=:review_id
+                """
+            ),
+            {
+                "status": review_status,
+                "reviewer_id": reviewer_id,
+                "reviewer_notes": reviewer_notes,
+                "corrected_answer": corrected_answer,
+                "review_id": int(review_id),
+            },
+        )
+    return bool(result.rowcount)
 
 
 def grant_role(user_id: str, role_name: str, tenant_id: Optional[str] = None) -> None:

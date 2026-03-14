@@ -18,10 +18,13 @@ from ..roadmap_features import (
     list_audit_events,
     list_policy_versions,
     list_roles,
+    list_response_reviews,
     log_audit_event,
     revoke_role,
     set_tenant_budget,
+    update_response_review,
 )
+from ..schemas import PolicyCreateRequest, ResponseReviewUpdateRequest, RoleGrantRequest, RoleRevokeRequest, TenantBudgetUpdateRequest
 
 router = APIRouter()
 
@@ -29,7 +32,7 @@ router = APIRouter()
 @router.put("/admin/budgets/{tenant_id}", tags=["Governance"])
 def upsert_tenant_budget(
     tenant_id: str,
-    payload: Dict[str, Any],
+    payload: TenantBudgetUpdateRequest,
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
@@ -42,9 +45,9 @@ def upsert_tenant_budget(
         required_roles=["governance_admin", "platform_admin"],
         tenant_id=tenant_id,
     )
-    daily = float(payload.get("daily_usd_limit", 0.0) or 0.0)
-    monthly = float(payload.get("monthly_usd_limit", 0.0) or 0.0)
-    enabled = bool(payload.get("enabled", True))
+    daily = float(payload.daily_usd_limit or 0.0)
+    monthly = float(payload.monthly_usd_limit or 0.0)
+    enabled = bool(payload.enabled)
     set_tenant_budget(tenant_id=tenant_id, daily_usd_limit=daily, monthly_usd_limit=monthly, enabled=enabled)
     log_audit_event(
         actor=x_user_id or auth["authorized_by"],
@@ -111,7 +114,7 @@ def get_audit_events(
 
 @router.post("/admin/policies", tags=["Policy"])
 def create_policy(
-    payload: Dict[str, Any],
+    payload: PolicyCreateRequest,
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
@@ -123,13 +126,9 @@ def create_policy(
         user_roles_header=x_user_roles,
         required_roles=["policy_admin", "platform_admin"],
     )
-    version = str(payload.get("version") or "").strip()
-    if not version:
-        raise HTTPException(status_code=400, detail="version is required")
-    description = str(payload.get("description") or "")
-    config = payload.get("config") or {}
-    if not isinstance(config, dict):
-        raise HTTPException(status_code=400, detail="config must be an object")
+    version = str(payload.version).strip()
+    description = str(payload.description or "")
+    config = dict(payload.config or {})
     create_policy_version(version=version, config=config, description=description)
     log_audit_event(
         actor=x_user_id or auth["authorized_by"],
@@ -182,14 +181,12 @@ def list_policies(
 
 
 @router.post("/admin/rbac/grants", tags=["Governance"])
-def create_role_grant(payload: Dict[str, Any], x_admin_token: Optional[str] = Header(None)):
+def create_role_grant(payload: RoleGrantRequest, x_admin_token: Optional[str] = Header(None)):
     """Grant a role to a user. Bootstrap is admin-token only."""
     require_admin(x_admin_token)
-    user_id = str(payload.get("user_id") or "").strip()
-    role_name = str(payload.get("role_name") or "").strip()
-    tenant_id = payload.get("tenant_id")
-    if not user_id or not role_name:
-        raise HTTPException(status_code=400, detail="user_id and role_name are required")
+    user_id = str(payload.user_id).strip()
+    role_name = str(payload.role_name).strip()
+    tenant_id = payload.tenant_id
     grant_role(user_id=user_id, role_name=role_name, tenant_id=str(tenant_id) if tenant_id else None)
     log_audit_event(
         actor="admin",
@@ -202,14 +199,12 @@ def create_role_grant(payload: Dict[str, Any], x_admin_token: Optional[str] = He
 
 
 @router.post("/admin/rbac/revokes", tags=["Governance"])
-def delete_role_grant(payload: Dict[str, Any], x_admin_token: Optional[str] = Header(None)):
+def delete_role_grant(payload: RoleRevokeRequest, x_admin_token: Optional[str] = Header(None)):
     """Revoke a role from a user. Bootstrap is admin-token only."""
     require_admin(x_admin_token)
-    user_id = str(payload.get("user_id") or "").strip()
-    role_name = str(payload.get("role_name") or "").strip()
-    tenant_id = payload.get("tenant_id")
-    if not user_id or not role_name:
-        raise HTTPException(status_code=400, detail="user_id and role_name are required")
+    user_id = str(payload.user_id).strip()
+    role_name = str(payload.role_name).strip()
+    tenant_id = payload.tenant_id
     removed = revoke_role(user_id=user_id, role_name=role_name, tenant_id=str(tenant_id) if tenant_id else None)
     log_audit_event(
         actor="admin",
@@ -226,3 +221,57 @@ def get_rbac_roles(user_id: Optional[str] = None, x_admin_token: Optional[str] =
     """List RBAC role bindings."""
     require_admin(x_admin_token)
     return {"items": list_roles(user_id=user_id)}
+
+
+@router.get("/admin/reviews", tags=["Governance"])
+def get_response_reviews(
+    status: Optional[str] = None,
+    limit: int = 100,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """List response-review items queued for human follow-up."""
+    require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["audit_viewer", "platform_admin"],
+    )
+    return {"items": list_response_reviews(status=status, limit=limit)}
+
+
+@router.post("/admin/reviews/{review_id}", tags=["Governance"])
+def apply_response_review(
+    review_id: int,
+    payload: ResponseReviewUpdateRequest,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+):
+    """Record one reviewer decision for an answer awaiting human validation."""
+    auth = require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        required_roles=["audit_viewer", "platform_admin"],
+    )
+    review_status = str(getattr(payload.review_status, "value", payload.review_status) or "").strip()
+    if review_status not in {"reviewed", "rejected"}:
+        raise HTTPException(status_code=400, detail="review_status must be reviewed or rejected")
+    updated = update_response_review(
+        review_id,
+        review_status=review_status,
+        reviewer_id=x_user_id or auth["authorized_by"],
+        reviewer_notes=str(payload.reviewer_notes or "") or None,
+        corrected_answer=str(payload.corrected_answer or "") or None,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Review item not found: {review_id}")
+    log_audit_event(
+        actor=x_user_id or auth["authorized_by"],
+        action="response_review_update",
+        resource="response_reviews",
+        metadata={"review_id": review_id, "review_status": review_status, "roles": auth["roles"]},
+    )
+    return {"status": "updated", "review_id": review_id, "review_status": review_status}
