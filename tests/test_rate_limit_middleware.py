@@ -148,6 +148,51 @@ async def test_congested_pressure_marks_interactive_queries_for_async_queue(monk
 
 
 @pytest.mark.asyncio
+async def test_elevated_pressure_preempts_interactive_queries_before_last_slot(monkeypatch):
+    """Interactive traffic should defer with a small reserve instead of consuming the last two sync slots."""
+    from app.middleware import rate_limit as rl
+
+    rl.rate_limit_store = rl.RateLimitStore()
+    rl.rate_limit_store._use_redis = False
+    rl._pressure_tracker = rl.PressureStateTracker()
+
+    settings_map = {
+        "ADAPTIVE_LIMITER_ENABLED": "1",
+        "ADAPTIVE_LIMITER_HYSTERESIS_WINDOWS": "1",
+        "ADAPTIVE_LIMITER_WINDOW_SECONDS": "15",
+        "ADAPTIVE_LIMITER_INTERACTIVE_PER_SLOT_ELEVATED": "2",
+        "ADAPTIVE_LIMITER_SYNC_QUEUE_WAIT_MS": "250",
+    }
+    monkeypatch.setattr(rl.settings, "get", lambda key, default=None: settings_map.get(key, default))
+    monkeypatch.setattr(
+        rl,
+        "get_ollama_admission_snapshot",
+        lambda: {
+            "current_limit": 5,
+            "total_inflight": 3,
+            "max_queue_wait_ms": 120.0,
+            "utilization": 0.75,
+            "vram_ratio": 0.5,
+            "pressure_state": "elevated",
+        },
+    )
+    monkeypatch.setattr(rl, "get_backpressure", lambda: SimpleNamespace(get_stats=lambda: {"utilization": 0.0}))
+
+    middleware = rl.RateLimitMiddleware(app=lambda scope, receive, send: None)
+
+    async def _call_next(_request):
+        return Response("ok", status_code=200)
+
+    request = _build_request("/query", headers={"content-type": "application/json"}, body=b'{"query":"hello"}')
+    response = await middleware.dispatch(request, _call_next)
+
+    assert response.status_code == 200
+    assert getattr(request.state, "defer_to_query_job", False) is True
+    assert response.headers["X-Admission-State"] == "elevated"
+    assert response.headers["X-RateLimit-Scope"] == "interactive_query"
+
+
+@pytest.mark.asyncio
 async def test_congested_pressure_still_rejects_admin_routes(monkeypatch):
     """Non-interactive routes should still receive 429 under adaptive-limiter overload."""
     from app.middleware import rate_limit as rl
@@ -258,3 +303,42 @@ async def test_admin_routes_are_limited_before_interactive_queries(monkeypatch):
     assert admin_second.status_code == 429
     assert interactive_first.status_code == 200
     assert interactive_second.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_query_job_polling_is_exempt_from_adaptive_limiter(monkeypatch):
+    """Polling accepted queued jobs must stay available even while the provider is overloaded."""
+    from app.middleware import rate_limit as rl
+
+    rl.rate_limit_store = rl.RateLimitStore()
+    rl.rate_limit_store._use_redis = False
+    rl._pressure_tracker = rl.PressureStateTracker()
+
+    settings_map = {
+        "ADAPTIVE_LIMITER_ENABLED": "1",
+        "ADAPTIVE_LIMITER_HYSTERESIS_WINDOWS": "1",
+    }
+    monkeypatch.setattr(rl.settings, "get", lambda key, default=None: settings_map.get(key, default))
+    monkeypatch.setattr(
+        rl,
+        "get_ollama_admission_snapshot",
+        lambda: {
+            "current_limit": 1,
+            "total_inflight": 1,
+            "max_queue_wait_ms": 1500.0,
+            "utilization": 1.0,
+            "vram_ratio": 0.9,
+            "pressure_state": "congested",
+        },
+    )
+    monkeypatch.setattr(rl, "get_backpressure", lambda: SimpleNamespace(get_stats=lambda: {"utilization": 0.0}))
+
+    middleware = rl.RateLimitMiddleware(app=lambda scope, receive, send: None)
+
+    async def _call_next(_request):
+        return Response("ok", status_code=200)
+
+    response = await middleware.dispatch(_build_request("/query/jobs/job-1"), _call_next)
+
+    assert response.status_code == 200
+    assert "X-Admission-State" not in response.headers

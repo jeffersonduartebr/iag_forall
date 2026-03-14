@@ -28,6 +28,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .providers_async import (
     call_model,
     _ensure_ollama_model,
+    is_ollama_model_verified,
     ProviderCallError,
     apply_ollama_performance_preferences,
     should_throttle_background_judge,
@@ -53,6 +54,7 @@ from .services.router_services import (
 )
 from .services.router_maintenance import create_background_threads
 from .services.router_feedback import process_background_feedback_impl
+from .query_jobs import get_pending_query_jobs_count
 from .services.router_execution import route_and_answer_internal_impl
 from .services.router_resilience import (
     dep_cache_breaker as _dep_cache_breaker,
@@ -84,6 +86,7 @@ from .observability import (
     FEEDBACK_PROCESSING_LATENCY,
     FEEDBACK_BACKLOG_AGE,
     FEEDBACK_TASK_FAILURES,
+    BACKGROUND_JUDGE_SKIPPED,
     EMA_BATCH_QUEUE_SIZE,
     EMA_BATCH_FLUSHES,
     EMA_LOG_CLEANUP_ROWS,
@@ -464,6 +467,7 @@ async def _route_and_answer_internal(
             "select_model": select_model,
             "apply_ollama_performance_preferences": apply_ollama_performance_preferences,
             "_ensure_ollama_model": _ensure_ollama_model,
+            "is_ollama_model_verified": is_ollama_model_verified,
             "build_augmented_prompt": build_augmented_prompt,
             "build_retrieval_bundle": build_retrieval_bundle,
             "build_final_prompt": build_final_prompt,
@@ -619,7 +623,9 @@ async def process_background_feedback(
             "FEEDBACK_PROCESSING_LATENCY": FEEDBACK_PROCESSING_LATENCY,
             "FEEDBACK_BACKLOG_AGE": FEEDBACK_BACKLOG_AGE,
             "FEEDBACK_TASK_FAILURES": FEEDBACK_TASK_FAILURES,
+            "BACKGROUND_JUDGE_SKIPPED": BACKGROUND_JUDGE_SKIPPED,
             "should_throttle_background_judge": should_throttle_background_judge,
+            "get_pending_query_jobs_count": get_pending_query_jobs_count,
         },
         state={"EMA_HISTORY": EMA_HISTORY},
         query=query,

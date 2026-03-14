@@ -91,6 +91,10 @@ class FakeRedis:
     def pipeline(self):
         return FakePipeline(self)
 
+    def keys(self, pattern):
+        prefix = pattern.rstrip("*")
+        return [key for key in self.data.keys() if str(key).startswith(prefix)]
+
 
 def _request():
     from app.schemas import QueryRequest
@@ -118,6 +122,8 @@ def test_enqueue_query_job_returns_accepted_payload(monkeypatch):
 
     assert out.job_id
     assert out.status.value == "queued"
+    assert out.queue_depth == 1
+    assert out.poll_after_seconds == 1.0
     assert sent["kwargs"]["task_id"] == out.job_id
 
 
@@ -149,6 +155,7 @@ def test_get_query_job_status_and_result(monkeypatch):
     result = qj.get_query_job_result("job-1")
 
     assert status.status == QueryJobStatus.COMPLETED
+    assert status.poll_after_seconds == 1.0
     assert result.answer == "ok"
 
 
@@ -177,3 +184,57 @@ def test_get_query_job_result_raises_when_not_ready(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         qj.get_query_job_result("job-2")
     assert exc.value.status_code == 409
+
+
+def test_enqueue_query_job_uses_ip_limit_without_tenant(monkeypatch):
+    """IP fallback identities should use the dedicated pending limit."""
+    import app.query_jobs as qj
+
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(qj, "_get_job_store", lambda: fake_redis)
+    monkeypatch.setattr(qj.celery_app, "send_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(qj.settings, "get", lambda key, default=None: {"QUERY_JOB_MAX_PENDING_PER_IP": "2"}.get(key, default))
+
+    req = _request().model_copy(update={"tenant_id": None})
+    qj.enqueue_query_job(
+        req=req,
+        correlation_id="cid-1",
+        reason="ollama_overloaded",
+        pressure_state="elevated",
+        route_path="/query",
+        identity_key="127.0.0.1",
+    )
+    qj.enqueue_query_job(
+        req=req,
+        correlation_id="cid-2",
+        reason="ollama_overloaded",
+        pressure_state="elevated",
+        route_path="/query",
+        identity_key="127.0.0.1",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        qj.enqueue_query_job(
+            req=req,
+            correlation_id="cid-3",
+            reason="ollama_overloaded",
+            pressure_state="elevated",
+            route_path="/query",
+            identity_key="127.0.0.1",
+        )
+    assert exc.value.status_code == 429
+    assert exc.value.detail["identity_type"] == "ip"
+    assert exc.value.detail["pending_limit"] == 2
+
+
+def test_get_pending_query_jobs_count_totals_all_identities(monkeypatch):
+    """Global queue depth should sum every identity bucket stored in Redis."""
+    import app.query_jobs as qj
+
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(qj, "_get_job_store", lambda: fake_redis)
+    fake_redis.data[qj._tenant_pending_key("tenant-a")] = 3
+    fake_redis.data[qj._tenant_pending_key("ip:1.2.3.4")] = 2
+
+    assert qj.get_pending_query_jobs_count() == 5
+    assert qj.get_pending_query_jobs_count("tenant-a") == 3

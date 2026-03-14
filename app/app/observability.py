@@ -461,6 +461,12 @@ QUERY_JOBS_QUEUED = Counter(
     ["reason"],
     registry=registry,
 )
+QUERY_JOBS_SATURATED = Counter(
+    "query_jobs_saturated_total",
+    "Total query requests rejected because the async queue was already saturated",
+    ["identity_type"],
+    registry=registry,
+)
 QUERY_JOBS_COMPLETED = Counter(
     "query_jobs_completed_total",
     "Total async query jobs completed successfully",
@@ -492,6 +498,18 @@ QUERY_JOB_EXECUTION_SECONDS = Histogram(
     "Execution time for queued query jobs",
     registry=registry,
     buckets=(0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+)
+QUERY_JOB_POLLING_SERVED = Counter(
+    "query_job_polling_served_total",
+    "Total queued-job polling requests served successfully",
+    ["endpoint"],
+    registry=registry,
+)
+BACKGROUND_JUDGE_SKIPPED = Counter(
+    "background_judge_skipped_total",
+    "Total background judge decisions skipped to preserve capacity",
+    ["reason"],
+    registry=registry,
 )
 
 # ------------------------------------------------------------

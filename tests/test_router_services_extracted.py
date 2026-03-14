@@ -63,6 +63,7 @@ def _deps_for_execution():
         "get_dynamic_strategy_weights": lambda modality: {"w_quality": 1, "w_latency": 1, "w_cost": 1},
         "choose_top2_models": lambda **kwargs: kwargs["candidates"][:2],
         "select_model": lambda models, query, modality: "openai/gpt-4o",
+        "is_ollama_model_verified": lambda name: False,
         "_ensure_ollama_model": lambda name: None,
         "build_augmented_prompt": None,
         "build_final_prompt": lambda **kwargs: f"{kwargs['system_prompt']}::{kwargs['query']}::{kwargs.get('rag_text')}",
@@ -147,6 +148,37 @@ async def test_router_execution_fallback_chain_failure_raises():
             rag_modality="text",
             use_cache=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_router_execution_skips_ollama_ensure_when_model_is_verified():
+    """Verified Ollama models should not trigger background `/api/tags` checks."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+    deps["select_model"] = lambda models, query, modality: "ollama/phi4:latest"
+    deps["is_ollama_model_verified"] = lambda name: True
+    ensure_calls = []
+    deps["_ensure_ollama_model"] = lambda name: ensure_calls.append(name)
+    async def _call_model(**kwargs):
+        return "ok", {"prompt_tokens": 1, "completion_tokens": 1, "cost_per_1k": 0.0}
+
+    deps["call_model"] = _call_model
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="pergunta",
+        system_prompt="SYS",
+        use_rag=False,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+    )
+
+    assert out["answer"] == "ok"
+    assert ensure_calls == []
 
 
 @pytest.mark.asyncio
@@ -302,6 +334,66 @@ async def test_router_feedback_skips_judge_when_background_is_throttled():
     )
     assert logged[-1]["quality_source"] == "bandit_proxy"
     assert logged[-1]["judge_sampled"] is False
+
+
+@pytest.mark.asyncio
+async def test_router_feedback_skips_judge_when_query_backlog_exists():
+    """Queued query backlog should suppress judge sampling even before provider-pressure throttling."""
+    metric = _Metric()
+    logged = []
+
+    class _Pred:
+        def predict_error_probability(self, emb):
+            return 0.8
+
+    async def _to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    deps = {
+        "_get_ctx_stats": lambda _ctx: {"m1": {"count": 8, "mean": 0.7}},
+        "get_predictor": lambda model: _Pred(),
+        "asyncio": SimpleNamespace(to_thread=_to_thread, create_task=lambda coro: coro.close() if hasattr(coro, "close") else None),
+        "random": SimpleNamespace(random=lambda: 0.0),
+        "embed_text": lambda q: [0.1],
+        "compute_judge_probability": lambda **kwargs: 1.0,
+        "settings": SimpleNamespace(
+            JUDGE_MIN_SAMPLE_RATE=0.0,
+            get=lambda key, default=None: {
+                "JUDGE_BACKGROUND_THROTTLE_ENABLED": "1",
+                "QUERY_JOB_BACKGROUND_THROTTLE_PENDING_THRESHOLD": "1",
+            }.get(key, default),
+        ),
+        "logger": SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, exception=lambda *a, **k: None),
+        "judge_answer": lambda *a, **k: (_ for _ in ()).throw(RuntimeError("judge should not run")),
+        "compute_reward": lambda *a, **k: 0.5,
+        "bandit_update": lambda **kwargs: None,
+        "_persist_ema": lambda *a, **k: None,
+        "store_cache": lambda **kwargs: None,
+        "insert_query_log": lambda **kwargs: logged.append(kwargs),
+        "ROUTER_QUALITY_AVG": metric,
+        "ROUTER_LOCAL_USAGE_RATIO": metric,
+        "FEEDBACK_PROCESSING_LATENCY": metric,
+        "FEEDBACK_BACKLOG_AGE": metric,
+        "FEEDBACK_TASK_FAILURES": metric,
+        "BACKGROUND_JUDGE_SKIPPED": metric,
+        "should_throttle_background_judge": lambda: False,
+        "get_pending_query_jobs_count": lambda: 3,
+    }
+    state = {"EMA_HISTORY": SimpleNamespace(get=lambda key: None, set=lambda key, value: None)}
+
+    await process_background_feedback_impl(
+        deps=deps,
+        state=state,
+        query="q",
+        answer="a",
+        chosen_model="ollama/m1",
+        modality="text",
+        latency_s=0.2,
+        cost_val=0.01,
+    )
+    assert logged[-1]["quality_source"] == "bandit_proxy"
+    assert logged[-1]["judge_sampled"] is False
+    assert metric.values
 
 
 @pytest.mark.asyncio

@@ -262,12 +262,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         ]
     )
     QUERY_PATHS = frozenset(["/query", "/query/stream", "/v1/query"])
+    QUERY_JOB_POLLING_PREFIXES = ("/query/jobs/", "/v1/query/jobs/")
     TENANT_HEADERS = ("X-Tenant-ID", "X-Tenant", "X-School-ID")
 
     async def dispatch(self, request: Request, call_next):
         """Admit or reject one request based on runtime pressure and route class."""
         route_class = self._classify_route(request.url.path)
-        if route_class == "health_observability":
+        if route_class in {"health_observability", "query_job_polling"}:
             return await call_next(request)
 
         cfg = _adaptive_limiter_config()
@@ -373,11 +374,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         total_inflight = int(snapshot.get("total_inflight", 0) or 0)
         queue_wait_ms = float(snapshot.get("max_queue_wait_ms", 0.0) or 0.0)
         utilization = float(snapshot.get("utilization", 0.0) or 0.0)
+        interactive_reserve = 2 if current_limit >= 4 else 1
         if queue_wait_ms >= float(cfg["sync_queue_wait_ms"]):
             return True
         if total_inflight >= current_limit:
             return True
-        if pressure_state in {"elevated", "congested"} and total_inflight >= max(1, current_limit - 1):
+        if pressure_state in {"elevated", "congested"} and total_inflight >= max(1, current_limit - interactive_reserve):
+            return True
+        if pressure_state in {"elevated", "congested"} and queue_wait_ms >= max(75.0, float(cfg["sync_queue_wait_ms"]) * 0.4):
             return True
         if pressure_state == "congested" and utilization >= float(cfg["elevated_utilization"]):
             return True
@@ -387,6 +391,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """Map concrete paths to a small set of policy classes."""
         if path in self.EXEMPT_PATHS:
             return "health_observability"
+        if any(path.startswith(prefix) for prefix in self.QUERY_JOB_POLLING_PREFIXES):
+            return "query_job_polling"
         if path in self.QUERY_PATHS:
             return "interactive_query"
         if path.startswith("/admin") or path.startswith("/feedback") or path.startswith("/ops"):

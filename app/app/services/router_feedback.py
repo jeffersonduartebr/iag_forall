@@ -56,11 +56,37 @@ async def process_background_feedback_impl(
             chosen_model=chosen_model,
             min_sample_rate=deps["settings"].JUDGE_MIN_SAMPLE_RATE,
         )
+        pending_query_jobs = 0
+        try:
+            pending_query_jobs = max(0, int(deps.get("get_pending_query_jobs_count", lambda: 0)() or 0))
+        except Exception:
+            pending_query_jobs = 0
+        backlog_throttle_threshold = 1
+        try:
+            backlog_throttle_threshold = max(
+                1,
+                int(getattr(deps["settings"], "get", lambda k, d=None: d)("QUERY_JOB_BACKGROUND_THROTTLE_PENDING_THRESHOLD", "1")),
+            )
+        except Exception:
+            backlog_throttle_threshold = 1
         background_throttle_enabled = str(getattr(deps["settings"], "get", lambda k, d=None: d)("JUDGE_BACKGROUND_THROTTLE_ENABLED", "1")).strip() == "1"
-        if background_throttle_enabled and deps.get("should_throttle_background_judge", lambda: False)():
+        if pending_query_jobs >= backlog_throttle_threshold:
             should_judge = False
             quality_source = "bandit_proxy"
             try:
+                deps["BACKGROUND_JUDGE_SKIPPED"].labels(reason="query_backlog").inc()
+                deps["logger"].info(
+                    "[Background] Judge throttled because queued query backlog=%s exceeds threshold=%s",
+                    pending_query_jobs,
+                    backlog_throttle_threshold,
+                )
+            except Exception:
+                pass
+        elif background_throttle_enabled and deps.get("should_throttle_background_judge", lambda: False)():
+            should_judge = False
+            quality_source = "bandit_proxy"
+            try:
+                deps["BACKGROUND_JUDGE_SKIPPED"].labels(reason="provider_pressure").inc()
                 deps["logger"].info("[Background] Judge throttled to preserve interactive Ollama capacity")
             except Exception:
                 pass

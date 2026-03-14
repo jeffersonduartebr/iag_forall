@@ -207,7 +207,7 @@ async def route_and_answer_internal_impl(
     chosen = deps["select_model"](top2, query, modality)
     deps["logger"].info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | W: {current_weights}")
 
-    if chosen.startswith("ollama/"):
+    if chosen.startswith("ollama/") and not deps["is_ollama_model_verified"](chosen.replace("ollama/", "")):
         deps["asyncio"].create_task(
             deps["asyncio"].to_thread(deps["_ensure_ollama_model"], chosen.replace("ollama/", ""))
         )

@@ -402,7 +402,9 @@ class QueuedQueryAcceptedResponse(BaseModel):
     poll_url: str
     result_url: str
     expires_at: float
+    queue_depth: int = 0
     estimated_wait_seconds: Optional[float] = None
+    poll_after_seconds: float = 1.0
 
 
 class QueryJobStatusResponse(BaseModel):
@@ -414,6 +416,7 @@ class QueryJobStatusResponse(BaseModel):
     finished_at: Optional[float] = None
     expires_at: Optional[float] = None
     error: Optional[Dict[str, Any]] = None
+    poll_after_seconds: float = 1.0
 
 
 class AdminSettingsUpdateRequest(BaseModel):

@@ -188,8 +188,9 @@ def _should_proactively_defer_query(req: QueryRequest, request: Request | None) 
     total_inflight = int(snapshot.get("total_inflight", 0) or 0)
     queue_wait_ms = float(snapshot.get("max_queue_wait_ms", 0.0) or 0.0)
     sync_queue_wait_ms = max(50.0, float(settings.get("ADAPTIVE_LIMITER_SYNC_QUEUE_WAIT_MS", 250.0)))
-    near_capacity = total_inflight >= max(1, current_limit - 1)
-    queue_pressure = queue_wait_ms >= max(100.0, sync_queue_wait_ms * 0.5)
+    reserved_slots = 2 if workload_class in {"simple_text", "knowledge_lookup"} and current_limit >= 4 else 1
+    near_capacity = total_inflight >= max(1, current_limit - reserved_slots)
+    queue_pressure = queue_wait_ms >= max(75.0, sync_queue_wait_ms * 0.4)
     should_defer = pressure_state == "congested" or near_capacity or queue_pressure
     if not should_defer:
         return False, "overloaded", pressure_state, workload_class
@@ -308,7 +309,7 @@ async def preload_ollama_models():
             return
 
         try:
-            available = {m["name"] for m in await fetch_ollama_tags(force_refresh=True)}
+            available = {m["name"] for m in await fetch_ollama_tags(force_refresh=False)}
         except Exception:
             available = set()
 

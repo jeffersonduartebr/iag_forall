@@ -18,6 +18,7 @@ import time
 import os
 import logging
 import asyncio
+import threading
 import base64
 import json
 import contextlib
@@ -233,6 +234,44 @@ _http_client: httpx.AsyncClient | None = None
 _http_client_lock = asyncio.Lock()
 _ollama_tags_cache: dict[str, Any] = {"models": [], "expires_at": 0.0}
 _ollama_tags_cache_lock = asyncio.Lock()
+_ollama_verified_models: dict[str, float] = {}
+_ollama_verified_models_lock = threading.Lock()
+
+
+def _normalize_ollama_model_aliases(model_name: str) -> set[str]:
+    """Return the common local aliases used for one Ollama model name."""
+    normalized = str(model_name or "").strip()
+    if not normalized:
+        return set()
+    aliases = {normalized}
+    if normalized.startswith("ollama/"):
+        normalized = normalized.split("/", 1)[1]
+        aliases.add(normalized)
+    else:
+        aliases.add(f"ollama/{normalized}")
+    if ":" not in normalized:
+        aliases.add(f"{normalized}:latest")
+        aliases.add(f"ollama/{normalized}:latest")
+    return {alias for alias in aliases if alias}
+
+
+def _mark_ollama_models_verified(models: list[str], ttl_seconds: int) -> None:
+    """Mark one or more Ollama model names as verified-present for a short TTL."""
+    expires_at = time.time() + max(1, ttl_seconds)
+    with _ollama_verified_models_lock:
+        for model_name in models:
+            for alias in _normalize_ollama_model_aliases(model_name):
+                _ollama_verified_models[alias] = expires_at
+
+
+def is_ollama_model_verified(model_name: str) -> bool:
+    """Return whether a model is already known present without hitting `/api/tags`."""
+    now = time.time()
+    with _ollama_verified_models_lock:
+        stale = [name for name, expires_at in _ollama_verified_models.items() if expires_at <= now]
+        for name in stale:
+            _ollama_verified_models.pop(name, None)
+        return any(_ollama_verified_models.get(alias, 0.0) > now for alias in _normalize_ollama_model_aliases(model_name))
 
 
 async def get_http_client() -> httpx.AsyncClient:
@@ -272,7 +311,7 @@ async def close_http_client():
         logger.info("[HTTP Pool] Closed global HTTP client")
 
 
-async def fetch_ollama_tags(*, force_refresh: bool = False, ttl_seconds: int = 120) -> list[dict[str, Any]]:
+async def fetch_ollama_tags(*, force_refresh: bool = False, ttl_seconds: int = 600) -> list[dict[str, Any]]:
     """Return the current Ollama model list using a small shared TTL cache.
 
     Frequent `/api/tags` probes create avoidable socket churn and file-descriptor
@@ -296,6 +335,7 @@ async def fetch_ollama_tags(*, force_refresh: bool = False, ttl_seconds: int = 1
         models = list(resp.json().get("models", []))
         _ollama_tags_cache["models"] = models
         _ollama_tags_cache["expires_at"] = time.time() + max(1, ttl_seconds)
+        _mark_ollama_models_verified([m.get("name", "") for m in models], ttl_seconds)
         return list(models)
 
 
@@ -310,6 +350,8 @@ def reset_ollama_tags_cache() -> None:
     """Invalidate the in-process Ollama tags cache."""
     _ollama_tags_cache["models"] = []
     _ollama_tags_cache["expires_at"] = 0.0
+    with _ollama_verified_models_lock:
+        _ollama_verified_models.clear()
 
 
 def log_process_file_descriptor_limit(context: str) -> None:
@@ -1548,8 +1590,17 @@ async def call_model(
 async def _ensure_ollama_model_async(model_name: str) -> bool:
     """Ensure an Ollama model is available using the shared async HTTP client."""
     try:
+        if is_ollama_model_verified(model_name):
+            return True
+
+        existing = [m.get("name") for m in await fetch_ollama_tags(force_refresh=False)]
+        if any(model_name in m for m in existing):
+            _mark_ollama_models_verified([model_name], 600)
+            return True
+
         existing = [m.get("name") for m in await fetch_ollama_tags(force_refresh=True)]
         if any(model_name in m for m in existing):
+            _mark_ollama_models_verified([model_name], 600)
             return True
 
         logger.info(f"[ensure_ollama_model] Downloading model: {model_name}")
@@ -1562,6 +1613,7 @@ async def _ensure_ollama_model_async(model_name: str) -> bool:
         )
         if resp.status_code == 200:
             reset_ollama_tags_cache()
+            _mark_ollama_models_verified([model_name], 600)
         return resp.status_code == 200
 
     except Exception as e:
@@ -1598,12 +1650,16 @@ def _ensure_ollama_model(model_name: str) -> bool:
         asyncio.set_event_loop(loop)
 
     try:
+        if is_ollama_model_verified(model_name):
+            return True
+
         # Check if model already exists
         resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
         if resp.status_code == 200:
             existing = [m.get("name", "") for m in resp.json().get("models", [])]
             # Check for exact match or partial match (e.g., "gemma3:4b" in "gemma3:4b-instruct")
             if any(model_name in m for m in existing):
+                _mark_ollama_models_verified(existing, 600)
                 logger.debug(f"[ensure_ollama_model] Model {model_name} already exists")
                 return True
 
@@ -1621,6 +1677,7 @@ def _ensure_ollama_model(model_name: str) -> bool:
             for _ in resp.iter_lines():
                 pass
             reset_ollama_tags_cache()
+            _mark_ollama_models_verified([model_name], 600)
             logger.info(f"[ensure_ollama_model] Model {model_name} downloaded successfully")
             return True
         else:

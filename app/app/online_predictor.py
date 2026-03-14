@@ -26,6 +26,7 @@ import os
 import pickle
 import logging
 import time
+from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
 # River Imports (Online ML Library)
@@ -40,12 +41,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Diretório para persistência do estado dos modelos
-STATE_DIR = "/app/state"
-os.makedirs(STATE_DIR, exist_ok=True)
-
 # Validation log max size (configurable via settings)
 DEFAULT_VALIDATION_WINDOW = 1000
+
+
+def _resolve_state_dir() -> Path:
+    """Return a writable predictor state directory with a CI-safe default."""
+    configured = (os.getenv("STATE_DIR") or "").strip()
+    if configured:
+        return Path(configured)
+    return Path.cwd() / "state"
 
 class OnlineErrorPredictor:
     """Represent `OnlineErrorPredictor` within this module.
@@ -60,11 +65,13 @@ The constructor keeps setup local to the object so callers can use it without ad
             return
 
         self.model_name = model_name
+        self.state_dir = _resolve_state_dir()
+        self.persistence_enabled = True
 
         # Sanitiza o nome do arquivo para persistência
         safe_name = model_name.replace("/", "_").replace(":", "_")
-        self.save_path = os.path.join(STATE_DIR, f"predictor_{safe_name}_logistic.pkl")
-        self.validation_path = os.path.join(STATE_DIR, f"predictor_{safe_name}_validation.pkl")
+        self.save_path = str(self.state_dir / f"predictor_{safe_name}_logistic.pkl")
+        self.validation_path = str(self.state_dir / f"predictor_{safe_name}_validation.pkl")
 
         self.pipeline = None
 
@@ -81,8 +88,21 @@ The constructor keeps setup local to the object so callers can use it without ad
         self._correct_predictions: int = 0
 
         self._init_model()
+        self._ensure_state_dir()
         self._load()  # Tenta carregar estado anterior do disco
         self._load_validation()  # Load validation history
+
+    def _ensure_state_dir(self) -> None:
+        """Create the persistence directory lazily or fall back to memory-only mode."""
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self.persistence_enabled = False
+            logger.warning(
+                "[OnlinePredictor] State dir unavailable (%s): %s. Falling back to in-memory mode.",
+                self.state_dir,
+                exc,
+            )
 
     def _init_model(self):
         """Execute the init model routine.
@@ -286,7 +306,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     def save(self):
         """Persiste o modelo treinado em disco."""
-        if not self.pipeline:
+        if not self.pipeline or not self.persistence_enabled:
             return
         try:
             with open(self.save_path, "wb") as f:
@@ -300,6 +320,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     def _save_validation(self):
         """Save validation log and calibration parameters."""
+        if not self.persistence_enabled:
+            return
         try:
             validation_data = {
                 "prediction_log": self.prediction_log,
@@ -314,6 +336,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     def _load(self):
         """Carrega o modelo do disco se existir."""
+        if not self.persistence_enabled:
+            return
         if os.path.exists(self.save_path):
             try:
                 with open(self.save_path, "rb") as f:
@@ -324,6 +348,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     def _load_validation(self):
         """Load validation log and calibration parameters."""
+        if not self.persistence_enabled:
+            return
         if os.path.exists(self.validation_path):
             try:
                 with open(self.validation_path, "rb") as f:

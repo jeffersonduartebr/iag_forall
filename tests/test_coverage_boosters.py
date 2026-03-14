@@ -214,3 +214,34 @@ def test_online_predictor_metrics_and_calibration(monkeypatch, tmp_path):
     assert p1 is p2
     assert "m1" in op.get_all_predictor_metrics()
     op.calibrate_all_predictors()
+
+
+def test_online_predictor_uses_safe_default_state_dir(monkeypatch):
+    """Importing and instantiating the predictor without STATE_DIR should avoid /app writes."""
+    from app import online_predictor as op
+
+    if not op.RIVER_AVAILABLE:
+        pytest.skip("river unavailable")
+
+    monkeypatch.delenv("STATE_DIR", raising=False)
+    op._predictors.clear()
+    predictor = op.OnlineErrorPredictor("safe/default")
+
+    assert predictor.state_dir == op.Path.cwd() / "state"
+    assert predictor.save_path.endswith("predictor_safe_default_logistic.pkl")
+    assert predictor.persistence_enabled is True
+
+
+def test_online_predictor_disables_persistence_when_state_dir_unwritable(monkeypatch, tmp_path):
+    """Predictor should fall back to in-memory mode when state dir creation fails."""
+    from app import online_predictor as op
+
+    if not op.RIVER_AVAILABLE:
+        pytest.skip("river unavailable")
+
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "blocked"))
+    monkeypatch.setattr(op.Path, "mkdir", lambda *a, **k: (_ for _ in ()).throw(PermissionError("no write")))
+
+    predictor = op.OnlineErrorPredictor("safe/fallback")
+
+    assert predictor.persistence_enabled is False

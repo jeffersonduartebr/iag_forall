@@ -364,6 +364,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(pa, "get_http_client", _c1)
     assert await pa._ensure_ollama_model_async("phi4:latest") is True
 
+    pa.reset_ollama_tags_cache()
     async def _c2():
         """Execute the c2 routine.
 
@@ -373,6 +374,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(pa, "get_http_client", _c2)
     assert await pa._ensure_ollama_model_async("phi4:latest") is True
 
+    pa.reset_ollama_tags_cache()
     async def _c3():
         """Execute the c3 routine.
 
@@ -382,6 +384,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(pa, "get_http_client", _c3)
     assert await pa._ensure_ollama_model_async("phi4:latest") is False
 
+    pa.reset_ollama_tags_cache()
     async def _boom():
         """Execute the boom routine.
 
@@ -428,3 +431,24 @@ async def test_fetch_ollama_tags_cache_and_probe(monkeypatch):
     assert tags_first == tags_second
     assert calls["get"] == 1
     assert calls["head"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_ollama_model_async_uses_verified_cache_before_tags(monkeypatch):
+    """Previously verified models should skip recurring `/api/tags` lookups."""
+    calls = {"get": 0}
+
+    class _Client:
+        async def get(self, *args, **kwargs):
+            calls["get"] += 1
+            raise AssertionError("should not hit /api/tags for verified model")
+
+    async def _client():
+        return _Client()
+
+    pa.reset_ollama_tags_cache()
+    monkeypatch.setattr(pa, "get_http_client", _client)
+    monkeypatch.setattr(pa, "is_ollama_model_verified", lambda model_name: True)
+
+    assert await pa._ensure_ollama_model_async("phi4:latest") is True
+    assert calls["get"] == 0

@@ -289,7 +289,7 @@ async def test_health_and_versioned_endpoints(monkeypatch):
     assert (await ops_routes.liveness())["status"] == "alive"
     assert (await ops_routes.readiness()).status_code == 503
 
-    async def _route_query(req):
+    async def _route_query(req, request=None):
         return {"ok": True}
 
     monkeypatch.setattr(main, "route_query", _route_query)

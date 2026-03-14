@@ -404,7 +404,7 @@ services:
       - ai_net
 
 # =========================================================
-  # 👷 Celery Worker (Processamento de Feedback em Background)
+  # 👷 Celery Worker (Execução de queries enfileiradas)
   # =========================================================
   celery_worker:
     build:
@@ -446,13 +446,64 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1      
-    # Comando para iniciar o worker ouvindo a fila padrão e a de feedback
-    command: celery -A app.celery_app worker --loglevel=info --queues=celery,feedback_queue --concurrency=12 --prefetch-multiplier=4 --max-tasks-per-child=1000 --time-limit=3600
+    command: celery -A app.celery_app worker --loglevel=info --queues=celery --concurrency=4 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
 
     volumes:
       - ./state:/app/state
       - ./data:/app/data
       
+    networks:
+      - ai_net
+
+  # =========================================================
+  # 👷 Celery Feedback Worker (Feedback, judge e eval)
+  # =========================================================
+  celery_feedback_worker:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: celery_feedback_worker
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d celery@$$HOSTNAME | grep -q 'pong'"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 45s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-router_user}
+      - DB_PASS=${DB_PASS:?DB_PASS required}
+      - DB_NAME=${DB_NAME:-routerdb}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - C_FORCE_ROOT=true
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    command: celery -A app.celery_app worker --loglevel=info --queues=feedback_queue --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
+
+    volumes:
+      - ./state:/app/state
+      - ./data:/app/data
+
     networks:
       - ai_net
 
