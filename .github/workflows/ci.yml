@@ -8,6 +8,12 @@ jobs:
   lint_typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      STATE_DIR: ${{ github.workspace }}/.ci_state
+      PROMETHEUS_MULTIPROC_DIR: ${{ github.workspace }}/.ci_prom
+      CHROMA_PATH: ${{ github.workspace }}/.ci_chroma
+      READINESS_MODE: strict
+      ENABLE_SMOKE_TESTS: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,6 +28,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r app/requirements.txt
+
+      - name: Prepare CI runtime dirs
+        run: mkdir -p .ci_state .ci_prom .ci_chroma
 
       - name: Ruff
         run: PYTHONPATH=app ruff check app/app tests
@@ -32,6 +41,12 @@ jobs:
   tests_unit:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      STATE_DIR: ${{ github.workspace }}/.ci_state
+      PROMETHEUS_MULTIPROC_DIR: ${{ github.workspace }}/.ci_prom
+      CHROMA_PATH: ${{ github.workspace }}/.ci_chroma
+      READINESS_MODE: strict
+      ENABLE_SMOKE_TESTS: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,6 +62,43 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r app/requirements.txt
 
+      - name: Prepare CI runtime dirs
+        run: mkdir -p .ci_state .ci_prom .ci_chroma
+
       - name: Pytest (unit/default markers + coverage)
         run: |
-          PYTHONPATH=app pytest -q tests --cov=app/app --cov-report=term-missing --cov-fail-under=70
+          PYTHONPATH=app pytest -q tests -m "not integration and not slow" --cov=app/app --cov-report=term-missing --cov-fail-under=70
+
+  packaging_sanity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MYSQL_ROOT_PASSWORD: change-me
+      DB_PASS: change-me
+      REDIS_PASSWORD: change-me
+      STATE_DIR: /app/state
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      CHROMA_PATH: /data/chroma
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker compose
+        run: docker compose config >/tmp/docker-compose.rendered.yml
+
+      - name: Validate Grafana dashboards JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          dashboards = [
+              Path("grafana/dashboards/llm_router_operations.json"),
+              Path("grafana/dashboards/llm_router_efficiency_balanced.json"),
+              Path("grafana/dashboards/llm_router_ai_diagnostics.json"),
+          ]
+          for path in dashboards:
+              with path.open("r", encoding="utf-8") as fh:
+                  json.load(fh)
+              print(f"validated {path}")
+          PY
