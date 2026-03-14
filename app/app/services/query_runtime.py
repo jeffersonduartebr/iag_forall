@@ -257,6 +257,23 @@ def _workload_provider_timeout_seconds(workload: str) -> int:
     return max(5, int(settings.get(key, default)))
 
 
+def _effective_sync_timeout_seconds(req_timeout_seconds: int | None, runtime_profile: Dict[str, Any]) -> int:
+    """Clamp request-level timeout overrides to the workload-specific sync deadline.
+
+    Clients may send a generous `timeout_seconds`, but the runtime should not
+    let simple interactive workloads inherit a slower budget than the profile
+    selected for that workload class. This helper keeps lower client overrides
+    intact while preventing higher overrides from stretching the synchronous
+    path beyond the workload deadline.
+    """
+    runtime_deadline = int((runtime_profile.get("runtime_hints") or {}).get("sync_deadline_seconds", 0) or 0)
+    if runtime_deadline <= 0:
+        return max(5, int(req_timeout_seconds or settings.get("REQUEST_TIMEOUT_SECONDS", 120)))
+    if req_timeout_seconds is None:
+        return runtime_deadline
+    return max(5, min(int(req_timeout_seconds), runtime_deadline))
+
+
 def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None) -> Dict[str, Any]:
     """Derive execution knobs for one request without mutating the incoming request object."""
     workload = classify_query_workload(req, modality=modality, image_input=image_input)
@@ -438,7 +455,7 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
             image_b64=image_input,
             rag_modality=(req.rag_modality or "text").lower(),
             use_cache=req.use_cache,
-            timeout_seconds=req.timeout_seconds or runtime_profile["runtime_hints"].get("sync_deadline_seconds"),
+            timeout_seconds=_effective_sync_timeout_seconds(req.timeout_seconds, runtime_profile),
             runtime_hints=runtime_profile["runtime_hints"],
         )
     except asyncio.TimeoutError:

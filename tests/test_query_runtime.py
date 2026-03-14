@@ -233,6 +233,21 @@ def test_apply_query_runtime_profile_promotes_source_seeking_queries_to_full_ret
     assert profile["runtime_hints"]["needs_rerank"] is True
 
 
+def test_effective_sync_timeout_clamps_request_override_to_workload_deadline():
+    """Client timeout overrides should not stretch a fast workload beyond its sync budget."""
+    from app.services import query_runtime as qr
+
+    runtime_profile = {
+        "runtime_hints": {
+            "sync_deadline_seconds": 25,
+        }
+    }
+
+    assert qr._effective_sync_timeout_seconds(30, runtime_profile) == 25
+    assert qr._effective_sync_timeout_seconds(10, runtime_profile) == 10
+    assert qr._effective_sync_timeout_seconds(None, runtime_profile) == 25
+
+
 def test_classify_query_workload_respects_disabled_classifier(monkeypatch):
     """Disabling the classifier should fall back to the safest reasoning profile."""
     from app.services import query_runtime as qr

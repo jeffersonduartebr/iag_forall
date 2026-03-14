@@ -84,12 +84,15 @@ from .observability import (
     COST_BY_PROVIDER,
     TOKENS_INPUT_TOTAL,
     TOKENS_OUTPUT_TOTAL,
+    ROUTER_ENQUEUED_DUE_TO_DEADLINE,
+    ROUTER_ENQUEUED_DUE_TO_QUEUE_WAIT,
 )
 from .router_core import start_background_services, stop_background_services
 from .providers_async import (
     close_http_client,
     fetch_ollama_tags,
     get_http_client,
+    get_ollama_admission_snapshot,
     log_process_file_descriptor_limit,
     start_provider_runtime_services,
     stop_provider_runtime_services,
@@ -102,7 +105,7 @@ from .query_jobs import enqueue_query_job, get_query_job_result, get_query_job_s
 from .routers import rag_router
 from .vectorstore import init_vectorstore, add_document as vs_add_document
 from .services.query_response_builder import build_query_response
-from .services.query_runtime import process_query_request, record_query_side_effects
+from .services.query_runtime import apply_query_runtime_profile, process_query_request, record_query_side_effects
 from .services.governance_runtime import ensure_runtime_support_tables
 from .router_core import route_and_answer
 
@@ -142,6 +145,67 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+
+def _normalize_request_modality(req: QueryRequest) -> tuple[str, str | None]:
+    """Return the effective modality and first image payload for one request."""
+    image_input = req.image_b64 or ((req.images or [None])[0] if getattr(req, "images", None) else None)
+    modality = str(getattr(req, "modality", "text") or "text").lower()
+    if image_input and modality == "text":
+        modality = "vision"
+    return modality, image_input
+
+
+def _should_proactively_defer_query(req: QueryRequest, request: Request | None) -> tuple[bool, str, str, str]:
+    """Decide whether the handler should enqueue early before sync execution starts.
+
+    The middleware only sees coarse pressure snapshots. Once the request body is
+    available here, the runtime can classify the workload and aggressively defer
+    high-priority simple requests before they wait long enough to hit provider
+    timeouts.
+    """
+    if request is None:
+        return False, "overloaded", "normal", "unknown"
+    if getattr(request.state, "defer_to_query_job", False):
+        return True, str(getattr(request.state, "query_job_reason", "overloaded")), str(
+            getattr(request.state, "query_job_pressure_state", "elevated")
+        ), str(getattr(request.state, "query_job_workload_class", "unknown"))
+
+    modality, image_input = _normalize_request_modality(req)
+    runtime_profile = apply_query_runtime_profile(req, modality, image_input)
+    workload_class = str(runtime_profile.get("workload_class", "unknown") or "unknown")
+    runtime_hints = runtime_profile.get("runtime_hints") or {}
+
+    if str(runtime_hints.get("interactive_priority", "normal")) != "high":
+        return False, "overloaded", "normal", workload_class
+
+    snapshot = get_ollama_admission_snapshot()
+    pressure_state = str(snapshot.get("pressure_state", "normal") or "normal")
+    if pressure_state == "normal":
+        return False, "overloaded", pressure_state, workload_class
+
+    current_limit = max(1, int(snapshot.get("current_limit", 1) or 1))
+    total_inflight = int(snapshot.get("total_inflight", 0) or 0)
+    queue_wait_ms = float(snapshot.get("max_queue_wait_ms", 0.0) or 0.0)
+    sync_queue_wait_ms = max(50.0, float(settings.get("ADAPTIVE_LIMITER_SYNC_QUEUE_WAIT_MS", 250.0)))
+    near_capacity = total_inflight >= max(1, current_limit - 1)
+    queue_pressure = queue_wait_ms >= max(100.0, sync_queue_wait_ms * 0.5)
+    should_defer = pressure_state == "congested" or near_capacity or queue_pressure
+    if not should_defer:
+        return False, "overloaded", pressure_state, workload_class
+
+    reason = "ollama_queue_wait" if queue_pressure or near_capacity else "sync_deadline_protection"
+    try:
+        if reason == "ollama_queue_wait":
+            ROUTER_ENQUEUED_DUE_TO_QUEUE_WAIT.labels(pressure_state=pressure_state).inc()
+        ROUTER_ENQUEUED_DUE_TO_DEADLINE.labels(workload_class=workload_class).inc()
+    except Exception:
+        pass
+    request.state.defer_to_query_job = True
+    request.state.query_job_reason = reason
+    request.state.query_job_pressure_state = pressure_state
+    request.state.query_job_workload_class = workload_class
+    return True, reason, pressure_state, workload_class
 
 app.include_router(admin_router)
 app.include_router(governance_router)
@@ -454,7 +518,8 @@ async def route_query(req: QueryRequest, request: Request | None = None):
     start = time.time()
     API_REQUESTS.inc()
 
-    if request is not None and getattr(request.state, "defer_to_query_job", False):
+    should_defer, _, _, _ = _should_proactively_defer_query(req, request)
+    if should_defer and request is not None and getattr(request.state, "defer_to_query_job", False):
         queued = enqueue_query_job(
             req=req,
             correlation_id=get_correlation_id(),
@@ -510,7 +575,8 @@ async def route_query_stream(req: QueryRequest, request: Request | None = None):
     chunks, and a terminal completion event to consumers expecting an SSE
     contract.
     """
-    if request is not None and getattr(request.state, "defer_to_query_job", False):
+    should_defer, _, _, _ = _should_proactively_defer_query(req, request)
+    if should_defer and request is not None and getattr(request.state, "defer_to_query_job", False):
         queued = enqueue_query_job(
             req=req,
             correlation_id=get_correlation_id(),

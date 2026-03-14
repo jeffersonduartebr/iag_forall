@@ -377,6 +377,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return True
         if total_inflight >= current_limit:
             return True
+        if pressure_state in {"elevated", "congested"} and total_inflight >= max(1, current_limit - 1):
+            return True
         if pressure_state == "congested" and utilization >= float(cfg["elevated_utilization"]):
             return True
         return False

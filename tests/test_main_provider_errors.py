@@ -165,6 +165,51 @@ async def test_route_query_enqueues_async_job_when_request_marked(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_route_query_proactively_enqueues_simple_query_under_pressure(monkeypatch):
+    """High-priority simple queries should be deferred early when Ollama is already near capacity."""
+    _stabilize_settings_get(monkeypatch)
+    from app import main
+    from app.schemas import QueuedQueryAcceptedResponse
+
+    monkeypatch.setattr(
+        main,
+        "get_ollama_admission_snapshot",
+        lambda: {
+            "current_limit": 5,
+            "total_inflight": 4,
+            "max_queue_wait_ms": 180.0,
+            "utilization": 0.8,
+            "vram_ratio": 0.0,
+            "pressure_state": "elevated",
+        },
+    )
+    monkeypatch.setattr(main.settings, "get", lambda key, fallback=None: {"ADAPTIVE_LIMITER_SYNC_QUEUE_WAIT_MS": "250"}.get(key, fallback))
+    monkeypatch.setattr(
+        main,
+        "enqueue_query_job",
+        lambda **kwargs: QueuedQueryAcceptedResponse(
+            job_id="job-2",
+            poll_url="/query/jobs/job-2",
+            result_url="/query/jobs/job-2/result",
+            expires_at=123.0,
+        ),
+    )
+
+    async def _should_not_run(_req):
+        raise AssertionError("process_query_request should not run when proactive defer triggers")
+
+    monkeypatch.setattr(main, "process_query_request", _should_not_run)
+
+    request = _make_http_request()
+    out = await main.route_query(
+        _make_request().model_copy(update={"query": "Explique em uma frase o que e a energia solar."}),
+        request,
+    )
+    assert out.status_code == 202
+    assert b"job-2" in out.body
+
+
+@pytest.mark.asyncio
 async def test_startup_rejects_empty_admin_token(monkeypatch):
     """startup_event should still reject an empty admin token."""
     _stabilize_settings_get(monkeypatch)
