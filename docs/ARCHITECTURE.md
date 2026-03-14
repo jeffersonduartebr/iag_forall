@@ -85,14 +85,18 @@ Objetivo: mostrar os blocos operacionais da stack e suas responsabilidades.
 flowchart TD
     A[Cliente HTTP]
     B[API FastAPI]
-    C[Serviços de roteamento]
-    D[Providers e Ollama]
+    C[Middlewares e admissao]
+    D[Serviços de roteamento]
+    J[Query Jobs + Redis]
+    P[Providers e Ollama]
     E[Redis, MariaDB, ChromaDB]
     F[Celery Worker]
     G[Prometheus, Grafana, Loki]
 
     A --> B --> C --> D
-    C --> E
+    C --> J
+    D --> P
+    D --> E
     B --> F
     F --> E
     B --> G
@@ -107,11 +111,11 @@ Objetivo: mostrar o pipeline de decisão e atualização do roteador.
 ```mermaid
 flowchart LR
     A[Consulta]
-    B[Cache e RAG]
-    C[UQ]
-    D[Bandit]
+    B[Workload class e runtime hints]
+    C[Cache, retrieval gate e RAG]
+    D[UQ e bandit]
     E[Modelo escolhido]
-    F[Resposta]
+    F[Resposta + confidence + provenance]
     G[Judge e reward]
     H[Aprendizado online]
 
@@ -127,6 +131,7 @@ Objetivo: mostrar como os módulos centrais se conectam no caminho de decisão e
 flowchart TD
     Main[main.py<br/>FastAPI e lifecycle]
     Router[router_core.py<br/>fluxo síncrono e feedback]
+    QueryJobs[query_jobs.py<br/>fila de overflow e polling]
     Strategy[router_strategy.py / bandits.py / online_predictor.py<br/>decisão multiobjetivo]
     Providers[providers_async.py<br/>timeouts, retries, circuit breaker]
     Cache[semantic_cache.py<br/>L1 + busca semântica]
@@ -137,6 +142,7 @@ flowchart TD
     Workers[tasks.py / Celery / serviços de background]
 
     Main --> Router
+    Main --> QueryJobs
     Main --> Settings
     Main --> Obs
     Router --> Cache
@@ -148,6 +154,8 @@ flowchart TD
     Cache --> Data
     Rag --> Data
     Providers --> Data
+    QueryJobs --> Data
+    QueryJobs --> Workers
     Workers --> Router
     Workers --> Data
     Workers --> Obs
@@ -186,12 +194,13 @@ Nota: caixas agrupam módulos próximos para manter o diagrama legível; detalhe
 - Exporta métricas, saúde de componentes e rastreabilidade.
 
 ## Fluxo de requisição (`POST /query`)
-1. Request entra na API e passa por middlewares.
-2. Core normaliza modalidade e tenta cache semântico.
-3. Se não houver cache hit, calcula incerteza e seleciona modelos candidatos.
-4. Bandit escolhe modelo final.
-5. Provider é chamado com resiliência (retry/circuit/fallback).
-6. Resposta é retornada e processamento de feedback é disparado em background.
+1. Request entra na API e passa por correlação, backpressure e limitador adaptativo.
+2. O runtime classifica a consulta (`workload_class`) e monta hints como timeout e deadline.
+3. Se houver pressão operacional, a query pode ser deferida para fila assíncrona e responder `202`.
+4. Se seguir no caminho síncrono, tenta cache semântico, retrieval seletivo e seleção de candidatos.
+5. O provider é chamado com timeout por workload, deadline total e corte antecipado de fallback.
+6. A resposta pública volta com sinais de confiabilidade, proveniência e diagnóstico opcional.
+7. O feedback assíncrono continua sendo disparado em background após a resposta.
 
 ## Sequência de `POST /query`
 Objetivo: mostrar o caminho síncrono principal e onde entram cache, seleção e fallback.
@@ -200,40 +209,83 @@ Objetivo: mostrar o caminho síncrono principal e onde entram cache, seleção e
 sequenceDiagram
     participant C as Cliente
     participant API as FastAPI /query
+    participant MW as Middlewares
+    participant QR as query_runtime
     participant RC as router_core.route_and_answer
     participant SC as semantic_cache
     participant RG as rag_local
     participant ST as router_strategy + bandit
     participant PR as providers_async
+    participant QJ as query_jobs
     participant DB as Redis / MariaDB / ChromaDB
     participant CW as Celery task_process_feedback
 
     C->>API: POST /query
-    API->>RC: route_and_answer(...)
-    RC->>SC: check_cache(query, modality, image)
-    SC->>DB: L1 Redis / L2 Chroma lookup
-    DB-->>SC: hit ou miss
-    alt cache hit
-        SC-->>RC: resposta em cache
-        RC-->>API: resultado final
-        API-->>C: 200 response
-    else cache miss
-        RC->>RG: recuperar contexto se RAG habilitado
-        RG->>DB: embeddings / vector search
-        DB-->>RG: contexto relevante
-        RG-->>RC: contexto consolidado
-        RC->>ST: estimar incerteza e escolher candidatos
-        ST-->>RC: modelo alvo + fallback chain
-        RC->>PR: chamar provider com timeout global
-        PR->>PR: retry / circuit breaker / fallback
-        PR-->>RC: resposta do modelo
-        RC-->>API: payload final + metadados
+    API->>MW: correlation + backpressure + adaptive limiter
+    alt deferida por overload
+        MW->>QJ: enqueue query job
+        QJ->>DB: persistir job/status
+        QJ-->>API: job_id + poll_url
+        API-->>C: 202 Accepted
+    else caminho síncrono
+        API->>QR: process_query_request(...)
+        QR->>RC: route_and_answer(...)
+        QR->>QR: workload_class + provider_timeout + sync_deadline
+        RC->>SC: check_cache(query, modality, image)
+        SC->>DB: L1 Redis / L2 Chroma lookup
+        DB-->>SC: hit ou miss
+        alt cache hit
+            SC-->>RC: resposta em cache
+            RC-->>QR: resultado final
+        else cache miss
+            RC->>RG: retrieval gate + light/full RAG
+            RG->>DB: embeddings / vector search
+            DB-->>RG: contexto relevante
+            RG-->>RC: contexto + provenance
+            RC->>ST: UQ, candidatos e fallback
+            ST-->>RC: modelo alvo + fallback chain
+            RC->>PR: chamar provider com timeout por workload
+            PR->>PR: retry / circuit breaker / fallback condicionado ao deadline
+            PR-->>RC: resposta do modelo
+            RC-->>QR: payload final + metadados
+        end
+        QR-->>API: QueryResponse
         API->>CW: delay(feedback payload)
         API-->>C: 200 response
     end
 ```
 
-Nota: o diagrama foca o happy path e a decisão principal; branches administrativos e streaming ficam fora para evitar sobrecarga visual.
+Nota: o diagrama destaca os dois caminhos principais atuais: resposta síncrona e deferimento assíncrono.
+
+## Sequência de polling dos jobs de query
+Objetivo: mostrar o fluxo da query deferida até o resultado final.
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant API as FastAPI
+    participant QJ as query_jobs
+    participant CW as Celery worker
+    participant QR as query_runtime
+    participant DB as Redis / MariaDB
+
+    C->>API: GET /query/jobs/{job_id}
+    API->>QJ: get_query_job_status(job_id)
+    QJ->>DB: carregar status
+    DB-->>QJ: queued/running/completed/failed
+    QJ-->>API: QueryJobStatusResponse
+    API-->>C: status atual
+    CW->>QJ: consumir job enfileirado
+    QJ->>QR: processar query
+    QR-->>QJ: QueryResponse final
+    QJ->>DB: persistir resultado
+    C->>API: GET /query/jobs/{job_id}/result
+    API->>QJ: get_query_job_result(job_id)
+    QJ->>DB: carregar resultado
+    DB-->>QJ: QueryResponse
+    QJ-->>API: resposta pronta
+    API-->>C: 200 + resultado final
+```
 
 ## Fluxo de feedback assíncrono
 1. Salva metadados da resposta.

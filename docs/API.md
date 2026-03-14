@@ -12,12 +12,14 @@ Objetivo: organizar a API por grupos funcionais antes dos detalhes de payload e 
 flowchart TD
     API[API HTTP]
     Query[Consulta<br/>/query e /query/stream]
+    Jobs[Jobs de query<br/>/query/jobs/*]
     Health[Saúde<br/>/health /healthz /ready /metrics]
     Feedback[Feedback e A/B<br/>/feedback /feedback/stats /admin/experiments*]
     Admin[Administração<br/>/admin/settings /admin/runtime /admin/circuit-breakers]
     Gov[Governança e eval<br/>budgets policies privacy rbac evals]
 
     API --> Query
+    API --> Jobs
     API --> Health
     API --> Feedback
     API --> Admin
@@ -31,17 +33,52 @@ Objetivo: mostrar a jornada mais comum de uso da API.
 sequenceDiagram
     participant C as Cliente
     participant API as POST /query
+    participant AD as Admissao / middlewares
     participant R as Roteador
+    participant Q as Query Jobs
     participant M as Modelo
     participant F as Feedback assíncrono
 
     C->>API: envia payload
-    API->>R: valida e roteia
-    R->>M: solicita resposta
-    M-->>R: retorna conteúdo
-    R-->>API: resposta final
-    API-->>C: 200 + answer/model
-    API->>F: dispara processamento posterior
+    API->>AD: correlation + backpressure + adaptive limiter
+    alt capacidade síncrona disponível
+        AD->>R: valida e roteia
+        R->>M: solicita resposta
+        M-->>R: retorna conteúdo
+        R-->>API: QueryResponse
+        API-->>C: 200 + answer + provenance + diagnostics?
+        API->>F: dispara processamento posterior
+    else overload / deferimento
+        AD->>Q: enqueue query job
+        Q-->>API: job_id + poll_url + result_url
+        API-->>C: 202 Accepted
+    end
+```
+
+## Sequência do polling assíncrono
+Objetivo: mostrar como o cliente busca o resultado quando `/query` responde `202`.
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant API as API
+    participant J as Query Jobs
+    participant CW as Celery worker
+    participant R as Roteador
+
+    C->>API: GET /query/jobs/{job_id}
+    API->>J: consultar status
+    J-->>API: queued/running/completed/failed
+    API-->>C: QueryJobStatusResponse
+    opt status = completed
+        CW->>R: processar query enfileirada
+        R-->>CW: QueryResponse final
+        CW->>J: persistir resultado
+        C->>API: GET /query/jobs/{job_id}/result
+        API->>J: carregar resultado
+        J-->>API: QueryResponse
+        API-->>C: 200 + resposta final
+    end
 ```
 
 ## Autenticação administrativa
@@ -95,13 +132,32 @@ Roteia uma consulta para o melhor modelo disponível.
 - `stream` (bool): usado com endpoint de streaming.
 
 ### Resposta (estrutura)
+`POST /query` pode responder de duas formas:
+
+1. `200 OK` com `QueryResponse`
 - `answer`: texto final
 - `model`: modelo usado
 - `modality`: modalidade final
-- `route`: decisão de roteamento
-- `candidates`: candidatos avaliados
 - `correlation_id`: id de rastreio
-- `payload`: payload bruto tratado
+- `estimated_cost_usd`: custo estimado da resposta
+- `confidence_score` / `confidence_band`
+- `abstained` / `abstain_reason`
+- `verification_status`
+- `review_status`
+- `provenance`: grounding, citações, snippets e `knowledge_version`
+- `diagnostics` (opcional): decisão de rota, candidatos e metadados internos
+
+2. `202 Accepted` com `QueuedQueryAcceptedResponse`
+- `job_id`
+- `status`
+- `poll_url`
+- `result_url`
+- `expires_at`
+- `estimated_wait_seconds`
+
+### Endpoints de jobs
+- `GET /query/jobs/{job_id}`: retorna `QueryJobStatusResponse`
+- `GET /query/jobs/{job_id}/result`: retorna `QueryResponse` quando o job terminou
 
 ### Erros comuns
 - `400`: payload inválida
@@ -125,10 +181,13 @@ Métricas Prometheus.
 ## Streaming
 
 ## `POST /query/stream`
-Retorna eventos SSE (`text/event-stream`) com:
+Quando há capacidade síncrona, retorna SSE (`text/event-stream`) com:
 - `event: meta`
 - `event: token`
 - `event: done`
+
+Quando o runtime decide deferir a query, o endpoint pode responder `202 Accepted`
+com o mesmo contrato de job usado em `POST /query`.
 
 Uso:
 ```bash

@@ -9,6 +9,7 @@ Roteador de consultas para LLMs/VLMs com decisão multiobjetivo (custo, latênci
 ## O que este sistema faz
 - Recebe requisições em `POST /query`.
 - Escolhe o melhor modelo com base em estratégia multiobjetivo.
+- Pode responder no caminho síncrono (`200`) ou deferir para fila assíncrona (`202 + job_id`) quando há pressão operacional.
 - Executa fallback resiliente em caso de falha do provedor.
 - Registra métricas (Prometheus), logs e feedback para aprendizagem online.
 
@@ -64,7 +65,9 @@ Objetivo: dar uma visão rápida da stack local e das principais dependências d
 flowchart LR
     Client[Cliente HTTP]
     API[FastAPI API<br/>app/app/main.py]
+    Admission[Middlewares de admissao<br/>backpressure + adaptive limiter]
     Router[Router Core<br/>router_core.py]
+    QueryJobs[Query Jobs<br/>query_jobs.py]
     Providers[Providers Async<br/>providers_async.py]
     Ollama[Ollama]
     External[LLM APIs externas]
@@ -76,11 +79,15 @@ flowchart LR
     Obs[Prometheus / Grafana / Loki]
 
     Client --> API
-    API --> Router
+    API --> Admission
+    Admission --> Router
+    Admission --> QueryJobs
     Router --> Redis
     Router --> Chroma
     Router --> MariaDB
     Router --> Providers
+    QueryJobs --> Redis
+    QueryJobs --> Celery
     Providers --> Ollama
     Providers --> External
     API --> Celery
@@ -232,11 +239,11 @@ curl -s http://localhost:8000/metrics | head -n 40
 
 ## Fluxo de uma requisição (`/query`)
 1. Middleware de correlação, backpressure e rate limit.
-2. Validação da payload e normalização de modalidade.
-3. Tentativa de cache semântico (`semantic_cache`).
-4. Cálculo de incerteza e seleção de candidatos.
-5. Escolha do modelo e chamada de provider.
-6. Retorno da resposta + despacho de feedback assíncrono.
+2. Se houver pressão operacional, a query pode ser deferida para fila assíncrona com `202`.
+3. Se seguir síncrona, o runtime classifica a workload, aplica timeout/deadline e tenta cache semântico.
+4. Se necessário, executa retrieval seletivo, cálculo de incerteza e seleção de candidatos.
+5. Chama o provider com fallback condicionado ao orçamento restante.
+6. Retorna `QueryResponse` com `provenance` e `diagnostics` opcionais + despacho de feedback assíncrono.
 
 ## Operação e depuração rápida
 ### Redis indisponível

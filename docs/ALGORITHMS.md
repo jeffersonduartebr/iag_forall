@@ -9,17 +9,18 @@ Objetivo: resumir como as estratégias se encadeiam no caminho de decisão do ro
 ```mermaid
 flowchart LR
     A[Consulta recebida]
-    B[Seleção de candidatos]
-    C[Estimativa de incerteza]
-    D[Cache semântico]
-    E[RAG opcional]
+    B[Workload class e runtime hints]
+    C[Cache semântico]
+    D[Retrieval gate<br/>no/light/full]
+    E[UQ e top-K candidatos]
     F[Bandit e decisão final]
-    G[Provider / fallback]
-    H[Feedback e aprendizado]
+    G[Provider com timeout e sync deadline]
+    H[Resposta com provenance]
+    I[Feedback e aprendizado]
 
-    A --> B --> C --> D
-    D -->|cache hit| H
-    D -->|cache miss| E --> F --> G --> H
+    A --> B --> C
+    C -->|cache hit| H --> I
+    C -->|cache miss| D --> E --> F --> G --> H --> I
 ```
 
 Nota: o diagrama mostra a ordem lógica principal; detalhes internos de cada algoritmo continuam nas seções abaixo.
@@ -30,18 +31,20 @@ Objetivo: destacar os mecanismos que afetam escolha de modelo, reward e aprendiz
 ```mermaid
 flowchart TD
     A[Consulta]
-    B[Features de contexto]
-    C[UQ]
-    D[Top-K candidatos]
-    E[Bandit / política online]
-    F[Modelo escolhido]
-    G[Judge / heurística]
-    H[Reward]
-    I[Atualização EMA e bandit]
+    B[Workload class + retrieval mode]
+    C[Features de contexto]
+    D[UQ]
+    E[Top-K candidatos]
+    F[Bandit / política online]
+    G[Modelo escolhido]
+    H[Resposta + confidence + verification]
+    I[Judge / heurística]
+    J[Reward]
+    K[Atualização EMA e bandit]
 
-    A --> B --> C --> D --> E --> F
-    F --> G --> H --> I
-    I --> E
+    A --> B --> C --> D --> E --> F --> G --> H
+    H --> I --> J --> K
+    K --> F
 ```
 
 Nota: este diagrama é voltado a engenharia de IA; ele foca aprendizagem e decisão adaptativa, não topologia de serviços.
@@ -86,9 +89,10 @@ Benefício:
 Arquivos: `app/app/rag_local.py`, `app/app/vectorstore.py`, `app/app/reranker.py`
 
 Fluxo:
-1. Recupera contexto relevante.
-2. Reordena (reranker) quando habilitado.
-3. Enriquecer prompt antes da inferência.
+1. Decide entre `no_retrieval`, `light_retrieval` e `full_retrieval`.
+2. Recupera contexto relevante apenas quando o gate indicar ganho esperado.
+3. Reordena (reranker) quando habilitado e quando houver candidatos suficientes.
+4. Enriquecer prompt antes da inferência, preservando provenance estruturada.
 
 ## 6. Fallback e circuit breaker
 Arquivos: `app/app/reliability.py`, `app/app/providers_async.py`
@@ -96,6 +100,7 @@ Arquivos: `app/app/reliability.py`, `app/app/providers_async.py`
 Objetivo:
 1. Evitar indisponibilidade total por falha de um único provider/modelo.
 2. Encadear modelos alternativos automaticamente.
+3. Cortar fallbacks tardios quando o orçamento restante do deadline síncrono já não comporta nova tentativa.
 
 ## 7. Aprendizado por feedback
 Arquivos: `app/app/tasks.py`, `app/app/user_feedback.py`, `app/app/router_core.py`
