@@ -94,6 +94,8 @@ from .observability import (
     ROUTER_ATTEMPTS_PER_QUERY,
     ROUTER_RETRY_TOTAL,
     ROUTER_RESPONSE_EMPTY,
+    ROUTER_FALLBACK_SKIPPED,
+    ROUTER_SYNC_DEADLINE_EXCEEDED,
     FALLBACK_USED,
 )
 from .settings_dynamic import update_db_pool_metrics
@@ -452,6 +454,7 @@ async def _route_and_answer_internal(
             "ROUTER_ATTEMPTS_PER_QUERY": ROUTER_ATTEMPTS_PER_QUERY,
             "ROUTER_RETRY_TOTAL": ROUTER_RETRY_TOTAL,
             "ROUTER_RESPONSE_EMPTY": ROUTER_RESPONSE_EMPTY,
+            "ROUTER_FALLBACK_SKIPPED": ROUTER_FALLBACK_SKIPPED,
             "FALLBACK_USED": FALLBACK_USED,
             "get_uncertainty_score": get_uncertainty_score,
             "BLOCKED_PREFIXES": BLOCKED_PREFIXES,
@@ -505,6 +508,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # Calculate effective timeout
     default_timeout = _safe_setting_int("REQUEST_TIMEOUT_SECONDS", 120)
     effective_timeout = timeout_seconds or default_timeout
+    effective_runtime_hints = dict(runtime_hints or {})
+    effective_runtime_hints["request_deadline_ts"] = time.monotonic() + float(effective_timeout)
 
     async def _execute_request():
         """Inner function for request execution."""
@@ -518,7 +523,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             image_b64=image_b64,
             rag_modality=rag_modality,
             use_cache=use_cache,
-            runtime_hints=runtime_hints,
+            runtime_hints=effective_runtime_hints,
         )
 
     try:
@@ -549,6 +554,12 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                 return result
             except asyncio.TimeoutError:
                 _record_request_outcome(success=False)
+                try:
+                    ROUTER_SYNC_DEADLINE_EXCEEDED.labels(
+                        workload_class=str(effective_runtime_hints.get("workload_class", "unknown"))
+                    ).inc()
+                except Exception:
+                    pass
                 logger.error(f"[router] Request timeout after {effective_timeout}s for query: {query[:60]}...")
                 raise
             except Exception as e:

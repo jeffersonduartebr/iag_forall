@@ -177,6 +177,30 @@ ROUTER_RESPONSE_EMPTY = Counter(
     ["model", "reason"],
     registry=registry,
 )
+ROUTER_SYNC_DEADLINE_EXCEEDED = Counter(
+    "router_sync_deadline_exceeded_total",
+    "Synchronous requests that exceeded the end-to-end deadline",
+    ["workload_class"],
+    registry=registry,
+)
+ROUTER_ENQUEUED_DUE_TO_QUEUE_WAIT = Counter(
+    "router_enqueued_due_to_queue_wait_total",
+    "Interactive queries deferred because provider queue wait or slot pressure was too high",
+    ["pressure_state"],
+    registry=registry,
+)
+ROUTER_ENQUEUED_DUE_TO_DEADLINE = Counter(
+    "router_enqueued_due_to_deadline_total",
+    "Interactive queries deferred to preserve the synchronous deadline budget",
+    ["workload_class"],
+    registry=registry,
+)
+ROUTER_FALLBACK_SKIPPED = Counter(
+    "router_fallback_skipped_total",
+    "Fallback attempts skipped because the remaining synchronous budget was insufficient",
+    ["reason"],
+    registry=registry,
+)
 FALLBACK_USED = Counter(
     "router_fallback_used_total",
     "Fallback usado entre modelos",

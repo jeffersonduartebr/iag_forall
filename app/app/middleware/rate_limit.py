@@ -12,7 +12,6 @@ and IP only as a fallback identity.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,6 +26,8 @@ from app.observability import (
     ADAPTIVE_LIMITER_OVERLOAD_EVENTS,
     ADAPTIVE_LIMITER_REJECTIONS,
     ADAPTIVE_LIMITER_STATE,
+    ROUTER_ENQUEUED_DUE_TO_DEADLINE,
+    ROUTER_ENQUEUED_DUE_TO_QUEUE_WAIT,
 )
 from app.providers_async import get_ollama_admission_snapshot
 from app.settings_dynamic import settings
@@ -87,6 +88,7 @@ def _adaptive_limiter_config() -> Dict[str, float | int | bool]:
         "interactive_per_slot_congested": _as_int("ADAPTIVE_LIMITER_INTERACTIVE_PER_SLOT_CONGESTED", 6, minimum=1),
         "admin_per_slot_elevated": _as_int("ADAPTIVE_LIMITER_ADMIN_PER_SLOT_ELEVATED", 3, minimum=1),
         "admin_per_slot_congested": _as_int("ADAPTIVE_LIMITER_ADMIN_PER_SLOT_CONGESTED", 1, minimum=1),
+        "sync_queue_wait_ms": _as_float("ADAPTIVE_LIMITER_SYNC_QUEUE_WAIT_MS", 250.0, minimum=50.0),
     }
 
 
@@ -283,6 +285,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             response.headers["X-RateLimit-Scope"] = route_class
             return response
 
+        if route_class == "interactive_query" and self._should_preempt_to_async(snapshot, pressure_state, cfg):
+            request.state.defer_to_query_job = True
+            request.state.query_job_reason = "ollama_queue_wait"
+            request.state.query_job_pressure_state = pressure_state
+            request.state.query_job_scope = route_class
+            request.state.query_job_workload_class = "unknown"
+            try:
+                ROUTER_ENQUEUED_DUE_TO_QUEUE_WAIT.labels(pressure_state=pressure_state).inc()
+                ROUTER_ENQUEUED_DUE_TO_DEADLINE.labels(workload_class="unknown").inc()
+            except Exception:
+                pass
+            response = await call_next(request)
+            response.headers["X-Admission-State"] = pressure_state
+            response.headers["X-RateLimit-Scope"] = route_class
+            response.headers["X-RateLimit-Reason"] = "ollama_queue_wait"
+            return response
+
         identity, identity_type = await self._resolve_identity(request)
         quota = self._quota_for(route_class, pressure_state, snapshot, cfg)
         if quota is not None:
@@ -299,6 +318,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     request.state.query_job_reason = reason
                     request.state.query_job_pressure_state = pressure_state
                     request.state.query_job_scope = route_class
+                    request.state.query_job_workload_class = "unknown"
                     response = await call_next(request)
                     response.headers["X-Admission-State"] = pressure_state
                     response.headers["X-RateLimit-Scope"] = route_class
@@ -340,6 +360,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             response.headers["X-RateLimit-Window"] = str(int(cfg["window_seconds"]))
         return response
 
+    def _should_preempt_to_async(
+        self,
+        snapshot: Dict[str, float | int | str],
+        pressure_state: str,
+        cfg: Dict[str, float | int | bool],
+    ) -> bool:
+        """Return whether interactive traffic should skip the sync path immediately."""
+        if pressure_state == "normal":
+            return False
+        current_limit = max(1, int(snapshot.get("current_limit", 1) or 1))
+        total_inflight = int(snapshot.get("total_inflight", 0) or 0)
+        queue_wait_ms = float(snapshot.get("max_queue_wait_ms", 0.0) or 0.0)
+        utilization = float(snapshot.get("utilization", 0.0) or 0.0)
+        if queue_wait_ms >= float(cfg["sync_queue_wait_ms"]):
+            return True
+        if total_inflight >= current_limit:
+            return True
+        if pressure_state == "congested" and utilization >= float(cfg["elevated_utilization"]):
+            return True
+        return False
+
     def _classify_route(self, path: str) -> str:
         """Map concrete paths to a small set of policy classes."""
         if path in self.EXEMPT_PATHS:
@@ -359,28 +400,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         tenant_query = (request.query_params.get("tenant_id") or "").strip()
         if tenant_query:
             return tenant_query[:128], "tenant"
-        tenant_body = await self._tenant_from_body(request)
-        if tenant_body:
-            return tenant_body[:128], "tenant"
         return self._client_ip(request), "ip"
-
-    async def _tenant_from_body(self, request: Request) -> Optional[str]:
-        """Extract tenant identity from JSON request bodies when present."""
-        content_type = (request.headers.get("content-type") or "").lower()
-        if "application/json" not in content_type:
-            return None
-        try:
-            raw = await request.body()
-            if not raw:
-                return None
-            parsed = json.loads(raw.decode("utf-8"))
-        except Exception:
-            return None
-        if isinstance(parsed, dict):
-            tenant_id = str(parsed.get("tenant_id") or "").strip()
-            if tenant_id:
-                return tenant_id
-        return None
 
     def _client_ip(self, request: Request) -> str:
         """Resolve the client IP, honoring the first X-Forwarded-For value."""

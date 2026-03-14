@@ -47,8 +47,8 @@ def _build_request(
 
 
 @pytest.mark.asyncio
-async def test_resolve_identity_prefers_tenant_from_json_body(monkeypatch):
-    """Tenant identity should come from request JSON before falling back to IP."""
+async def test_resolve_identity_falls_back_to_ip_without_header_or_query(monkeypatch):
+    """The middleware must not parse JSON bodies to resolve tenant identity."""
     from app.middleware import rate_limit as rl
 
     middleware = rl.RateLimitMiddleware(app=lambda scope, receive, send: None)
@@ -56,12 +56,13 @@ async def test_resolve_identity_prefers_tenant_from_json_body(monkeypatch):
         "/query",
         headers={"content-type": "application/json"},
         body=b'{"query":"hello","tenant_id":"tenant-42"}',
+        client_host="10.0.0.8",
     )
 
     identity, identity_type = await middleware._resolve_identity(request)
 
-    assert identity == "tenant-42"
-    assert identity_type == "tenant"
+    assert identity == "10.0.0.8"
+    assert identity_type == "ip"
 
 
 @pytest.mark.asyncio
@@ -98,7 +99,7 @@ async def test_normal_pressure_does_not_limit_interactive_queries(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_congested_pressure_marks_interactive_queries_for_async_queue(monkeypatch):
-    """Under congestion interactive overflow should be marked for queueing instead of 429."""
+    """Under congestion interactive queries should be preempted to the async queue before timing out."""
     from app.middleware import rate_limit as rl
 
     rl.rate_limit_store = rl.RateLimitStore()
@@ -137,23 +138,13 @@ async def test_congested_pressure_marks_interactive_queries_for_async_queue(monk
         headers={"content-type": "application/json"},
         body=b'{"query":"hello","tenant_id":"school-1"}',
     )
-    first = await middleware.dispatch(request, _call_next)
-    second_request = _build_request(
-        "/query",
-        headers={"content-type": "application/json"},
-        body=b'{"query":"hello again","tenant_id":"school-1"}',
-    )
-    second = await middleware.dispatch(
-        second_request,
-        _call_next,
-    )
+    response = await middleware.dispatch(request, _call_next)
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert getattr(second_request.state, "defer_to_query_job", False) is True
-    assert second.headers["X-Admission-State"] == "congested"
-    assert second.headers["X-RateLimit-Scope"] == "interactive_query"
-    assert second.headers["X-RateLimit-Reason"] == "ollama_overloaded"
+    assert response.status_code == 200
+    assert getattr(request.state, "defer_to_query_job", False) is True
+    assert response.headers["X-Admission-State"] == "congested"
+    assert response.headers["X-RateLimit-Scope"] == "interactive_query"
+    assert response.headers["X-RateLimit-Reason"] == "ollama_queue_wait"
 
 
 @pytest.mark.asyncio

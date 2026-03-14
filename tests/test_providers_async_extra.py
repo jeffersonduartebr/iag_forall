@@ -34,6 +34,8 @@ def test_timeout_quality_tokens_and_factory(monkeypatch):
     assert pa._get_adaptive_timeout("deepseek-r1") == 30
     assert pa._get_adaptive_timeout("llama-70b") == 20
     assert pa._get_adaptive_timeout("model-x") == 15
+    assert pa._get_adaptive_timeout("model-x", workload_class="simple_text") == 20
+    assert pa._get_adaptive_timeout("model-x", workload_class="knowledge_lookup") == 35
 
     monkeypatch.setattr(
         pa,

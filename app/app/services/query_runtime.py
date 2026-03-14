@@ -219,6 +219,44 @@ def _infer_retrieval_profile(query: str, workload: str) -> str:
     return "full_retrieval"
 
 
+def _workload_sync_deadline_seconds(workload: str) -> int:
+    """Return the synchronous deadline budget for one workload class."""
+    key_map = {
+        "simple_text": "SYNC_DEADLINE_SIMPLE_SECONDS",
+        "knowledge_lookup": "SYNC_DEADLINE_KNOWLEDGE_SECONDS",
+        "reasoning": "SYNC_DEADLINE_REASONING_SECONDS",
+        "vision": "SYNC_DEADLINE_VISION_SECONDS",
+    }
+    default_map = {
+        "simple_text": 25,
+        "knowledge_lookup": 40,
+        "reasoning": 70,
+        "vision": 100,
+    }
+    key = key_map.get(workload, "SYNC_DEADLINE_REASONING_SECONDS")
+    default = default_map.get(workload, 70)
+    return max(5, int(settings.get(key, default)))
+
+
+def _workload_provider_timeout_seconds(workload: str) -> int:
+    """Return the provider timeout budget for one workload class."""
+    key_map = {
+        "simple_text": "PROVIDER_TIMEOUT_SIMPLE_SECONDS",
+        "knowledge_lookup": "PROVIDER_TIMEOUT_KNOWLEDGE_SECONDS",
+        "reasoning": "PROVIDER_TIMEOUT_REASONING_SECONDS",
+        "vision": "PROVIDER_TIMEOUT_VISION_SECONDS",
+    }
+    default_map = {
+        "simple_text": 20,
+        "knowledge_lookup": 35,
+        "reasoning": 60,
+        "vision": 90,
+    }
+    key = key_map.get(workload, "PROVIDER_TIMEOUT_REASONING_SECONDS")
+    default = default_map.get(workload, 60)
+    return max(5, int(settings.get(key, default)))
+
+
 def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None) -> Dict[str, Any]:
     """Derive execution knobs for one request without mutating the incoming request object."""
     workload = classify_query_workload(req, modality=modality, image_input=image_input)
@@ -301,6 +339,8 @@ def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None
             "needs_retrieval": bool(use_rag and needs_retrieval),
             "needs_rerank": bool(use_rag and needs_rerank),
             "interactive_priority": interactive_priority,
+            "provider_timeout_seconds": _workload_provider_timeout_seconds(workload),
+            "sync_deadline_seconds": _workload_sync_deadline_seconds(workload),
         },
     }
 
@@ -398,7 +438,7 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
             image_b64=image_input,
             rag_modality=(req.rag_modality or "text").lower(),
             use_cache=req.use_cache,
-            timeout_seconds=req.timeout_seconds,
+            timeout_seconds=req.timeout_seconds or runtime_profile["runtime_hints"].get("sync_deadline_seconds"),
             runtime_hints=runtime_profile["runtime_hints"],
         )
     except asyncio.TimeoutError:

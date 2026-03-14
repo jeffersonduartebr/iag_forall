@@ -146,6 +146,8 @@ def test_apply_query_runtime_profile_bypasses_rag_for_simple_text(monkeypatch):
     assert profile["runtime_hints"]["max_fallbacks"] == 1
     assert profile["runtime_hints"]["needs_retrieval"] is False
     assert profile["runtime_hints"]["interactive_priority"] == "high"
+    assert profile["runtime_hints"]["provider_timeout_seconds"] == 20
+    assert profile["runtime_hints"]["sync_deadline_seconds"] == 25
 
 
 def test_apply_query_runtime_profile_keeps_vision_rag(monkeypatch):
@@ -201,6 +203,8 @@ def test_apply_query_runtime_profile_uses_light_retrieval_for_knowledge_lookup(m
     assert profile["runtime_hints"]["rag_rerank_enabled"] is False
     assert profile["runtime_hints"]["needs_retrieval"] is True
     assert profile["runtime_hints"]["interactive_priority"] == "high"
+    assert profile["runtime_hints"]["provider_timeout_seconds"] == 35
+    assert profile["runtime_hints"]["sync_deadline_seconds"] == 40
 
 
 def test_apply_query_runtime_profile_promotes_source_seeking_queries_to_full_retrieval(monkeypatch):

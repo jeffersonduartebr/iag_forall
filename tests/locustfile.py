@@ -11,6 +11,7 @@ from locust import events
 from gevent.lock import Semaphore
 import os
 import random
+import time
 
 # ==========================================================
 # ==========================================================
@@ -2787,8 +2788,15 @@ EXACT_QUERY_TARGET = int(os.getenv("EXACT_QUERY_TARGET", "100"))
 _exact_query_lock = Semaphore()
 _exact_queries_issued = 0
 _exact_queries_completed = 0
+_exact_queries_inflight = 0
 _exact_response_samples = []
 _exact_report_printed = False
+_exact_sync_successes = 0
+_exact_async_accepted = 0
+_exact_async_completed = 0
+_exact_async_failed = 0
+_exact_async_expired = 0
+_exact_async_timeouts = 0
 _exact_prompt_bank = [
     "Explique em uma frase o que e fotossintese.",
     "Explique em uma frase o que e a Revolucao Francesa.",
@@ -2804,18 +2812,128 @@ class ExactHundredQueriesUser(HttpUser):
     host = "http://llm_router_api:8000"
     weight = 1
 
+    _async_poll_interval_seconds = 0.5
+    _async_timeout_seconds = float(os.getenv("EXACT_QUERY_ASYNC_TIMEOUT_SECONDS", "60"))
+
+    @staticmethod
+    def _safe_json(response):
+        """Decode one HTTP response body as JSON without crashing the Locust task."""
+        try:
+            return response.json()
+        except Exception:
+            return None
+
+    def _record_sample(self, query_text, status, body, mode):
+        """Store a small sample of synchronous and asynchronous responses."""
+        with _exact_query_lock:
+            if len(_exact_response_samples) < 5:
+                _exact_response_samples.append(
+                    {
+                        "status": status,
+                        "query": query_text[:80],
+                        "body": body,
+                        "mode": mode,
+                    }
+                )
+
+    def _poll_async_query_job(self, query_text, queued_payload):
+        """Poll one queued query job until it completes, fails, expires, or times out."""
+        global _exact_async_completed, _exact_async_failed, _exact_async_expired, _exact_async_timeouts
+
+        job_id = queued_payload.get("job_id")
+        status_url = queued_payload.get("poll_url") or f"/query/jobs/{job_id}"
+        result_url = queued_payload.get("result_url") or f"/query/jobs/{job_id}/result"
+        deadline = time.time() + self._async_timeout_seconds
+
+        while time.time() < deadline:
+            with self.client.get(status_url, name="/query/jobs/status", catch_response=True) as status_response:
+                body = status_response.text[:220] if status_response.text else ""
+                if status_response.status_code >= 400:
+                    status_response.failure(f"HTTP {status_response.status_code}: {body}")
+                    with _exact_query_lock:
+                        _exact_async_failed += 1
+                    self._record_sample(query_text, status_response.status_code, body, "async-status-failed")
+                    return False
+
+                status_payload = self._safe_json(status_response)
+                if not isinstance(status_payload, dict):
+                    status_response.failure(f"Invalid JSON payload: {body}")
+                    with _exact_query_lock:
+                        _exact_async_failed += 1
+                    self._record_sample(query_text, status_response.status_code, body, "async-status-invalid-json")
+                    return False
+                job_status = (status_payload.get("status") or "").strip().lower()
+                status_response.success()
+
+            if job_status == "completed":
+                with self.client.get(result_url, name="/query/jobs/result", catch_response=True) as result_response:
+                    body = result_response.text[:220] if result_response.text else ""
+                    if result_response.status_code >= 400:
+                        result_response.failure(f"HTTP {result_response.status_code}: {body}")
+                        with _exact_query_lock:
+                            _exact_async_failed += 1
+                        self._record_sample(query_text, result_response.status_code, body, "async-result-failed")
+                        return False
+
+                    result_payload = self._safe_json(result_response)
+                    if not isinstance(result_payload, dict):
+                        result_response.failure(f"Invalid JSON payload: {body}")
+                        with _exact_query_lock:
+                            _exact_async_failed += 1
+                        self._record_sample(query_text, result_response.status_code, body, "async-result-invalid-json")
+                        return False
+                    answer = (result_payload.get("answer") or "").strip()
+                    abstained = bool(result_payload.get("abstained"))
+                    if answer or abstained:
+                        result_response.success()
+                        with _exact_query_lock:
+                            _exact_async_completed += 1
+                        self._record_sample(query_text, result_response.status_code, body, "async-completed")
+                        return True
+
+                    result_response.failure(f"Invalid final payload: {body}")
+                    with _exact_query_lock:
+                        _exact_async_failed += 1
+                    self._record_sample(query_text, result_response.status_code, body, "async-invalid-result")
+                    return False
+
+            if job_status == "failed":
+                with _exact_query_lock:
+                    _exact_async_failed += 1
+                self._record_sample(query_text, status_response.status_code, body, "async-failed")
+                return False
+
+            if job_status == "expired":
+                with _exact_query_lock:
+                    _exact_async_expired += 1
+                self._record_sample(query_text, status_response.status_code, body, "async-expired")
+                return False
+
+            time.sleep(self._async_poll_interval_seconds)
+
+        with _exact_query_lock:
+            _exact_async_timeouts += 1
+        self._record_sample(query_text, 408, "Async job polling timeout", "async-timeout")
+        return False
+
     @task
     def run_exact_queries(self):
         """Reserve and execute one query until the global target is reached."""
-        global _exact_queries_issued, _exact_queries_completed
+        global _exact_queries_issued, _exact_queries_completed, _exact_queries_inflight
+        global _exact_sync_successes, _exact_async_accepted
 
         with _exact_query_lock:
             if _exact_queries_issued >= EXACT_QUERY_TARGET:
-                if _exact_queries_completed >= EXACT_QUERY_TARGET and self.environment.runner:
+                if (
+                    _exact_queries_issued >= EXACT_QUERY_TARGET
+                    and _exact_queries_inflight <= 0
+                    and self.environment.runner
+                ):
                     self.environment.runner.quit()
                 return
             index = _exact_queries_issued
             _exact_queries_issued += 1
+            _exact_queries_inflight += 1
 
         query_text = _exact_prompt_bank[index % len(_exact_prompt_bank)]
         payload = {
@@ -2830,20 +2948,46 @@ class ExactHundredQueriesUser(HttpUser):
             body = response.text[:220] if response.text else ""
             if response.status_code >= 400:
                 response.failure(f"HTTP {response.status_code}: {body}")
-            else:
+                self._record_sample(query_text, response.status_code, body, "sync-failed")
+            elif response.status_code == 202:
                 response.success()
+                queued_payload = self._safe_json(response)
+                if not isinstance(queued_payload, dict):
+                    response.failure(f"Invalid queue JSON payload: {body}")
+                    self._record_sample(query_text, response.status_code, body, "async-accepted-invalid-json")
+                    queued_payload = None
+                with _exact_query_lock:
+                    _exact_async_accepted += 1
+                self._record_sample(query_text, response.status_code, body, "async-accepted")
+                if queued_payload is not None:
+                    self._poll_async_query_job(query_text, queued_payload)
+            else:
+                payload_json = self._safe_json(response)
+                if not isinstance(payload_json, dict):
+                    response.failure(f"Invalid JSON payload: {body}")
+                    self._record_sample(query_text, response.status_code, body, "sync-invalid-json")
+                    payload_json = None
+                if payload_json is None:
+                    pass
+                else:
+                    answer = (payload_json.get("answer") or "").strip()
+                    abstained = bool(payload_json.get("abstained"))
+                    if answer or abstained:
+                        response.success()
+                        with _exact_query_lock:
+                            _exact_sync_successes += 1
+                        self._record_sample(query_text, response.status_code, body, "sync-completed")
+                    else:
+                        response.failure(f"Invalid final payload: {body}")
+                        self._record_sample(query_text, response.status_code, body, "sync-invalid-result")
 
             with _exact_query_lock:
                 _exact_queries_completed += 1
-                if len(_exact_response_samples) < 5:
-                    _exact_response_samples.append(
-                        {
-                            "status": response.status_code,
-                            "query": query_text[:80],
-                            "body": body,
-                        }
-                    )
-                should_stop = _exact_queries_completed >= EXACT_QUERY_TARGET
+                _exact_queries_inflight = max(0, _exact_queries_inflight - 1)
+                should_stop = (
+                    _exact_queries_issued >= EXACT_QUERY_TARGET
+                    and _exact_queries_inflight <= 0
+                )
 
         if should_stop and self.environment.runner:
             self.environment.runner.quit()
@@ -2856,9 +3000,18 @@ def _report_exact_query_samples(environment, **_kwargs):
     if _exact_report_printed or not _exact_response_samples:
         return
     _exact_report_printed = True
+    print(
+        "[ExactHundredQueriesUser] summary "
+        f"sync_successes={_exact_sync_successes} "
+        f"async_accepted={_exact_async_accepted} "
+        f"async_completed={_exact_async_completed} "
+        f"async_failed={_exact_async_failed} "
+        f"async_expired={_exact_async_expired} "
+        f"async_timeouts={_exact_async_timeouts}"
+    )
     print("[ExactHundredQueriesUser] response samples:")
     for idx, sample in enumerate(_exact_response_samples, start=1):
         print(
             f"[ExactHundredQueriesUser] sample#{idx} status={sample['status']} "
-            f"query={sample['query']!r} body={sample['body']!r}"
+            f"mode={sample['mode']!r} query={sample['query']!r} body={sample['body']!r}"
         )

@@ -901,7 +901,28 @@ def get_ollama_admission_snapshot() -> Dict[str, float | int | str]:
     }
 
 
-def _get_adaptive_timeout(model: str) -> float:
+def _workload_provider_timeout_budget(workload_class: str | None) -> float | None:
+    """Return the configured timeout budget for a known workload class."""
+    workload = str(workload_class or "").strip().lower()
+    key_map = {
+        "simple_text": ("PROVIDER_TIMEOUT_SIMPLE_SECONDS", 20),
+        "knowledge_lookup": ("PROVIDER_TIMEOUT_KNOWLEDGE_SECONDS", 35),
+        "reasoning": ("PROVIDER_TIMEOUT_REASONING_SECONDS", 60),
+        "vision": ("PROVIDER_TIMEOUT_VISION_SECONDS", 90),
+    }
+    key_default = key_map.get(workload)
+    if not key_default:
+        return None
+    key, default = key_default
+    try:
+        from app.settings_dynamic import settings as dynamic_settings
+
+        return max(5.0, float(dynamic_settings.get(key, default)))
+    except Exception:
+        return float(default)
+
+
+def _get_adaptive_timeout(model: str, workload_class: str | None = None) -> float:
     """
     Calculate a timeout budget that reflects the expected cost of the model call.
 
@@ -909,6 +930,10 @@ def _get_adaptive_timeout(model: str) -> float:
     behavior does not look like failure, while simpler models keep lower limits
     to surface stalls earlier.
     """
+    explicit_workload_timeout = _workload_provider_timeout_budget(workload_class)
+    if explicit_workload_timeout is not None:
+        return explicit_workload_timeout
+
     runtime_cfg = _runtime_provider_settings()
     adaptive_timeout_enabled = bool(runtime_cfg["adaptive_timeout_enabled"])
     base_timeout = int(runtime_cfg["base_timeout"])
@@ -1338,7 +1363,12 @@ class OllamaProvider(BaseProvider):
                 payload["images"] = [image_b64]
 
             # Quick Win #6: Adaptive timeout based on model type
-            timeout = _get_adaptive_timeout(model)
+            explicit_timeout = kwargs.get("timeout_seconds")
+            timeout = (
+                max(1.0, float(explicit_timeout))
+                if explicit_timeout is not None
+                else _get_adaptive_timeout(model, workload_class=kwargs.get("workload_class"))
+            )
 
             client = await get_http_client()
             resp = await client.post(
@@ -1450,6 +1480,8 @@ async def call_model(
     image_b64: Optional[str] = None,
     temperature: float = 0.5,
     max_tokens: int = 512,
+    timeout_seconds: float | None = None,
+    workload_class: str | None = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Run one model call through the normalized provider pipeline.
 
@@ -1474,7 +1506,9 @@ async def call_model(
             image_b64=image_b64,
             model=real_name,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            workload_class=workload_class,
         )
 
         meta = _build_response_meta(result)

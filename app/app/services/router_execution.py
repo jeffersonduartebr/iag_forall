@@ -9,6 +9,26 @@ from typing import Any, Dict
 from app.model_registry import filter_configured_model_names
 
 
+def _deadline_remaining_seconds(runtime_hints: Dict[str, Any] | None) -> float:
+    """Return the remaining synchronous request budget."""
+    deadline_ts = float((runtime_hints or {}).get("request_deadline_ts", 0.0) or 0.0)
+    if deadline_ts <= 0:
+        return float("inf")
+    return max(0.0, deadline_ts - time.monotonic())
+
+
+def _effective_provider_timeout_seconds(runtime_hints: Dict[str, Any] | None) -> float | None:
+    """Clamp one provider timeout to the remaining synchronous deadline."""
+    configured_timeout = float((runtime_hints or {}).get("provider_timeout_seconds", 0.0) or 0.0)
+    remaining = _deadline_remaining_seconds(runtime_hints)
+    if remaining == float("inf"):
+        return configured_timeout or None
+    budget = max(1.0, remaining - 0.5)
+    if configured_timeout <= 0:
+        return budget
+    return max(1.0, min(configured_timeout, budget))
+
+
 def _setting_value(settings: Any, key: str, default: Any) -> Any:
     """Return one setting from either the dynamic settings facade or a simple stub object."""
     getter = getattr(settings, "get", None)
@@ -278,6 +298,21 @@ async def route_and_answer_internal_impl(
 
     if use_fallback_chain:
         max_fallbacks = int((runtime_hints or {}).get("max_fallbacks", deps["_safe_setting_int"]("REQUEST_MAX_FALLBACKS", 2)))
+        provider_timeout_seconds = _effective_provider_timeout_seconds(runtime_hints)
+        remaining_budget = _deadline_remaining_seconds(runtime_hints)
+        if remaining_budget <= 1.0:
+            raise deps["ProviderCallError"](
+                model=chosen,
+                message="Synchronous deadline exhausted before provider execution",
+                category="provider_timeout",
+                retryable=True,
+            )
+        if remaining_budget != float("inf") and provider_timeout_seconds is not None and remaining_budget <= provider_timeout_seconds + 2.0:
+            max_fallbacks = 0
+            try:
+                deps["ROUTER_FALLBACK_SKIPPED"].labels(reason="insufficient_deadline_budget").inc()
+            except Exception:
+                pass
 
         async def _execute_provider(model_name: str):
             return await deps["call_model"](
@@ -287,6 +322,8 @@ async def route_and_answer_internal_impl(
                 image_b64=image_b64,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout_seconds=_effective_provider_timeout_seconds(runtime_hints),
+                workload_class=(runtime_hints or {}).get("workload_class"),
             )
 
         provider_started_at = time.time()
@@ -341,6 +378,13 @@ async def route_and_answer_internal_impl(
             retry_count = max(0, len(fallback_models_tried) - 1)
     else:
         provider_started_at = time.time()
+        if _deadline_remaining_seconds(runtime_hints) <= 1.0:
+            raise deps["ProviderCallError"](
+                model=chosen,
+                message="Synchronous deadline exhausted before provider execution",
+                category="provider_timeout",
+                retryable=True,
+            )
         out, meta = await deps["call_model"](
             model=chosen,
             prompt=final_prompt,
@@ -348,6 +392,8 @@ async def route_and_answer_internal_impl(
             image_b64=image_b64,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout_seconds=_effective_provider_timeout_seconds(runtime_hints),
+            workload_class=(runtime_hints or {}).get("workload_class"),
         )
         _observe_stage("provider_call", provider_started_at)
         retry_count = 0
