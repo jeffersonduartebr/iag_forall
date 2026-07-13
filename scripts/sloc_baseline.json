@@ -1,0 +1,18 @@
+{
+  "app/app/bandits.py": 839,
+  "app/app/judges.py": 726,
+  "app/app/main.py": 503,
+  "app/app/nsga_weights_updater.py": 779,
+  "app/app/observability.py": 917,
+  "app/app/openrouter_explorer.py": 855,
+  "app/app/providers_async.py": 1534,
+  "app/app/reliability.py": 510,
+  "app/app/roadmap_features.py": 1046,
+  "app/app/router_core.py": 532,
+  "app/app/services/query_runtime.py": 682,
+  "app/app/services/router_execution.py": 551,
+  "app/app/settings_dynamic.py": 858,
+  "tests/test_providers_reliability.py": 514,
+  "tests/test_query_runtime.py": 522,
+  "tests/test_router_services_extracted.py": 729
+}

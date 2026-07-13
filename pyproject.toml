@@ -6,7 +6,25 @@ target-version = "py311"
 [tool.ruff.lint]
 # Habilita Pyflakes (F), pycodestyle (E, W), isort (I), pep8-naming (N)
 select = ["E", "F", "W", "I", "N"]
-ignore = ["E501"] # Ignora erro de linha muito longa (deixa o formatter cuidar)
+# E501 (comprimento) fica a cargo do formatter; E701/E731 são escolhas de estilo
+# usadas de forma consistente no código (statements compostos e atalhos com lambda).
+ignore = ["E501", "E701", "E731"]
+
+[tool.ruff.lint.per-file-ignores]
+# Propriedades de settings usam UPPER_CASE para espelhar as chaves de ambiente.
+"app/app/settings_dynamic.py" = ["N802", "N803"]
+"app/app/db_manager.py" = ["N802", "N806"]
+# Notação matemática (NSGA/bandits): nomes de variáveis/args em maiúsculas.
+"app/app/nsga_meta_optimizer.py" = ["N802", "N803", "N806", "E402"]
+"app/app/nsga_weights_updater.py" = ["N806"]
+"app/app/bandits.py" = ["N806"]
+# Módulos legados de compatibilidade (nome iniciando com dígito) e re-exports por *.
+"app/app/00providers.py" = ["N999", "F401", "F403", "F405"]
+"app/app/00rag.py" = ["N999", "F401", "F403", "F405"]
+# Pacote de configuração reexporta símbolos via import *.
+"app/app/config/__init__.py" = ["F401", "F403", "F405"]
+# Stubs de teste com propriedades UPPER_CASE que espelham settings.
+"tests/*" = ["N802"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -16,6 +34,8 @@ indent-style = "space"
 python_version = "3.11"
 ignore_missing_imports = true
 strict_optional = true
+# Módulos legados de compatibilidade (nome iniciando com dígito) não são type-checked.
+exclude = ['app/app/00.*\.py$']
 warn_redundant_casts = true
 warn_unused_ignores = true
 disallow_untyped_defs = false # Permite funções sem tipagem (para não quebrar código legado agora)
