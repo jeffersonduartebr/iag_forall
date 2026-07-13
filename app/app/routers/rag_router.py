@@ -7,20 +7,18 @@ Permite upload de PDFs, Markdown e TXT, processando e
 inserindo no ChromaDB via vectorstore unificado.
 """
 
-import os
-import uuid
-import re
 import logging
-import fitz  # PyMuPDF
-from fastapi import APIRouter, UploadFile, File, HTTPException
+import os
+import re
+import uuid
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
-
-
+from app.api.auth import AuthContext, require_api_auth
 from app.providers_async import call_model
-from app.vectorstore import add_document
 from app.settings_dynamic import settings
+from app.vectorstore import add_document
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 logger = logging.getLogger("rag_router")
 
@@ -55,6 +53,8 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP):
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     """Extrai texto bruto de um PDF recebido via upload."""
     try:
+        import fitz  # PyMuPDF — lazy import to avoid hard dependency at startup
+
         with fitz.open(stream=file_bytes, filetype="pdf") as doc:
             return " ".join(page.get_text("text") for page in doc)
     except Exception as e:
@@ -81,16 +81,16 @@ RESUMO: ...
             max_tokens=256,
             temperature=0.3
         )
-        
+
         if not response:
             return "Documento Processado", "Resumo indisponível."
 
         title_match = re.search(r"(?i)t[ií]tulo[:：]\s*(.+)", response)
         summary_match = re.search(r"(?i)resumo[:：]\s*(.+)", response)
-        
+
         title_text = title_match.group(1).strip() if title_match else "Documento sem título"
         summary_text = summary_match.group(1).strip() if summary_match else "Sem resumo gerado"
-        
+
         return title_text, summary_text
     except Exception as e:
         logger.warning(f"[rag_router] Falha ao resumir texto: {e}")
@@ -101,13 +101,16 @@ RESUMO: ...
 # 🚀 Endpoint principal: /rag/add_doc
 # ============================================================
 @router.post("/add_doc")
-async def add_doc(file: UploadFile = File(...)):
+async def add_doc(
+    file: UploadFile = File(...),
+    _auth: AuthContext = Depends(require_api_auth),
+):
     """
     Recebe um arquivo (PDF, MD, TXT), gera embeddings e insere no ChromaDB.
     Retorna o título e o resumo automático.
     """
     try:
-        filename = file.filename
+        filename = file.filename or ""
         ext = os.path.splitext(filename)[-1].lower()
 
         if ext not in [".pdf", ".md", ".txt"]:
@@ -135,27 +138,27 @@ async def add_doc(file: UploadFile = File(...)):
         logger.info(f"[rag_router] 📘 {title}\n📝 {summary}")
 
         inserted_count = 0
-        
+
         # 🔹 Processamento e Inserção
         for idx, frag in enumerate(fragments):
             try:
                 doc_id = str(uuid.uuid4())
-                
+
                 success = await add_document(
                     modality="text",
                     doc_id=doc_id,
                     text=frag,
                     metadata={
-                        "filename": filename, 
+                        "filename": filename,
                         "chunk_index": idx,
                         "title": title,
                         "source": "upload_api"
                     }
                 )
-                
+
                 if success:
                     inserted_count += 1
-            
+
             except Exception as e:
                 logger.error(f"[rag_router] Falha ao inserir fragmento {idx}: {e}")
 
@@ -173,7 +176,7 @@ async def add_doc(file: UploadFile = File(...)):
     except Exception as e:
         logger.exception(f"[rag_router] Erro inesperado: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 
 
 class IngestRequest(BaseModel):
@@ -186,12 +189,15 @@ The class groups the state and behavior required for IngestRequest."""
     collection_name: Optional[str] = None # Para suportar "Coleção por Curso"
 
 @router.post("/ingest")
-async def ingest_text(req: IngestRequest):
+async def ingest_text(
+    req: IngestRequest,
+    _auth: AuthContext = Depends(require_api_auth),
+):
     """
     Endpoint para ingestão direta de texto (usado por serviços externos como o Auditor).
     """
     try:
-        # Se um nome de coleção específico for passado (ex: course_101), 
+        # Se um nome de coleção específico for passado (ex: course_101),
         # o vectorstore deve ser capaz de lidar ou usamos metadata filtering.
         # Aqui, vamos injetar o collection_name nos metadados para garantir isolamento lógico
         if req.collection_name:
@@ -203,12 +209,12 @@ async def ingest_text(req: IngestRequest):
             text=req.text,
             metadata=req.metadata
         )
-        
+
         if not success:
             raise HTTPException(status_code=500, detail="Falha ao inserir no Vectorstore")
-            
+
         return {"status": "ok", "doc_id": req.doc_id}
-        
+
     except Exception as e:
         logger.error(f"[RAG API] Erro na ingestão: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -4,8 +4,9 @@
 Tests for A/B testing infrastructure.
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestVariant:
@@ -27,7 +28,7 @@ class TestExperiment:
 
     def test_experiment_to_dict(self):
         """Test experiment serialization."""
-        from app.ab_testing import Experiment, Variant, ExperimentStatus
+        from app.ab_testing import Experiment, ExperimentStatus, Variant
 
         experiment = Experiment(
             id="exp_123",
@@ -200,7 +201,7 @@ class TestABTestManager:
         """Test that assignment is consistent for same user."""
         from app.ab_testing import ExperimentCreateRequest
 
-        with patch("app.ab_testing.AB_EXPERIMENT_ASSIGNMENTS") as mock_metric:
+        with patch("app.ab_testing.AB_EXPERIMENT_ASSIGNMENTS"):
             request = ExperimentCreateRequest(
                 name="Test",
                 variants=[
@@ -272,7 +273,7 @@ class TestGetABTestManager:
             with patch("app.ab_testing.settings") as mock_settings:
                 mock_settings.AB_TESTING_ENABLED = True
 
-                from app.ab_testing import get_ab_test_manager, ABTestManager
+                from app.ab_testing import ABTestManager, get_ab_test_manager
                 ABTestManager._instance = None
 
                 manager1 = get_ab_test_manager()

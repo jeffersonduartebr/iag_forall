@@ -8,7 +8,6 @@ handling for the corresponding runtime component.
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest

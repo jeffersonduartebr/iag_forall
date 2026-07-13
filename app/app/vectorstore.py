@@ -16,17 +16,17 @@ stable persistence and query surface.
 
 from __future__ import annotations
 
-import os
-import logging
 import asyncio
+import logging
+import os
 import re
 import threading
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import chromadb
 import numpy as np
 
-from .embeddings import embed_text, embed_image, embed_multimodal
+from .embeddings import embed_image, embed_multimodal, embed_text
 from .settings_dynamic import settings
 from .sparse_index import sparse_index  # Integração com BM25
 
@@ -44,6 +44,8 @@ if not logger.handlers:
 # Configurações & Versionamento
 # ============================================================
 CHROMA_PATH = settings.get("CHROMA_PATH", "/data/chroma")
+CHROMA_HOST = (settings.get("CHROMA_HOST", "") or "").strip()
+CHROMA_PORT = int(settings.get("CHROMA_PORT", 8000) or 8000)
 
 # Nomes base das coleções
 BASE_TEXT_COLLECTION = "text_embeddings"
@@ -72,7 +74,7 @@ def _get_versioned_collection_name(base_name: str, modality: str) -> str:
         model = settings.IMAGE_EMBEDDING_MODEL or "clip"
     else:
         model = settings.MULTIMODAL_EMBEDDING_MODEL or "default_mm"
-    
+
     version_suffix = _sanitize_model_name(model)
     return f"{base_name}_{version_suffix}"
 
@@ -93,6 +95,30 @@ def _connect_local():
         raise
 
 
+def _connect_remote():
+    """Create a remote ChromaDB HttpClient for shared multi-replica deployments."""
+    try:
+        import chromadb
+
+        host = CHROMA_HOST
+        port = CHROMA_PORT
+        logger.info("[vectorstore] Conectando ChromaDB remoto em %s:%s", host, port)
+        client = chromadb.HttpClient(host=host, port=port)
+        client.heartbeat()
+        logger.info("[vectorstore] Chroma HttpClient inicializado.")
+        return client
+    except Exception as e:
+        logger.error(f"[vectorstore] Falha ao conectar ChromaDB remoto: {e}")
+        raise
+
+
+def _connect_client():
+    """Select local persistent or remote Chroma client based on configuration."""
+    if CHROMA_HOST:
+        return _connect_remote()
+    return _connect_local()
+
+
 chroma_client = None
 _chroma_lock = threading.Lock()
 
@@ -107,7 +133,7 @@ def get_chroma_client():
         return chroma_client
     with _chroma_lock:
         if chroma_client is None:
-            chroma_client = _connect_local()
+            chroma_client = _connect_client()
     return chroma_client
 
 
@@ -165,14 +191,14 @@ async def get_or_create_collection_async(name: str, metadata: Optional[Dict] = N
     Aplica lógica de versionamento se o nome for um dos padrões base.
     """
     final_name = name
-    
+
     # Se o nome solicitado for um dos bases, aplicamos o versionamento automático
     if name in [BASE_TEXT_COLLECTION, BASE_IMAGE_COLLECTION, BASE_MULTIMODAL_COLLECTION, BASE_CACHE_COLLECTION]:
         mod = "text"
         if "image" in name: mod = "vision"
         elif "multimodal" in name: mod = "multimodal"
         elif "cache" in name: mod = "cache"
-        
+
         final_name = _get_versioned_collection_name(name, mod)
         if final_name != name:
             logger.info(f"[vectorstore] Redirecionando '{name}' -> '{final_name}' (Versionamento)")
@@ -271,7 +297,7 @@ async def add_document(
         embedding = await asyncio.to_thread(embed_image, image_b64 or "")
     else:  # multimodal
         emb = await asyncio.to_thread(embed_multimodal, text or "", image_b64)
-        embedding = emb.get("multimodal")
+        embedding = cast(List[float], emb.get("multimodal"))
 
     collection_name = _collection_for_modality(modality)
 
@@ -299,16 +325,18 @@ async def add_document(
 # ============================================================
 # Consulta (Com Auto-Healing)
 # ============================================================
-def _query_embedding_sync(collection_name: str, embedding, n_results: int):
+def _query_embedding_sync(collection_name: str, embedding, n_results: int, where: Optional[Dict] = None):
     """Run one synchronous Chroma similarity query with auto-healing behavior."""
     try:
         col = get_chroma_client().get_or_create_collection(name=collection_name)
-        return col.query(
-            query_embeddings=[_ensure_list_of_floats(embedding)],
-            n_results=n_results,
-            # CORRIGIDO: Removido "ids" da lista include.
-            include=["documents", "metadatas", "distances"], 
-        )
+        kwargs: Dict[str, Any] = {
+            "query_embeddings": [_ensure_list_of_floats(embedding)],
+            "n_results": n_results,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where:
+            kwargs["where"] = where
+        return col.query(**kwargs)
     except Exception as e:
         msg = str(e).lower()
         # AUTO-HEALING: Se a dimensão não bater na consulta, a coleção está suja.
@@ -319,15 +347,13 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int):
                 return {}
             except Exception as del_err:
                 logger.debug(f"[vectorstore] Falha ao deletar coleção: {del_err}")
-        
+
         logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
         return {}
 
 
-async def query_embedding(modality: str, embedding, n_results: int = 3):
+async def query_embedding(modality: str, embedding, n_results: int = 3, where: Optional[Dict] = None):
     """Consulta embeddings no Chroma."""
-    # Se a modalidade for o nome direto da coleção (ex: knowledge_base), usa direto
-    # Caso contrário, resolve o nome versionado
     if modality not in VALID_MODALITIES:
         collection_name = modality
     else:
@@ -338,6 +364,7 @@ async def query_embedding(modality: str, embedding, n_results: int = 3):
         collection_name,
         embedding,
         n_results,
+        where,
     )
 
 

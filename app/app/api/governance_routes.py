@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import asyncio
+from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException
 
 from ..api.deps import require_admin, require_admin_or_role
 from ..roadmap_features import (
     activate_policy_version,
+    check_tenant_budget,
     create_policy_version,
     get_active_policy,
     get_tenant_budget,
@@ -17,16 +19,71 @@ from ..roadmap_features import (
     grant_role,
     list_audit_events,
     list_policy_versions,
-    list_roles,
     list_response_reviews,
+    list_roles,
+    list_tenant_budgets,
     log_audit_event,
     revoke_role,
     set_tenant_budget,
     update_response_review,
 )
-from ..schemas import PolicyCreateRequest, ResponseReviewUpdateRequest, RoleGrantRequest, RoleRevokeRequest, TenantBudgetUpdateRequest
+from ..schemas import (
+    PolicyCreateRequest,
+    ResponseReviewUpdateRequest,
+    RoleGrantRequest,
+    RoleRevokeRequest,
+    TenantBudgetUpdateRequest,
+)
+from ..services.governance_runtime import invalidate_runtime_policy_cache_async
 
 router = APIRouter()
+
+
+@router.get("/admin/budgets", tags=["Governance"])
+def list_budgets(
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    """List all tenant budgets."""
+    require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        authorization=authorization,
+        required_roles=["governance_viewer", "governance_admin", "platform_admin"],
+    )
+    return {"items": list_tenant_budgets()}
+
+
+@router.get("/admin/budgets/{tenant_id}/check", tags=["Governance"])
+def check_budget(
+    tenant_id: str,
+    projected_cost_usd: float = 0.0,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    """Preview budget decision for a tenant."""
+    require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        authorization=authorization,
+        required_roles=["governance_viewer", "governance_admin", "platform_admin"],
+        tenant_id=tenant_id,
+    )
+    result = check_tenant_budget(tenant_id, projected_cost_usd=projected_cost_usd)
+    return {
+        "allowed": result.allowed,
+        "reason": result.reason,
+        "daily_spent": result.daily_spent,
+        "monthly_spent": result.monthly_spent,
+        "daily_limit": result.daily_limit,
+        "monthly_limit": result.monthly_limit,
+    }
 
 
 @router.put("/admin/budgets/{tenant_id}", tags=["Governance"])
@@ -36,12 +93,14 @@ def upsert_tenant_budget(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Create or update tenant budget limits."""
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["governance_admin", "platform_admin"],
         tenant_id=tenant_id,
     )
@@ -65,12 +124,14 @@ def get_budget(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Get tenant budget configuration."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["governance_viewer", "governance_admin", "platform_admin"],
         tenant_id=tenant_id,
     )
@@ -83,12 +144,14 @@ def get_quota_usage(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Get usage summary for one or all tenants."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["governance_viewer", "governance_admin", "platform_admin"],
         tenant_id=tenant_id,
     )
@@ -101,12 +164,14 @@ def get_audit_events(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Get latest audit events."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["audit_viewer", "platform_admin"],
     )
     return {"items": list_audit_events(limit=limit)}
@@ -118,12 +183,14 @@ def create_policy(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Create or update a policy version."""
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["policy_admin", "platform_admin"],
     )
     version = str(payload.version).strip()
@@ -145,16 +212,25 @@ def activate_policy(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Activate one policy version."""
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["policy_admin", "platform_admin"],
     )
     if not activate_policy_version(version):
         raise HTTPException(status_code=404, detail=f"Policy not found: {version}")
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(invalidate_runtime_policy_cache_async())
+    except RuntimeError:
+        asyncio.run(invalidate_runtime_policy_cache_async())
+    except Exception:
+        pass
     log_audit_event(
         actor=x_user_id or auth["authorized_by"],
         action="policy_activate",
@@ -169,12 +245,14 @@ def list_policies(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """List policy versions."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["policy_viewer", "policy_admin", "platform_admin"],
     )
     return {"active": get_active_policy(), "items": list_policy_versions()}
@@ -230,12 +308,14 @@ def get_response_reviews(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """List response-review items queued for human follow-up."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["audit_viewer", "platform_admin"],
     )
     return {"items": list_response_reviews(status=status, limit=limit)}
@@ -248,12 +328,14 @@ def apply_response_review(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Record one reviewer decision for an answer awaiting human validation."""
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["audit_viewer", "platform_admin"],
     )
     review_status = str(getattr(payload.review_status, "value", payload.review_status) or "").strip()

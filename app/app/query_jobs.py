@@ -24,9 +24,18 @@ from .observability import (
     QUERY_JOBS_QUEUED,
     QUERY_JOBS_SATURATED,
 )
-from .schemas import QueryJobStatus, QueryJobStatusResponse, QueryRequest, QueuedQueryAcceptedResponse, QueryResponse
+from .schemas import QueryJobStatus, QueryJobStatusResponse, QueryRequest, QueryResponse, QueuedQueryAcceptedResponse
 from .settings_dynamic import settings
 from .utils.redis_client import get_redis_async_safe
+
+try:
+    from .api.auth import AuthContext, verify_job_access
+except ImportError:  # pragma: no cover - import guard for bootstrap
+    AuthContext = None  # type: ignore
+    verify_job_access = None  # type: ignore
+
+def _anonymous_auth() -> "AuthContext":
+    return AuthContext() if AuthContext is not None else None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +139,15 @@ def get_pending_query_jobs_count(identity: Optional[str] = None) -> int:
     try:
         if identity:
             return max(0, int(redis_client.get(_tenant_pending_key(identity)) or 0))
-        keys = list(redis_client.keys(f"{TENANT_PENDING_PREFIX}*"))
         total = 0
-        for key in keys:
-            total += max(0, int(redis_client.get(key) or 0))
+        cursor = 0
+        pattern = f"{TENANT_PENDING_PREFIX}*"
+        while True:
+            cursor, keys = redis_client.scan(cursor=cursor, match=pattern, count=100)
+            for key in keys:
+                total += max(0, int(redis_client.get(key) or 0))
+            if cursor == 0:
+                break
         return total
     except Exception:
         return 0
@@ -157,6 +171,7 @@ def enqueue_query_job(
     pressure_state: str,
     route_path: str,
     identity_key: Optional[str] = None,
+    auth: Optional["AuthContext"] = None,
 ) -> QueuedQueryAcceptedResponse:
     """Persist and enqueue one query job, returning the public acceptance payload."""
     redis_client = _get_job_store()
@@ -214,6 +229,7 @@ def enqueue_query_job(
         "correlation_id": corr_id,
         "pending_identity": tenant_identity,
         "pending_identity_type": identity_type,
+        "owner_hash": auth.owner_hash() if auth and auth.authenticated else None,
         "request": req.model_dump(mode="json"),
         "error": None,
         "result": None,
@@ -284,9 +300,11 @@ def get_query_job_record(job_id: str) -> Dict[str, Any]:
     return _json_loads(raw)
 
 
-def get_query_job_status(job_id: str) -> QueryJobStatusResponse:
+def get_query_job_status(job_id: str, auth: Optional["AuthContext"] = None) -> QueryJobStatusResponse:
     """Return the observable status model for one queued query job."""
     record = get_query_job_record(job_id)
+    if verify_job_access is not None:
+        verify_job_access(record, auth or _anonymous_auth())
     pending_identity = str(record.get("pending_identity") or "").strip() or None
     queue_depth = get_pending_query_jobs_count(pending_identity) if pending_identity else get_pending_query_jobs_count()
     try:
@@ -305,9 +323,11 @@ def get_query_job_status(job_id: str) -> QueryJobStatusResponse:
     )
 
 
-def get_query_job_result(job_id: str) -> QueryResponse:
+def get_query_job_result(job_id: str, auth: Optional["AuthContext"] = None) -> QueryResponse:
     """Return the completed QueryResponse for one queued query job."""
     record = get_query_job_record(job_id)
+    if verify_job_access is not None:
+        verify_job_access(record, auth or _anonymous_auth())
     try:
         QUERY_JOB_POLLING_SERVED.labels(endpoint="result").inc()
     except Exception:
@@ -383,5 +403,19 @@ def finalize_query_job(job_id: str, *, status: QueryJobStatus, result: Optional[
             QUERY_JOBS_COMPLETED.inc()
         elif status == QueryJobStatus.FAILED:
             QUERY_JOBS_FAILED.inc()
+    except Exception:
+        pass
+
+    try:
+        from .services.query_webhooks import schedule_query_job_webhook
+
+        request_data = payload.get("request") or {}
+        schedule_query_job_webhook(
+            webhook_url=request_data.get("webhook_url"),
+            job_id=job_id,
+            status=status.value,
+            result=result,
+            error=error,
+        )
     except Exception:
         pass

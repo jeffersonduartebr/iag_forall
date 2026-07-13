@@ -94,6 +94,14 @@ async def process_background_feedback_impl(
             should_judge = deps["random"].random() < prob_judge
             quality_source = "bandit_proxy"
 
+        if raw_payload_dict.get("openrouter_exploration"):
+            should_judge = True
+            quality_source = "bandit_proxy"
+            try:
+                deps["logger"].info("[Background] Forcing judge for OpenRouter exploration on %s", chosen_model)
+            except Exception:
+                pass
+
         if should_judge:
             try:
                 deps["logger"].info(
@@ -134,6 +142,50 @@ async def process_background_feedback_impl(
             except Exception:
                 pass
 
+        if raw_payload_dict.get("openrouter_exploration"):
+            record_fn = deps.get("record_openrouter_exploration")
+            if record_fn is not None:
+                try:
+                    exploration_info = raw_payload_dict.get("exploration_info") or {}
+                    success = bool(answer and str(answer).strip())
+                    promotion = await record_fn(
+                        model=chosen_model,
+                        reward=reward,
+                        latency_s=latency_s,
+                        cost_usd=float(cost_val or 0.0),
+                        settings=deps["settings"],
+                        prompt_tokens=int(prompt_tokens or 0),
+                        completion_tokens=int(completion_tokens or 0),
+                        success=success,
+                        judge_quality=final_quality if quality_source == "judge" else None,
+                    )
+                    if promotion and promotion.get("auto_promoted"):
+                        deps["logger"].info(
+                            "[Background] Auto-promoted exploration model %s to candidates",
+                            chosen_model,
+                        )
+                except Exception as exc:
+                    deps["logger"].warning("[Background] OpenRouter exploration record failed: %s", exc)
+
+            shadow_fn = deps.get("maybe_run_shadow_comparison")
+            exploration_info = raw_payload_dict.get("exploration_info") or {}
+            if shadow_fn is not None and exploration_info.get("shadow_compare"):
+                incumbent = exploration_info.get("incumbent_model")
+                try:
+                    await shadow_fn(
+                        query=query,
+                        explored_model=chosen_model,
+                        explored_answer=answer,
+                        explored_quality=final_quality,
+                        explored_latency=latency_s,
+                        explored_cost=float(cost_val or 0.0),
+                        incumbent_model=incumbent,
+                        deps=deps,
+                        settings=deps["settings"],
+                    )
+                except Exception as exc:
+                    deps["logger"].warning("[Background] Shadow comparison failed: %s", exc)
+
         try:
             alpha = 0.2
             key = (modality, chosen_model)
@@ -173,6 +225,7 @@ async def process_background_feedback_impl(
                     modality=modality,
                     image_b64=image_b64,
                     model_used=chosen_model,
+                    tenant_id=raw_payload_dict.get("tenant_id"),
                 )
             except Exception as exc:
                 deps["logger"].warning(f"[Background] Cache store failed: {exc}")
@@ -212,6 +265,7 @@ async def process_background_feedback_impl(
                 review_status=str(review_status) if review_status else None,
                 reward=reward,
                 context_label="async_processed",
+                tenant_id=raw_payload_dict.get("tenant_id"),
                 raw_payload=raw_payload,
                 query_embedding=query_embedding,
                 answer_embedding=None,

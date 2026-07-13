@@ -136,4 +136,10 @@ Key settings: `NSGA_W_QUALITY`, `NSGA_W_LATENCY`, `NSGA_W_COST`, `BANDIT_EPSILON
 - Line length: 120 (pyproject.toml)
 - Ruff for linting/formatting
 - MyPy for type checking (strict_optional, warn_redundant_casts)
-- Pre-commit hooks enforced
+- Pre-commit hooks enforced (`.pre-commit-config.yaml`)
+- **Max 500 SLOC per file** (non-blank, non-comment lines) in `app/app/` and `tests/`.
+  Enforced in CI via `python3 scripts/check_file_length.py`. Existing oversized files
+  are grandfathered in `scripts/sloc_baseline.json` (ratchet: they may shrink, never
+  grow); new files must be ≤500. After shrinking a baselined file, lower its ceiling
+  with `python3 scripts/check_file_length.py --update`. Refactor roadmap in
+  `docs/SLOC_REFACTOR_ROADMAP.md`.

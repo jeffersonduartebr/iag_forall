@@ -18,9 +18,8 @@ Features:
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from .settings_dynamic import settings
 from .utils.redis_client import get_redis
@@ -102,13 +101,11 @@ def get_ema_latency(model: str, modality: str = "text") -> Optional[float]:
     # Fall back to database
     try:
         # Import here to avoid circular imports
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
 
-        db_url = (
-            f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}"
-            f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-        )
-        engine = create_engine(db_url, pool_pre_ping=True)
+        from app.db import get_engine
+
+        engine = get_engine()
 
         with engine.connect() as conn:
             result = conn.execute(

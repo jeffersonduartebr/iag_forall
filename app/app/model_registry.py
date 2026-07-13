@@ -16,8 +16,8 @@ credentials or local runtimes configured.
 
 from __future__ import annotations
 
-import os
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Set
@@ -28,6 +28,7 @@ _PROVIDER_ENV_KEYS = {
     "openai": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
     "gemini": ("GEMINI_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
 }
 
 
@@ -41,6 +42,7 @@ class Provider(str, Enum):
     ANTHROPIC = "anthropic"
     GEMINI = "gemini"
     OLLAMA = "ollama"
+    OPENROUTER = "openrouter"
 
 
 class Capability(str, Enum):
@@ -116,6 +118,11 @@ class ModelConfig:
         """Return whether the model is treated as a reasoning-oriented model."""
         return Capability.REASONING in self.capabilities
 
+    @property
+    def supports_tools(self) -> bool:
+        """Return whether the model supports tool/function calling."""
+        return Capability.FUNCTION_CALLING in self.capabilities
+
     def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Estimate request cost from token counts using registry pricing data."""
         input_cost = (input_tokens / 1000) * self.cost_per_1k_input
@@ -137,6 +144,7 @@ class ModelRegistry:
     """
 
     _instance: Optional["ModelRegistry"] = None
+    _initialized: bool = False
 
     def __new__(cls) -> "ModelRegistry":
         """Return the process-wide singleton registry instance."""
@@ -388,6 +396,14 @@ class ModelRegistry:
             return True
 
         env_keys = _PROVIDER_ENV_KEYS.get(provider_value, ())
+        if provider_value == Provider.OPENROUTER.value:
+            try:
+                from app.openrouter_catalog import get_openrouter_api_key
+
+                if get_openrouter_api_key():
+                    return True
+            except Exception:
+                pass
         return any(os.getenv(key, "").strip() for key in env_keys)
 
     def is_model_configured(self, model_name: str) -> bool:
@@ -437,15 +453,20 @@ class ModelRegistry:
 
         # Create a default config for unknown models
         provider = Provider.OLLAMA
+        name = model_name
         if "/" in model_name:
-            prefix = model_name.split("/")[0]
+            prefix, remainder = model_name.split("/", 1)
             try:
                 provider = Provider(prefix)
             except ValueError:
-                pass
+                remainder = model_name
+            if provider == Provider.OPENROUTER:
+                name = remainder
+            else:
+                name = model_name.split("/")[-1]
 
         return ModelConfig(
-            name=model_name.split("/")[-1] if "/" in model_name else model_name,
+            name=name,
             provider=provider,
             default_timeout=60,
         )
@@ -577,3 +598,34 @@ def is_model_configured(model_name: str) -> bool:
 def filter_configured_model_names(model_names: List[str]) -> List[str]:
     """Keep only model names whose provider is configured for runtime use."""
     return get_model_registry().filter_configured_model_names(model_names)
+
+
+def model_supports_tools(model_name: str) -> bool:
+    """Return whether one model supports tool/function calling.
+
+    Ordem de decisão:
+    1. Capacidade declarada no registry (``Capability.FUNCTION_CALLING``).
+    2. Para modelos OpenRouter, o sinal autoritativo ``supported_parameters`` do
+       catálogo (contém ``"tools"`` quando o modelo suporta function calling).
+
+    Modelos desconhecidos/locais sem sinal explícito retornam ``False`` (estrito);
+    para habilitá-los, liste-os em ``CANDIDATE_TOOL_MODELS_LIST``.
+    """
+    if not isinstance(model_name, str) or not model_name:
+        return False
+    cfg = get_model_registry().get(model_name)
+    if cfg is not None and cfg.supports_tools:
+        return True
+    if model_name.startswith("openrouter/"):
+        try:
+            from app.openrouter_catalog import openrouter_supports_tools
+
+            return bool(openrouter_supports_tools(model_name.split("/", 1)[1]))
+        except Exception:
+            return False
+    return False
+
+
+def filter_tool_capable_model_names(model_names: List[str]) -> List[str]:
+    """Keep only model names that support tool/function calling."""
+    return [m for m in model_names if model_supports_tools(m)]

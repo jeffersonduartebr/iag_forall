@@ -394,7 +394,17 @@ class TestQueryResponse:
 
     def test_response_with_grounding_and_review_metadata(self):
         """QueryResponse should accept confidence, grounding, and review fields."""
-        from app.schemas import ConfidenceBand, EvidenceSnippet, QueryResponse, ResponseCitation, ResponseDiagnostics, ResponseProvenance, ReviewStatus, RouteDecision, VerificationStatus
+        from app.schemas import (
+            ConfidenceBand,
+            EvidenceSnippet,
+            QueryResponse,
+            ResponseCitation,
+            ResponseDiagnostics,
+            ResponseProvenance,
+            ReviewStatus,
+            RouteDecision,
+            VerificationStatus,
+        )
 
         response = QueryResponse(
             answer="A fotossintese transforma luz em energia quimica.",
@@ -422,8 +432,9 @@ class TestSchemaJsonSerialization:
 
     def test_query_request_to_json(self):
         """Test QueryRequest JSON serialization."""
-        from app.schemas import QueryRequest
         import json
+
+        from app.schemas import QueryRequest
 
         req = QueryRequest(query="Test query", max_tokens=100)
         json_str = req.model_dump_json()
@@ -434,8 +445,9 @@ class TestSchemaJsonSerialization:
 
     def test_query_response_to_json(self):
         """Test QueryResponse JSON serialization."""
-        from app.schemas import QueryResponse, ResponseDiagnostics, RouteDecision
         import json
+
+        from app.schemas import QueryResponse, ResponseDiagnostics, RouteDecision
 
         response = QueryResponse(
             answer="Test answer",
@@ -450,8 +462,9 @@ class TestSchemaJsonSerialization:
 
     def test_query_response_serializes_citations(self):
         """Grounding metadata should survive JSON serialization."""
-        from app.schemas import QueryResponse, ResponseDiagnostics, ResponseProvenance, RouteDecision
         import json
+
+        from app.schemas import QueryResponse, ResponseDiagnostics, ResponseProvenance, RouteDecision
 
         response = QueryResponse(
             answer="Resposta ancorada",

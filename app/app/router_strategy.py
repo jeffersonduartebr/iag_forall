@@ -16,12 +16,12 @@ Atualizado:
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import Dict, List
 
 # Importa helpers do bandits.py
 from app.bandits import get_snapshot, sample_metrics_from_snapshot
+from app.reliability import get_cascade_detector, get_circuit_breaker_manager
 from app.settings_dynamic import settings
-from app.reliability import get_circuit_breaker_manager, get_cascade_detector
 
 logger = logging.getLogger(__name__)
 

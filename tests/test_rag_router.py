@@ -10,9 +10,8 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException, UploadFile
-
 from app.routers import rag_router as rr
+from fastapi import HTTPException, UploadFile
 
 
 def test_chunk_text_basic():
@@ -25,7 +24,10 @@ def test_chunk_text_basic():
 
 def test_extract_text_from_pdf_error(monkeypatch):
     """Testa extract text from pdf error."""
-    monkeypatch.setattr(rr.fitz, "open", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("bad pdf")))
+    import sys
+
+    fake_fitz = SimpleNamespace(open=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("bad pdf")))
+    monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
     with pytest.raises(HTTPException) as exc:
         rr.extract_text_from_pdf(b"%PDF-invalid")
     assert exc.value.status_code == 400

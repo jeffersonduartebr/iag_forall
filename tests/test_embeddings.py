@@ -10,9 +10,10 @@ Tests for the embeddings.py utility module covering:
 - Cache statistics
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import numpy as np
+import pytest
 
 
 class TestEmbeddingL1Cache:
@@ -194,7 +195,7 @@ class TestEmbedText:
         """Test that embed_text returns a list of floats."""
         mock_embed.return_value = [0.1, 0.2, 0.3]
 
-        from app.embeddings import embed_text, _embed_l1_cache
+        from app.embeddings import _embed_l1_cache, embed_text
 
         # Clear cache to ensure we hit the mock
         _embed_l1_cache._data.clear()
@@ -211,7 +212,7 @@ class TestEmbedText:
         """Test that results are cached."""
         mock_embed.return_value = [0.1, 0.2, 0.3]
 
-        from app.embeddings import embed_text, _embed_l1_cache
+        from app.embeddings import _embed_l1_cache, embed_text
 
         # Clear cache
         _embed_l1_cache._data.clear()

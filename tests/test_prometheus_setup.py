@@ -19,6 +19,7 @@ def test_setup_prometheus_and_registry(monkeypatch, tmp_path):
     f1.write_text("x")
 
     monkeypatch.setattr(ps, "PROM_DIR", str(pdir))
+    monkeypatch.setenv("PROMETHEUS_WIPE_ON_STARTUP", "1")
     ps.setup_prometheus()
     assert list(pdir.iterdir()) == []
 

@@ -75,11 +75,14 @@ class TestDynamicSettings:
         assert hasattr(settings, "MAX_TOKENS_DEFAULT")
         assert hasattr(settings, "TEMPERATURE_DEFAULT")
 
-    def test_settings_get_method(self):
+    def test_settings_get_method(self, monkeypatch):
         """Test the get method with default values."""
-        from app.settings_dynamic import settings
+        from app.settings_dynamic import _lru, settings
 
-        # Get with default
+        _lru.clear()
+        monkeypatch.setattr("app.settings_dynamic._get_from_redis", lambda key: None)
+        monkeypatch.setattr("app.settings_dynamic._get_from_db", lambda key: None)
+
         result = settings.get("NONEXISTENT_KEY", "default_value")
         assert result == "default_value"
 
@@ -100,8 +103,13 @@ class TestDynamicSettings:
         assert meta["domain"] == "providers"
         assert meta["mutability"] == "requires_restart"
 
-    def test_typed_getters_cover_defaults(self):
+    def test_typed_getters_cover_defaults(self, monkeypatch):
         """Typed getters should coerce fallback values consistently."""
+        from app.settings_dynamic import _lru
+
+        _lru.clear()
+        monkeypatch.setattr("app.settings_dynamic._get_from_redis", lambda key: None)
+        monkeypatch.setattr("app.settings_dynamic._get_from_db", lambda key: None)
         settings = DynamicSettings()
         assert settings._get_int("MISSING_INT", 7) == 7
         assert settings._get_float("MISSING_FLOAT", 1.5) == 1.5

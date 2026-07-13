@@ -65,6 +65,10 @@ def test_registry_get_or_default_and_fallback_chain(monkeypatch):
     known = registry.get_or_default("openai/gpt-4o")
     assert known.name == "gpt-4o"
 
+    openrouter_cfg = registry.get_or_default("openrouter/anthropic/claude-sonnet-4")
+    assert openrouter_cfg.provider == mr.Provider.OPENROUTER
+    assert openrouter_cfg.name == "anthropic/claude-sonnet-4"
+
     unknown_prefixed = registry.get_or_default("anthropic/custom-x")
     assert unknown_prefixed.provider == mr.Provider.ANTHROPIC
     assert unknown_prefixed.name == "custom-x"

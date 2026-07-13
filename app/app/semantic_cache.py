@@ -8,24 +8,25 @@ current runtime architecture and operational documentation.
 
 
 from __future__ import annotations
+
+import asyncio
 import hashlib
 import logging
-import asyncio
-import time
 import threading
+import time
 from collections import OrderedDict
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from .settings_dynamic import settings
-from .embeddings import embed_text, embed_image, embed_multimodal
-from .vectorstore import query_embedding, add_document
+from .embeddings import embed_image, embed_multimodal, embed_text
 from .observability import (
     L1_CACHE_HITS,
     L1_CACHE_MISSES,
     L1_CACHE_SIZE,
-    SEMANTIC_CACHE_LOOKUP_TOTAL,
     SEMANTIC_CACHE_LATENCY,
+    SEMANTIC_CACHE_LOOKUP_TOTAL,
 )
+from .settings_dynamic import settings
+from .vectorstore import add_document, query_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,12 @@ async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
         logger.warning(f"[semantic_cache] Embed fail: {e}")
         return None
 
-async def check_cache(query: str, modality: str="text", image_b64: str=None) -> Optional[Dict]:
+async def check_cache(
+    query: str,
+    modality: str = "text",
+    image_b64: Optional[str] = None,
+    tenant_id: str | None = None,
+) -> Optional[Dict]:
     """
     Look for a reusable answer in the exact-match or semantic cache layers.
 
@@ -211,11 +217,11 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
     """
     modality = _normalize_modality(modality)
     lookup_started_at = time.time()
-    
+
     # 1. L1 Cache (Exact Match em RAM)
-    # Hash da query + imagem para chave rápida
+    tenant_ns = (tenant_id or "global").strip()
     img_hash = hashlib.sha256(image_b64.encode()).hexdigest() if image_b64 else "no_img"
-    full_hash = f"{modality}:{_compute_sha256(query)}:{img_hash}"
+    full_hash = f"{tenant_ns}:{modality}:{_compute_sha256(query)}:{img_hash}"
 
     if cached := _l1_cache.get(full_hash):
         logger.info("[semantic_cache] L1 RAM Hit")
@@ -247,11 +253,12 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
     try:
         # Busca na coleção de cache ("cache" é mapeado para semantic_cache_v2 no vectorstore.py)
         results = await query_embedding(
-            modality="cache", 
-            embedding=q_emb, 
-            n_results=1
+            modality="cache",
+            embedding=q_emb,
+            n_results=1,
+            where={"tenant_id": tenant_ns} if tenant_ns != "global" else None,
         )
-        
+
         if not results:
             try:
                 SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="miss").inc()
@@ -279,18 +286,18 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
             # O texto do documento é a Query original
             # A resposta está no metadata
             answer_text = meta.get("answer_payload", "")
-            
+
             if not answer_text:
                 return None
 
             # Reconstrói objeto de resposta
             res = {
-                "text": answer_text, 
+                "text": answer_text,
                 "similarity": float(similarity),
                 "model_used": meta.get("model_used", "unknown"),
                 "image_output_b64": meta.get("image_output_b64", None) # Se houver
             }
-            
+
             # Atualiza L1
             _l1_cache.store(full_hash, res)
             logger.debug(f"[semantic_cache] L1 cache stored for hash {full_hash[:16]}...")
@@ -306,7 +313,7 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
             SEMANTIC_CACHE_LATENCY.labels(result="below_threshold").observe(time.time() - lookup_started_at)
         except Exception:
             pass
-            
+
     except Exception as e:
         logger.warning(f"[semantic_cache] Chroma lookup fail: {e}")
         try:
@@ -318,7 +325,14 @@ async def check_cache(query: str, modality: str="text", image_b64: str=None) -> 
 
     return None
 
-async def store_cache(query: str, answer: str, modality: str="text", image_b64: str=None, model_used: str=None):
+async def store_cache(
+    query: str,
+    answer: str,
+    modality: str = "text",
+    image_b64: Optional[str] = None,
+    model_used: Optional[str] = None,
+    tenant_id: str | None = None,
+):
     """
     Armazena uma resposta de alta qualidade no ChromaDB e L1 cache.
     """
@@ -327,18 +341,20 @@ async def store_cache(query: str, answer: str, modality: str="text", image_b64: 
     # ID único para o documento de cache
     doc_id = f"cache_{_compute_sha256(query)}_{int(time.time())}"
 
+    tenant_ns = (tenant_id or "global").strip()
+
     # Metadados para recuperação
     meta = {
         "model_used": model_used or "unknown",
-        "original_query": query[:100],  # Snippet para debug
+        "original_query": query[:100],
         "timestamp": int(time.time()),
         "modality": modality,
-        "answer_payload": answer  # Armazena a resposta no metadata
+        "tenant_id": tenant_ns,
+        "answer_payload": answer,
     }
 
-    # Store in L1 cache immediately for fast exact-match retrieval
     img_hash = hashlib.sha256(image_b64.encode()).hexdigest() if image_b64 else "no_img"
-    full_hash = f"{modality}:{_compute_sha256(query)}:{img_hash}"
+    full_hash = f"{tenant_ns}:{modality}:{_compute_sha256(query)}:{img_hash}"
     l1_entry = {
         "text": answer,
         "similarity": 1.0,  # Exact match
@@ -452,9 +468,9 @@ async def tune_cache_threshold() -> Optional[float]:
             # Update Prometheus metrics
             try:
                 from .observability import (
-                    CACHE_THRESHOLD_CURRENT,
                     CACHE_HIT_RATE,
                     CACHE_THRESHOLD_ADJUSTMENTS,
+                    CACHE_THRESHOLD_CURRENT,
                 )
                 CACHE_THRESHOLD_CURRENT.set(new_threshold)
                 CACHE_HIT_RATE.set(hit_rate)

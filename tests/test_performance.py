@@ -11,11 +11,10 @@ Testes para validar as otimizações de performance implementadas:
 5. Centroid Lookup Optimization
 """
 
-import pytest
-import time
 import threading
+import time
+
 import numpy as np
-from unittest.mock import MagicMock, patch
 
 
 class TestEMAHistoryCache:
@@ -273,9 +272,9 @@ class TestConnectionPoolConfig:
     def test_pool_settings_applied(self):
         """Verifica que as configurações do pool estão corretas."""
         # Verifica os valores configurados no módulo de conexão.
-        import app.db as db_module
-
         import inspect
+
+        import app.db as db_module
         source = inspect.getsource(db_module)
 
         assert "pool_recycle=300" in source
@@ -289,15 +288,15 @@ class TestPerformanceMetrics:
     def test_metrics_exist(self):
         """Verifica que as novas métricas estão definidas."""
         from app.observability import (
-            JUDGE_CACHE_HITS,
-            JUDGE_CACHE_MISSES,
-            JUDGE_CACHE_HIT_RATE,
+            CENTROID_LOOKUP_DURATION,
+            EMA_HISTORY_EVICTIONS,
+            EMA_HISTORY_SIZE,
+            EMBEDDING_CACHE_HIT_RATE,
             EMBEDDING_CACHE_HITS,
             EMBEDDING_CACHE_MISSES,
-            EMBEDDING_CACHE_HIT_RATE,
-            CENTROID_LOOKUP_DURATION,
-            EMA_HISTORY_SIZE,
-            EMA_HISTORY_EVICTIONS,
+            JUDGE_CACHE_HIT_RATE,
+            JUDGE_CACHE_HITS,
+            JUDGE_CACHE_MISSES,
         )
 
         # Verifica que são instâncias válidas de métricas

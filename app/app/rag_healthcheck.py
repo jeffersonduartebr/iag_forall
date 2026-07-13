@@ -20,20 +20,20 @@ Expõe:
 
 from __future__ import annotations
 
-import time
 import asyncio
+import time
 from typing import Any, Dict
 
 from app.embeddings import (
-    embed_text,         # assíncrono
-    embed_multimodal,   # assíncrono (texto + imagem opcional)
-)
-from app.vectorstore import (
-    get_or_create_collection_async,
-    insert_embedding,
-    query_embedding,
+    embed_multimodal,  # assíncrono (texto + imagem opcional)
+    embed_text,  # assíncrono
 )
 from app.utils.redis_client import get_redis
+from app.vectorstore import (
+    add_document,
+    get_or_create_collection_async,
+    query_embedding,
+)
 
 # Coleção dedicada ao healthcheck
 COLLECTION = "rag_healthcheck"
@@ -55,8 +55,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # 1) Embeddings de TEXTO (obrigatório)
     t = time.time()
     try:
-        q_vec = await embed_text(QUERY_TEXT)
-        d_vec = await embed_text(DOC_TEXT)
+        q_vec = await asyncio.to_thread(embed_text, QUERY_TEXT)
+        await asyncio.to_thread(embed_text, DOC_TEXT)
         report["steps"]["embeddings_text"] = {
             "ok": True,
             "latency_s": round(time.time() - t, 3),
@@ -68,7 +68,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # 2) Embeddings MULTIMODAIS (best-effort, não bloqueia o ok geral)
     t = time.time()
     try:
-        _ = await embed_multimodal(QUERY_TEXT, image_b64=None)
+        _ = await asyncio.to_thread(embed_multimodal, QUERY_TEXT, None)
         report["steps"]["embeddings_multimodal"] = {
             "ok": True,
             "latency_s": round(time.time() - t, 3),
@@ -102,11 +102,10 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     try:
         doc_id = f"hc:{int(time.time() * 1000)}"
         # d_vec pode ser np.ndarray ou list — o vectorstore já faz a blindagem
-        await insert_embedding(
-            COLLECTION,
-            doc_id,
-            DOC_TEXT,
-            d_vec,
+        await add_document(
+            modality="text",
+            doc_id=doc_id,
+            text=DOC_TEXT,
             metadata={"kind": "hc"},
         )
         report["steps"]["vectorstore_insert"] = {
@@ -120,7 +119,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # 5) Query no vectorstore
     t = time.time()
     try:
-        res = await query_embedding(COLLECTION, q_vec, n_results=1)
+        res = await query_embedding("text", q_vec, n_results=1)
         ok = bool(res and "documents" in res and res["documents"])
         report["steps"]["vectorstore_query"] = {
             "ok": ok,

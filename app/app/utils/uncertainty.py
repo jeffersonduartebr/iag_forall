@@ -11,11 +11,11 @@ armazenados pelo sistema Bandit.
 
 import json
 import logging
-import numpy as np
-from typing import List, Dict, Optional
+from typing import Dict, List
 
-from app.utils.redis_client import get_redis
+import numpy as np
 from app.embeddings import embed_text
+from app.utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -65,20 +65,20 @@ def get_uncertainty_score(query_text: str, modality: str = "text") -> float:
         if not query_vec_list or all(v == 0 for v in query_vec_list):
              logger.warning("[UQ] Falha no embedding da query. Incerteza = 1.0")
              return 1.0
-        
+
         q_np = np.array(query_vec_list, dtype=np.float32)
 
         # 3. Encontra a maior similaridade com o conhecimento existente
         max_similarity = -1.0
-        
+
         for centroid in centroids_data:
             # Formato esperado do centróide: {"vec": [floats], "text": "..."}
             c_vec_list = centroid.get("vec")
             if not c_vec_list: continue
-            
+
             c_np = np.array(c_vec_list, dtype=np.float32)
             sim = _cosine_similarity(q_np, c_np)
-            
+
             if sim > max_similarity:
                 max_similarity = sim
 
@@ -88,10 +88,10 @@ def get_uncertainty_score(query_text: str, modality: str = "text") -> float:
         # 4. A Incerteza é o inverso da Similaridade (Familiaridade)
         # Se similaridade é alta (1.0), incerteza é baixa (0.0).
         uncertainty = 1.0 - max_similarity
-        
+
         # Logging para análise (pode ser ruidoso em produção)
         # logger.debug(f"[UQ] Query: '{query_text[:20]}...' | MaxSim: {max_similarity:.3f} | UQ: {uncertainty:.3f}")
-        
+
         return uncertainty
 
     except Exception as e:

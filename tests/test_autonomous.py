@@ -11,10 +11,8 @@ Tests the self-tuning and calibration systems:
 - Judge Calibration (Improvement 5)
 """
 
-import pytest
 import time
-from unittest.mock import patch, MagicMock
-
+from unittest.mock import patch
 
 # =============================================================================
 # Test Improvement 1: Adaptive Risk Factors
@@ -47,7 +45,6 @@ class TestAdaptiveRiskFactors:
     def test_risk_factors_used_in_strategy(self):
         """Verify router_strategy uses dynamic risk factors."""
         from app.router_strategy import choose_top2_models
-        from app.settings_dynamic import settings
 
         candidates = ["ollama/phi4:latest", "openai/gpt-5"]
         weights = {"w_quality": 1.0, "w_latency": 0.5, "w_cost": 50.0}
@@ -171,7 +168,7 @@ class TestAdaptiveCacheThreshold:
 
     def test_get_cache_hit_rate(self):
         """Test hit rate calculation."""
-        from app.semantic_cache import get_cache_hit_rate, _l1_cache
+        from app.semantic_cache import _l1_cache, get_cache_hit_rate
 
         # Reset stats
         with _l1_cache._lock:
@@ -236,17 +233,9 @@ class TestJudgeCalibration:
         from app.judges import calibrate_judges
         from app.settings_dynamic import DynamicSettings
 
-        # Mock settings.get to return "0" for JUDGE_CALIBRATION_ENABLED
-        original_get = DynamicSettings.get
-        def mock_get(self, key, fallback=None):
-            """Execute the mock get routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            if key == "JUDGE_CALIBRATION_ENABLED":
-                return "0"
-            return original_get(self, key, fallback)
-
-        with patch.object(DynamicSettings, "get", mock_get):
+        # A property JUDGE_CALIBRATION_ENABLED lê via _get_bool (não via .get), então
+        # desabilitamos sobrescrevendo a própria property na classe.
+        with patch.object(DynamicSettings, "JUDGE_CALIBRATION_ENABLED", property(lambda self: False)):
             result = calibrate_judges()
             assert result["status"] == "disabled"
 
@@ -261,8 +250,8 @@ class TestAutonomousMetrics:
     def test_predictor_metrics_exist(self):
         """Verify predictor metrics are defined."""
         from app.observability import (
-            PREDICTOR_BRIER_SCORE,
             PREDICTOR_ACCURACY,
+            PREDICTOR_BRIER_SCORE,
             PREDICTOR_CALIBRATION_TEMP,
         )
 
@@ -273,9 +262,9 @@ class TestAutonomousMetrics:
     def test_cache_metrics_exist(self):
         """Verify cache threshold metrics are defined."""
         from app.observability import (
-            CACHE_THRESHOLD_CURRENT,
             CACHE_HIT_RATE,
             CACHE_THRESHOLD_ADJUSTMENTS,
+            CACHE_THRESHOLD_CURRENT,
         )
 
         assert CACHE_THRESHOLD_CURRENT is not None
@@ -285,9 +274,9 @@ class TestAutonomousMetrics:
     def test_uq_metrics_exist(self):
         """Verify UQ calibration metrics are defined."""
         from app.observability import (
-            UQ_VS_ERROR_CORRELATION,
             UQ_HIGH_AVG_QUALITY,
             UQ_LOW_AVG_QUALITY,
+            UQ_VS_ERROR_CORRELATION,
         )
 
         assert UQ_VS_ERROR_CORRELATION is not None
@@ -297,8 +286,8 @@ class TestAutonomousMetrics:
     def test_judge_calibration_metrics_exist(self):
         """Verify judge calibration metrics are defined."""
         from app.observability import (
-            JUDGE_CALIBRATION_SCORE,
             JUDGE_CACHE_AGREEMENT,
+            JUDGE_CALIBRATION_SCORE,
             JUDGE_CALIBRATION_UPDATES,
         )
 
@@ -324,7 +313,6 @@ class TestAutonomousIntegration:
         """Verify uncertainty_score is included in route response metadata."""
         # This would require mocking the full route_and_answer flow
         # For now, just verify the structure is correct
-        from app.router_core import route_and_answer
 
         # The function should return metadata with uncertainty_score
         # This is tested implicitly by the system running
@@ -333,7 +321,7 @@ class TestAutonomousIntegration:
         """Verify settings snapshot includes autonomous behavior settings."""
         from app.settings_dynamic import settings
 
-        snapshot = settings.snapshot()
+        settings.snapshot()
 
         # Check key settings are included
         assert "RISK_FACTOR_SOTA_HIGH_UQ" in settings.DEFAULTS

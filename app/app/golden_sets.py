@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-
 GOLDEN_SETS: Dict[str, Dict[str, Any]] = {
     "education_core_v1": {
         "id": "education_core_v1",

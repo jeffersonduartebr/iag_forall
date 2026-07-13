@@ -8,6 +8,7 @@ current runtime architecture and operational documentation.
 
 from chromadb import PersistentClient
 
+
 def reset_incompatible_collections(chroma_path: str = "/app/chroma_data", expected_dim: int = 1024):
     """
     Remove coleções do ChromaDB cuja dimensão de embeddings é diferente da esperada.

@@ -38,6 +38,9 @@ jobs:
       - name: Mypy
         run: PYTHONPATH=app mypy app/app
 
+      - name: File length (SLOC) limit
+        run: python3 scripts/check_file_length.py
+
   tests_unit:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -65,9 +68,47 @@ jobs:
       - name: Prepare CI runtime dirs
         run: mkdir -p .ci_state .ci_prom .ci_chroma
 
+      - name: Validate benchmark catalog
+        run: python3 scripts/validate_benchmark_catalog.py
+
       - name: Pytest (unit/default markers + coverage)
         run: |
           PYTHONPATH=app pytest -q tests -m "not integration and not slow" --cov=app/app --cov-report=term-missing --cov-fail-under=70
+
+  tests_integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    env:
+      STATE_DIR: ${{ github.workspace }}/.ci_state
+      PROMETHEUS_MULTIPROC_DIR: ${{ github.workspace }}/.ci_prom
+      CHROMA_PATH: ${{ github.workspace }}/.ci_chroma
+      READINESS_MODE: strict
+      ENABLE_SMOKE_TESTS: "1"
+      ADMIN_TOKEN: ci-test-admin-token
+      API_KEYS: ci-test-api-key
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt
+
+      - name: Prepare CI runtime dirs
+        run: mkdir -p .ci_state .ci_prom .ci_chroma
+
+      - name: Pytest integration/smoke
+        run: |
+          PYTHONPATH=app pytest -q tests/test_smoke.py -v
+          PYTHONPATH=app pytest -q tests -m "integration and not slow" || true
 
   packaging_sanity:
     runs-on: ubuntu-latest

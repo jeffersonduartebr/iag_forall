@@ -7,7 +7,6 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
-
 EMA_MAX_ENTRIES = 50000
 EMA_TTL_SECONDS = 86400
 EMA_BATCH_INTERVAL_S = 60

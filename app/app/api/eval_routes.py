@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, Header, HTTPException
 
 from ..api.deps import require_admin_or_role
 from ..celery_app import celery_app
+from ..eval_benchmark import list_benchmark_themes, resolve_eval_prompt_bundle
 from ..golden_sets import evaluate_golden_set_gate, get_golden_set, get_golden_set_prompts, list_golden_sets
 from ..roadmap_features import (
     create_eval_run,
@@ -23,6 +24,10 @@ from ..roadmap_features import (
     update_eval_run_status,
 )
 from ..schemas import EvalRunCreateRequest, EvalRunExecuteRequest
+from ..services.eval_feedback import get_latest_eval_feedback
+from ..services.experiment_manifest import build_experiment_manifest, write_experiment_manifest
+from ..services.expert_review import expert_judge_agreement_report
+from ..services.uq_calibration import build_uq_calibration_report
 from ..settings_dynamic import settings
 from ..tasks import task_execute_eval_run
 
@@ -35,12 +40,14 @@ def create_eval(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Create an eval run (MVP academic harness)."""
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_admin", "researcher", "platform_admin"],
         tenant_id=str(payload.tenant_id) if payload.tenant_id else None,
     )
@@ -48,6 +55,13 @@ def create_eval(
     golden_set_id = str(payload.golden_set_id or "").strip() or None
     if golden_set_id and not prompts:
         prompts = get_golden_set_prompts(golden_set_id)
+    prompt_catalog: list[dict[str, Any]] = []
+    benchmark_meta: dict[str, Any] = {}
+    if not prompts and (payload.benchmark_theme or payload.benchmark_themes):
+        try:
+            prompts, prompt_catalog, benchmark_meta = resolve_eval_prompt_bundle(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not isinstance(prompts, list) or not prompts:
         raise HTTPException(status_code=400, detail="prompts must be a non-empty list")
     prompts = [str(prompt) for prompt in prompts if str(prompt).strip()]
@@ -55,31 +69,66 @@ def create_eval(
     policy_version = payload.policy_version
     tenant_id = payload.tenant_id
     notes = str(payload.notes or "")
+    metadata: Dict[str, Any] = {}
+    if golden_set_id:
+        metadata["golden_set_id"] = golden_set_id
+    if benchmark_meta:
+        metadata.update(benchmark_meta)
+    if prompt_catalog:
+        metadata["prompt_catalog"] = prompt_catalog
+    if payload.frozen_policy or payload.benchmark_split:
+        metadata["frozen_policy"] = bool(payload.frozen_policy)
+        metadata["benchmark_split"] = payload.benchmark_split
+    manifest = build_experiment_manifest(
+        run_id=run_id,
+        benchmark_seed=payload.benchmark_seed,
+        benchmark_split=payload.benchmark_split,
+        frozen_policy=bool(payload.frozen_policy),
+        benchmark_themes=benchmark_meta.get("benchmark_themes"),
+    )
+    metadata["experiment_manifest"] = manifest
+    try:
+        manifest_path = write_experiment_manifest(run_id, manifest)
+        metadata["experiment_manifest_path"] = str(manifest_path)
+    except Exception:
+        pass
     create_eval_run(
         run_id=run_id,
         prompts=prompts,
         policy_version=str(policy_version) if policy_version else None,
         tenant_id=str(tenant_id) if tenant_id else None,
         notes=notes,
-        metadata={"golden_set_id": golden_set_id} if golden_set_id else {},
+        metadata=metadata,
     )
     log_audit_event(
         actor=x_user_id or auth["authorized_by"],
         action="eval_create",
         resource="eval_runs",
         tenant_id=tenant_id,
-        metadata={"run_id": run_id, "prompt_count": len(prompts), "roles": auth["roles"], "golden_set_id": golden_set_id},
+        metadata={
+            "run_id": run_id,
+            "prompt_count": len(prompts),
+            "roles": auth["roles"],
+            "golden_set_id": golden_set_id,
+            "benchmark_themes": benchmark_meta.get("benchmark_themes"),
+        },
     )
-    return {"status": "queued", "run_id": run_id, "prompt_count": len(prompts)}
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "prompt_count": len(prompts),
+        "benchmark_themes": benchmark_meta.get("benchmark_themes"),
+    }
 
 
 @router.post("/admin/evals/runs/{run_id}/execute", tags=["Eval"])
 def execute_eval(
     run_id: str,
-    payload: EvalRunExecuteRequest = Body(default=EvalRunExecuteRequest()),
+    payload: EvalRunExecuteRequest = Body(default=EvalRunExecuteRequest()),  # type: ignore[call-arg]  # pydantic: campos opcionais têm default
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Enqueue asynchronous eval execution in Celery."""
     run = get_eval_run(run_id)
@@ -89,6 +138,7 @@ def execute_eval(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_admin", "researcher", "platform_admin"],
         tenant_id=run.get("tenant_id"),
     )
@@ -127,6 +177,7 @@ def get_eval(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Get eval run details."""
     run = get_eval_run(run_id)
@@ -136,6 +187,7 @@ def get_eval(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
         tenant_id=run.get("tenant_id"),
     )
@@ -147,12 +199,14 @@ def list_evals(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """List eval runs."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
     )
     return {"items": list_eval_runs()}
@@ -165,6 +219,7 @@ def get_eval_results(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Get individual result rows for one eval run."""
     run = get_eval_run(run_id)
@@ -174,6 +229,7 @@ def get_eval_results(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
         tenant_id=run.get("tenant_id"),
     )
@@ -186,6 +242,7 @@ def get_eval_significance(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Get significance report for model comparisons in one eval run."""
     run = get_eval_run(run_id)
@@ -195,10 +252,46 @@ def get_eval_significance(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
         tenant_id=run.get("tenant_id"),
     )
     return eval_significance_report(run_id)
+
+
+@router.get("/admin/evals/runs/{run_id}/academic-report", tags=["Eval"])
+def get_eval_academic_report(
+    run_id: str,
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    """Full academic report: significance, UQ calibration, expert kappa, manifest."""
+    run = get_eval_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        authorization=authorization,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+        tenant_id=run.get("tenant_id"),
+    )
+    results = list_eval_run_results(run_id, limit=5000)
+    metadata = run.get("metadata") or {}
+    return {
+        "run_id": run_id,
+        "experiment_manifest": metadata.get("experiment_manifest"),
+        "benchmark_split": metadata.get("benchmark_split"),
+        "frozen_policy": metadata.get("frozen_policy"),
+        "significance": eval_significance_report(run_id),
+        "uq_calibration": build_uq_calibration_report(results),
+        "expert_kappa": expert_judge_agreement_report(eval_run_id=run_id),
+        "aggregate": run.get("aggregate"),
+        "summary": run.get("summary"),
+    }
 
 
 @router.get("/admin/evals/golden-sets", tags=["Eval"])
@@ -206,15 +299,56 @@ def get_builtin_golden_sets(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """List built-in golden sets available for repeatable benchmark runs."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
     )
     return {"items": list_golden_sets()}
+
+
+@router.get("/admin/evals/benchmark-themes", tags=["Eval"])
+def get_benchmark_themes(
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    """List benchmark catalog themes available for eval sampling."""
+    require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        authorization=authorization,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+    )
+    return {"items": list_benchmark_themes()}
+
+
+@router.get("/admin/evals/feedback/latest", tags=["Eval"])
+def get_latest_eval_feedback_route(
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    """Return the latest eval-driven NSGA/bandit feedback payload."""
+    require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        authorization=authorization,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+    )
+    payload = get_latest_eval_feedback()
+    if not payload:
+        return {"status": "empty", "feedback": None}
+    return {"status": "ok", "feedback": payload}
 
 
 @router.get("/admin/evals/golden-sets/{golden_set_id}", tags=["Eval"])
@@ -223,12 +357,14 @@ def get_builtin_golden_set(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Return one built-in golden set with prompt items and gate thresholds."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
     )
     golden_set = get_golden_set(golden_set_id)
@@ -243,6 +379,7 @@ def get_eval_gate_report(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Evaluate one run against the gates attached to its golden set, when configured."""
     run = get_eval_run(run_id)
@@ -252,6 +389,7 @@ def get_eval_gate_report(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
         tenant_id=run.get("tenant_id"),
     )
@@ -275,12 +413,14 @@ def get_eval_task_status(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Get Celery task status/result for eval execution."""
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
     )
     task = AsyncResult(task_id, app=celery_app)
@@ -305,12 +445,14 @@ def cancel_eval_task(
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """Cancel/revoke a queued eval Celery task."""
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
+        authorization=authorization,
         required_roles=["eval_admin", "platform_admin"],
     )
     celery_app.control.revoke(task_id, terminate=terminate)

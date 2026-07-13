@@ -9,8 +9,8 @@ Uses contextvars for async-safe propagation across the request lifecycle.
 
 from __future__ import annotations
 
-import uuid
 import contextvars
+import uuid
 from typing import Optional
 
 # Context variable to hold the correlation ID for the current request

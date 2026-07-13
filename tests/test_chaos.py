@@ -14,7 +14,8 @@ Tests how the system handles various failure conditions:
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
+
 import pytest
 
 
@@ -24,7 +25,6 @@ class TestCircuitBreakerChaos:
     def test_circuit_breaker_opens_after_failures(self):
         """Circuit breaker should open after threshold failures."""
         from app.reliability import ModelCircuitBreakerManager
-        import pybreaker
 
         manager = ModelCircuitBreakerManager()
         model = "test/chaos-model"
@@ -45,8 +45,8 @@ class TestCircuitBreakerChaos:
 
     def test_circuit_breaker_half_open_after_timeout(self):
         """Circuit breaker should transition to half-open after timeout."""
-        from app.reliability import ModelCircuitBreakerManager
         import pybreaker
+        from app.reliability import ModelCircuitBreakerManager
 
         manager = ModelCircuitBreakerManager()
         model = "test/fast-recovery-model"
@@ -183,7 +183,7 @@ class TestTimeoutChaos:
     @pytest.mark.asyncio
     async def test_request_timeout_handling(self):
         """System should handle timeouts gracefully."""
-        from app.error_handling import log_error, ErrorCategory
+        from app.error_handling import ErrorCategory, log_error
 
         # Simulate timeout error
         error = asyncio.TimeoutError("Request timed out")
@@ -259,7 +259,7 @@ class TestProviderFailureChaos:
     @pytest.mark.asyncio
     async def test_provider_rate_limit_error(self):
         """System should handle provider rate limit errors."""
-        from app.error_handling import classify_exception, ErrorCategory
+        from app.error_handling import ErrorCategory, classify_exception
 
         class RateLimitError(Exception):
             """Represent `RateLimitError` within this module.
@@ -274,7 +274,7 @@ The class groups the state and behavior required for RateLimitError."""
     @pytest.mark.asyncio
     async def test_provider_auth_error(self):
         """System should handle provider auth errors."""
-        from app.error_handling import classify_exception, ErrorCategory
+        from app.error_handling import ErrorCategory, classify_exception
 
         class AuthenticationError(Exception):
             """Represent `AuthenticationError` within this module.
@@ -289,7 +289,6 @@ The class groups the state and behavior required for AuthenticationError."""
     @pytest.mark.asyncio
     async def test_fallback_chain_execution(self):
         """Fallback chain should try alternative models."""
-        from app.reliability import execute_with_fallback, FallbackResult
 
         call_count = {"count": 0}
 
@@ -353,7 +352,6 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         dedup._ttl_seconds = 300
         dedup._initialized = True
 
-        results_list = []
 
         async def create_operation(idx):
             """Cria operation."""
@@ -418,7 +416,7 @@ class TestHealthCheckChaos:
     @pytest.mark.asyncio
     async def test_complete_failure_health(self):
         """System should report unhealthy when all components fail."""
-        from app.health import get_full_health_check, invalidate_health_cache, ComponentHealth
+        from app.health import ComponentHealth, get_full_health_check, invalidate_health_cache
 
         with patch('app.health.check_redis_health') as mock_redis, \
              patch('app.health.check_database_health') as mock_db, \
@@ -445,7 +443,7 @@ class TestErrorRecoveryChaos:
 
     def test_error_categorization(self):
         """Errors should be categorized correctly."""
-        from app.error_handling import classify_exception, ErrorCategory
+        from app.error_handling import ErrorCategory, classify_exception
 
         test_cases = [
             (TimeoutError(), ErrorCategory.PROVIDER_TIMEOUT),
@@ -459,7 +457,7 @@ class TestErrorRecoveryChaos:
 
     def test_error_response_creation(self):
         """Error responses should be user-friendly."""
-        from app.error_handling import ErrorInfo, ErrorCategory, ErrorSeverity, create_error_response
+        from app.error_handling import ErrorCategory, ErrorInfo, ErrorSeverity, create_error_response
 
         error_info = ErrorInfo(
             category=ErrorCategory.PROVIDER_TIMEOUT,

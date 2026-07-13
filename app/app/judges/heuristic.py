@@ -40,7 +40,8 @@ def score_task_fit(q: str, a: str) -> float:
     heuristic mostly distinguishes between shallow and sufficiently developed
     answers.
     """
-    ql = q.lower(); al = a.lower()
+    ql = q.lower()
+    al = a.lower()
     if any(k in ql for k in ["code","python","sql","docker","traceback","error"]):
         return 7.5 if any(k in al for k in ["def ","class ","select ","stack","error","fix"]) else 6.0
     return 8.0 if len(al) > 60 else 6.5

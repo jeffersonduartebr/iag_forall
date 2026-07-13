@@ -19,12 +19,12 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
+from .observability import RISK_FACTOR_CURRENT
 from .settings_dynamic import settings
 from .utils.redis_client import get_redis
-from .observability import RISK_FACTOR_CURRENT
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,7 @@ class AdaptiveRiskTuner:
 
     _instance: Optional["AdaptiveRiskTuner"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "AdaptiveRiskTuner":
         """Return the instance created for this class.
@@ -123,7 +124,7 @@ The constructor keeps setup local to the object so callers can use it without ad
             "local_low": PerformanceRecord(),
         }
 
-        self._last_tune_time = 0
+        self._last_tune_time: float = 0.0
         self._min_samples_for_tune = 20  # Minimum samples before adjusting
         self._tune_cooldown_seconds = 300  # 5 minutes between adjustments
 

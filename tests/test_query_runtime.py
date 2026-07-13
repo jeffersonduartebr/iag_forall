@@ -2,10 +2,10 @@
 """Unit tests for query runtime orchestration."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
-from unittest.mock import AsyncMock
 
 
 def _allow_guardrails():
@@ -14,6 +14,18 @@ def _allow_guardrails():
 
 def _allow_budget():
     return SimpleNamespace(allowed=True)
+
+
+async def _allow_guardrails_async(_query=None):
+    return _allow_guardrails()
+
+
+async def _allow_budget_async(_tenant=None):
+    return _allow_budget()
+
+
+async def _active_policy_none():
+    return None
 
 
 def _base_result():
@@ -141,7 +153,9 @@ def test_apply_query_runtime_profile_bypasses_rag_for_simple_text(monkeypatch):
     assert profile["workload_class"] == "simple_text"
     assert profile["perf_mode_enabled"] is True
     assert profile["use_rag"] is False
-    assert profile["max_tokens"] == 128
+    # O piso de tokens por complexidade (apply_complexity_runtime_adjustments) eleva
+    # o cap de simple_text (128) para o mínimo da complexidade detectada (256).
+    assert profile["max_tokens"] == 256
     assert profile["runtime_hints"]["retrieval_mode"] == "no_retrieval"
     assert profile["runtime_hints"]["max_fallbacks"] == 1
     assert profile["runtime_hints"]["needs_retrieval"] is False
@@ -171,7 +185,8 @@ def test_apply_query_runtime_profile_keeps_vision_rag(monkeypatch):
 
     assert profile["workload_class"] == "vision"
     assert profile["use_rag"] is True
-    assert profile["max_tokens"] == 256
+    # Piso de tokens por complexidade eleva 256 -> 512 para a query de visão detectada.
+    assert profile["max_tokens"] == 512
     assert profile["runtime_hints"]["retrieval_mode"] == "full_retrieval"
 
 
@@ -203,8 +218,9 @@ def test_apply_query_runtime_profile_uses_light_retrieval_for_knowledge_lookup(m
     assert profile["runtime_hints"]["rag_rerank_enabled"] is False
     assert profile["runtime_hints"]["needs_retrieval"] is True
     assert profile["runtime_hints"]["interactive_priority"] == "high"
-    assert profile["runtime_hints"]["provider_timeout_seconds"] == 35
-    assert profile["runtime_hints"]["sync_deadline_seconds"] == 40
+    # O multiplicador/bônus de deadline por complexidade ajusta 35 -> 36 e 40 -> 47.
+    assert profile["runtime_hints"]["provider_timeout_seconds"] == 36
+    assert profile["runtime_hints"]["sync_deadline_seconds"] == 47
 
 
 def test_apply_query_runtime_profile_promotes_source_seeking_queries_to_full_retrieval(monkeypatch):
@@ -274,7 +290,10 @@ async def test_process_query_request_blocks_guardrails(monkeypatch):
     """Blocked input should short-circuit before routing."""
     from app.services import query_runtime as qr
 
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: SimpleNamespace(allowed=False, reasons=["policy"]))
+    async def _block_guardrails(_query):
+        return SimpleNamespace(allowed=False, reasons=["policy"])
+
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _block_guardrails)
 
     with pytest.raises(HTTPException) as exc:
         await qr.process_query_request(_request())
@@ -287,19 +306,18 @@ async def test_process_query_request_blocks_budget(monkeypatch):
     """Budget denial should map to HTTP 429 with budget detail."""
     from app.services import query_runtime as qr
 
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
-    monkeypatch.setattr(
-        qr,
-        "check_tenant_budget",
-        lambda _tenant: SimpleNamespace(
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _allow_guardrails_async)
+    async def _deny_budget(_tenant):
+        return SimpleNamespace(
             allowed=False,
             reason="daily_limit",
             daily_spent=1.0,
             monthly_spent=3.0,
             daily_limit=1.0,
             monthly_limit=10.0,
-        ),
-    )
+        )
+
+    monkeypatch.setattr(qr, "check_tenant_budget", _deny_budget)
 
     with pytest.raises(HTTPException) as exc:
         await qr.process_query_request(_request())
@@ -318,9 +336,12 @@ async def test_process_query_request_applies_policy_and_variant(monkeypatch):
     monkeypatch.setattr(qr, "ROUTER_QUERY_OUTCOME", outcome_metric)
     monkeypatch.setattr(qr, "QUERY_POLICY_APPLIED", policy_counter)
     monkeypatch.setattr(qr, "POLICY_VERSION_ACTIVE", policy_gauge)
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: _allow_budget())
-    monkeypatch.setattr(qr, "get_active_policy", lambda: {"version": "policy-v1"})
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _allow_guardrails_async)
+    monkeypatch.setattr(qr, "check_tenant_budget", _allow_budget_async)
+    async def _policy():
+        return {"version": "policy-v1"}
+
+    monkeypatch.setattr(qr, "get_active_policy", _policy)
     _settings_map(monkeypatch, qr, {"AB_TESTING_ENABLED": "1"})
     monkeypatch.setattr(
         qr,
@@ -354,9 +375,9 @@ async def test_process_query_request_uses_first_image_for_vision(monkeypatch):
 
     monkeypatch.setattr(qr, "ROUTER_QUERY_OUTCOME", outcome_metric)
     captured = {}
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: _allow_budget())
-    monkeypatch.setattr(qr, "get_active_policy", lambda: None)
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _allow_guardrails_async)
+    monkeypatch.setattr(qr, "check_tenant_budget", _allow_budget_async)
+    monkeypatch.setattr(qr, "get_active_policy", _active_policy_none)
     _settings_map(monkeypatch, qr, {"AB_TESTING_ENABLED": "0"})
     monkeypatch.setattr(qr, "sanitize_output_guardrails", lambda answer: (answer, []))
 
@@ -382,9 +403,9 @@ async def test_process_query_request_records_empty_answer_outcome(monkeypatch):
 
     outcome_metric = _Metric()
     monkeypatch.setattr(qr, "ROUTER_QUERY_OUTCOME", outcome_metric)
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: _allow_budget())
-    monkeypatch.setattr(qr, "get_active_policy", lambda: None)
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _allow_guardrails_async)
+    monkeypatch.setattr(qr, "check_tenant_budget", _allow_budget_async)
+    monkeypatch.setattr(qr, "get_active_policy", _active_policy_none)
     _settings_map(monkeypatch, qr, {"AB_TESTING_ENABLED": "0"})
     monkeypatch.setattr(qr, "sanitize_output_guardrails", lambda answer: ("", []))
 
@@ -401,11 +422,12 @@ async def test_process_query_request_records_empty_answer_outcome(monkeypatch):
 async def test_process_query_request_error_paths(monkeypatch):
     """Provider failures should be mapped to the expected HTTP status codes."""
     import asyncio as _asyncio
+
     from app.services import query_runtime as qr
 
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: _allow_guardrails())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: _allow_budget())
-    monkeypatch.setattr(qr, "get_active_policy", lambda: None)
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _allow_guardrails_async)
+    monkeypatch.setattr(qr, "check_tenant_budget", _allow_budget_async)
+    monkeypatch.setattr(qr, "get_active_policy", _active_policy_none)
     monkeypatch.setattr(
         qr,
         "settings",
@@ -470,9 +492,15 @@ def test_record_query_side_effects_dispatches_feedback_usage_and_experiment(monk
     monkeypatch.setattr(
         qr,
         "record_tenant_usage",
-        lambda tenant_id, cost_usd, tokens_in, tokens_out, requests: calls.__setitem__(
+        lambda **kwargs: calls.__setitem__(
             "usage",
-            (tenant_id, cost_usd, tokens_in, tokens_out, requests),
+            (
+                kwargs["tenant_id"],
+                kwargs["cost_usd"],
+                kwargs["tokens_in"],
+                kwargs["tokens_out"],
+                kwargs["requests"],
+            ),
         ),
     )
     _settings_map(monkeypatch, qr, {"AB_TESTING_ENABLED": "1"})

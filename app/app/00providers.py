@@ -18,11 +18,11 @@ Atualizações recentes:
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import time
-from typing import Dict, Tuple, Optional, Any
-import base64
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 
@@ -46,26 +46,24 @@ except Exception:  # pragma: no cover
 # ============ Observabilidade ==============================
 
 try:
-    from app.observability import registry as _shared_registry
     from prometheus_client import (
-        Counter,
-        Histogram,
-        Gauge,
         CollectorRegistry,
-        generate_latest,
+        Counter,
+        Gauge,
+        Histogram,
     )
+
+    from app.observability import registry as _shared_registry
     REGISTRY = _shared_registry
 except Exception:  # fallback independente
     from prometheus_client import (
-        Counter,
-        Histogram,
-        Gauge,
         CollectorRegistry,
-        generate_latest,
+        Counter,
+        Gauge,
+        Histogram,
     )
     REGISTRY = CollectorRegistry()
 
-from prometheus_client.exposition import CONTENT_TYPE_LATEST
 
 # ============ Logger =======================================
 
@@ -223,7 +221,7 @@ def call_model(
 
             # --- VALIDAÇÃO DINÂMICA DE PARÂMETROS ---
             # Modelos recentes (o1, gpt-5) exigem 'max_completion_tokens' e têm regras de temperatura
-            
+
             api_kwargs = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": content}],
@@ -244,7 +242,7 @@ def call_model(
             if is_o1:
                 # Modelos o1 (preview/mini) atualmente rejeitam temperature != 1 (ou o parâmetro todo)
                 # O mais seguro é não enviar temperature para o1
-                pass 
+                pass
             else:
                 api_kwargs["temperature"] = temperature
 
@@ -270,7 +268,7 @@ def call_model(
             cost = total_tokens * 0.000005  # Exemplo genérico
 
             quality = heuristic_quality_estimate(text_out)
-            
+
             # Tratamento seguro do payload para o log
             raw_payload = None
             try:
@@ -387,7 +385,7 @@ def call_model(
 
             text_out = (text_out or "").strip()
             latency = time.time() - start
-            
+
             # Anthropic fornece usage
             usage = getattr(resp, "usage", None)
             if usage:
@@ -397,7 +395,7 @@ def call_model(
                 completion_tokens = _estimate_tokens(text_out)
 
             total_tokens = prompt_tokens + completion_tokens
-            cost = total_tokens * 0.000007 
+            cost = total_tokens * 0.000007
 
             quality = heuristic_quality_estimate(text_out)
 
@@ -455,13 +453,13 @@ def call_model(
             # Ollama retorna eval_count (tokens de saída) e prompt_eval_count (tokens de entrada)
             prompt_tokens = data.get("prompt_eval_count", prompt_tokens)
             completion_tokens = data.get("eval_count", _estimate_tokens(text_out))
-            
+
             total_tokens = prompt_tokens + completion_tokens
             cost = total_tokens * 0.0000001 # Custo elétrico simbólico
 
             quality = heuristic_quality_estimate(text_out)
             image_out = None
-            
+
             # Verificação defensiva se o Ollama retornar imagem (futuro)
             if isinstance(data.get("images"), list) and data["images"]:
                 image_out = data["images"][0]

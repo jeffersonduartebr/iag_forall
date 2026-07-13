@@ -12,9 +12,9 @@ Responsável por:
 
 from __future__ import annotations
 
-import os
 import logging
-from typing import Dict, List
+import os
+from typing import Any, Dict
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -34,7 +34,7 @@ try:
 except Exception:
     import sys
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from app.settings_dynamic import settings  # type: ignore
+    from app.settings_dynamic import settings
 
 DB_HOST = settings.DB_HOST
 DB_PORT = settings.DB_PORT
@@ -53,7 +53,7 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 # 2. Definição do Schema (Tabelas e suas Colunas Críticas)
 # ---------------------------------------------------------------------
 
-SCHEMA_DEFINITIONS = {
+SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
     # ============================================================
     # 🧠 1. CACHE SEMÂNTICO
     # ============================================================
@@ -302,7 +302,7 @@ SCHEMA_DEFINITIONS = {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """,
-        "columns": {} 
+        "columns": {}
     },
 
     "model_registry": {
@@ -360,16 +360,16 @@ def seed_pricing_data(conn):
         ("gpt-4.1-mini", 0.00040, 0.0016),
         ("gpt-4o", 0.00250, 0.0100),
         ("gpt-4o-mini", 0.00015, 0.0006),
-        
+
         # --- Google Gemini (Novos modelos 2.5) ---
-        ("gemini-2.5-pro", 0.00125, 0.0100), 
+        ("gemini-2.5-pro", 0.00125, 0.0100),
         ("gemini-2.5-flash", 0.00030, 0.0025),
-        
+
         # --- Anthropic Claude (Novos modelos 4.5) ---
-        ("claude-opus-4.5", 0.00500, 0.0250), 
+        ("claude-opus-4.5", 0.00500, 0.0250),
         ("claude-sonnet-4.5", 0.00300, 0.0150),
         ("claude-haiku-4.5", 0.00100, 0.0050),
-        
+
         # --- Local (Custo Elétrico Estimado - Baixo) ---
         ("phi4", 0.0000001, 0.0000001),
         ("mistral", 0.0000001, 0.0000001),
@@ -378,7 +378,7 @@ def seed_pricing_data(conn):
         ("llava", 0.0000002, 0.0000002),
         ("moondream", 0.0000001, 0.0000001),
     ]
-    
+
     logger.info("💰 Atualizando tabela de preços (model_pricing)...")
     for model, inp, out in PRICES:
         # Adiciona variações de namespace para garantir match

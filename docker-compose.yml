@@ -106,10 +106,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_started
-      prometheus:
-        condition: service_started
       db_init:
         condition: service_completed_successfully
 
@@ -129,6 +125,14 @@ services:
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
       - PYTHONUTF8=1
       - PYTHONIOENCODING=UTF-8
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOKI_URL=http://loki:3100
+      - ADMIN_UI_USERNAME=${ADMIN_UI_USERNAME:-jefferson.silva}
+      - ADMIN_UI_PASSWORD=${ADMIN_UI_PASSWORD:?ADMIN_UI_PASSWORD required}
+      - ADMIN_UI_SESSION_TTL_S=${ADMIN_UI_SESSION_TTL_S:-28800}
+      - ADMIN_UI_CORS_ORIGINS=${ADMIN_UI_CORS_ORIGINS:-http://localhost:5173,http://localhost:8082,http://127.0.0.1:8082}
+      - EXPERT_UI_USERS=${EXPERT_UI_USERS:-{"expert.demo":"change-me"}}
+      - EXPERT_UI_SESSION_TTL_S=${EXPERT_UI_SESSION_TTL_S:-28800}
 
     volumes:
       - ./state:/app/state
@@ -137,7 +141,7 @@ services:
       - prometheus_data:/tmp/prom
 
     ports:
-      - "8000:8000"
+      - "8000:8000"   # API / consultas — acesso na rede
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -154,9 +158,28 @@ services:
 
 
   # =========================================================
+  # 🖥️ Admin Web Console (React + nginx)
+  # =========================================================
+  admin_ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+    container_name: llm_router_admin_ui
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8082:80"     # Admin UI — acesso na rede
+    networks:
+      - ai_net
+
+
+  # =========================================================
   # 🧠 NSGA-II updater
   # =========================================================
   nsga_updater:
+    profiles: ["workers"]
     build:
       context: .
       dockerfile: app/Dockerfile.nsga
@@ -192,7 +215,7 @@ services:
       - prometheus_data:/tmp/prom
 
     ports:
-      - "9999:9999"
+      - "127.0.0.1:9999:9999"
 
     networks:
       - ai_net
@@ -202,6 +225,7 @@ services:
   # 🧠 Meta-Optimizer (Bayes)
   # =========================================================
   meta_optimizer:
+    profiles: ["workers"]
     build:
       context: .
       dockerfile: app/Dockerfile.metaopt
@@ -241,10 +265,11 @@ services:
   # 🧩 Servidor Ollama
   # =========================================================
   ollama:
+    profiles: ["local-llm"]
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
-    gpus: all
+    # gpus: all  # requer NVIDIA/CDI; descomente em host com GPU
     ulimits:
       nofile:
         soft: 65536
@@ -282,17 +307,33 @@ services:
   # 📈 Prometheus
   # =========================================================
   prometheus:
+    profiles: ["observability"]
     image: prom/prometheus:latest
     container_name: prometheus
     restart: unless-stopped
 
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9091:9090"
 
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/tmp/prom
 
+    networks:
+      - ai_net
+
+  alertmanager:
+    profiles: ["observability"]
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
     networks:
       - ai_net
 
@@ -301,6 +342,7 @@ services:
   # 📊 Grafana
   # =========================================================
   grafana:
+    profiles: ["observability"]
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
@@ -310,7 +352,7 @@ services:
         condition: service_started
 
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
 
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
@@ -324,12 +366,13 @@ services:
   # 🪵 Loki / Promtail
   # =========================================================
   loki:
+    profiles: ["observability"]
     image: grafana/loki:2.9.2
     container_name: loki
     restart: unless-stopped
 
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
 
     volumes:
       - ./loki/loki-config.yml:/etc/loki/config.yml
@@ -338,6 +381,7 @@ services:
       - ai_net
 
   promtail:
+    profiles: ["observability"]
     image: grafana/promtail:2.9.2
     container_name: promtail
 
@@ -355,6 +399,7 @@ services:
   # 🧪 Locust (Stress tests)
   # =========================================================
   locust:
+    profiles: ["tools"]
     image: locustio/locust:latest
     container_name: locust
     restart: unless-stopped
@@ -365,15 +410,17 @@ services:
 
     environment:
       - LOCUST_MODE=standalone
+      - BENCHMARK_CATALOG_DIR=/mnt/benchmark_queries
 
     volumes:
       - ./tests:/mnt/locust
+      - ./data/benchmark_queries:/mnt/benchmark_queries:ro
 
     working_dir: /mnt/locust
     command: -f /mnt/locust/locustfile.py --web-host 0.0.0.0
 
     ports:
-      - "8089:8089"
+      - "127.0.0.1:8089:8089"
 
     networks:
       - ai_net
@@ -407,6 +454,7 @@ services:
   # 👷 Celery Worker (Execução de queries enfileiradas)
   # =========================================================
   celery_worker:
+    profiles: ["workers"]
     build:
       context: ./app
       dockerfile: Dockerfile
@@ -459,6 +507,7 @@ services:
   # 👷 Celery Feedback Worker (Feedback, judge e eval)
   # =========================================================
   celery_feedback_worker:
+    profiles: ["workers"]
     build:
       context: ./app
       dockerfile: Dockerfile

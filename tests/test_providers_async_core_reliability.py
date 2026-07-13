@@ -145,8 +145,8 @@ The constructor keeps setup local to the object so callers can use it without ad
             self.is_closed = False
             self.closed = False
 
-        async def close(self):
-            """Execute the close routine.
+        async def aclose(self):
+            """Execute the aclose routine (httpx.AsyncClient usa aclose, não close).
 
 This helper encapsulates one focused step used by the surrounding workflow."""
             self.closed = True
@@ -163,6 +163,10 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
 def test_ensure_ollama_model_sync_paths(monkeypatch):
     """Testa ensure ollama model sync paths."""
+    from app import providers_async as pa
+
+    pa.reset_provider_runtime_state()
+
     class _Resp:
         """Represent `_Resp` within this module.
 
@@ -191,15 +195,19 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert pa._ensure_ollama_model("phi4:latest") is True
 
     # pull success
+    pa.reset_provider_runtime_state()
     monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, {"models": []}))
     monkeypatch.setattr(requests, "post", lambda *a, **k: _Resp(200))
     assert pa._ensure_ollama_model("phi4:latest") is True
 
     # pull fail status
+    pa.reset_provider_runtime_state()
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, {"models": []}))
     monkeypatch.setattr(requests, "post", lambda *a, **k: _Resp(500))
     assert pa._ensure_ollama_model("phi4:latest") is False
 
     # exception branches
+    pa.reset_provider_runtime_state()
     monkeypatch.setattr(requests, "get", lambda *a, **k: (_ for _ in ()).throw(requests.exceptions.Timeout()))
     assert pa._ensure_ollama_model("phi4:latest") is False
 

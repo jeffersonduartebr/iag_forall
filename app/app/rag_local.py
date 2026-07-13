@@ -3,32 +3,30 @@
 """Hybrid local RAG helpers for text, vision, and multimodal retrieval flows."""
 
 from __future__ import annotations
-import logging
+
 import asyncio
 import hashlib
-import json
+import logging
 import re
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .embeddings import (
-    embed_text,
-    embed_image,
     embed_multimodal,
-)
-
-from .vectorstore import (
-    query_embedding,
-    add_document,
-    health_async,
-    _collection_for_modality,
+    embed_text,
 )
 
 # Importamos o call_model para gerar a descrição da imagem (Ponte Visual)
 from .providers_async import call_model
-from .settings_dynamic import settings
 from .reranker import rerank_documents  # <--- Importar o novo módulo
+from .settings_dynamic import settings
 from .sparse_index import sparse_index  # <--- Importar BM25
 from .utils.redis_client import get_redis
+from .vectorstore import (
+    _collection_for_modality,
+    add_document,
+    health_async,
+    query_embedding,
+)
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -49,18 +47,19 @@ _rds = get_redis()
 # Metrics (safe import)
 try:
     from .observability import (
+        RETRIEVAL_CONTEXT_TOKENS,
+        RETRIEVAL_DOCUMENTS_RETURNED,
+        RETRIEVAL_SCORE,
         VISUAL_QUERY_CACHE_HITS,
         VISUAL_QUERY_CACHE_MISSES,
-        RETRIEVAL_DOCUMENTS_RETURNED,
-        RETRIEVAL_CONTEXT_TOKENS,
-        RETRIEVAL_SCORE,
     )
 except ImportError:
-    VISUAL_QUERY_CACHE_HITS = None
-    VISUAL_QUERY_CACHE_MISSES = None
-    RETRIEVAL_DOCUMENTS_RETURNED = None
-    RETRIEVAL_CONTEXT_TOKENS = None
-    RETRIEVAL_SCORE = None
+    # Optional metrics: disable gracefully when observability is unavailable.
+    VISUAL_QUERY_CACHE_HITS = None  # type: ignore[assignment]
+    VISUAL_QUERY_CACHE_MISSES = None  # type: ignore[assignment]
+    RETRIEVAL_DOCUMENTS_RETURNED = None  # type: ignore[assignment]
+    RETRIEVAL_CONTEXT_TOKENS = None  # type: ignore[assignment]
+    RETRIEVAL_SCORE = None  # type: ignore[assignment]
 
 
 def _get_int_setting(key: str, default: int) -> int:
@@ -128,7 +127,7 @@ def _knowledge_version(modality: str) -> str:
 
 def _hash_image(image_b64: str) -> str:
     """Generate a hash for image caching."""
-    return hashlib.sha256(image_b64[:10000].encode()).hexdigest()[:32] 
+    return hashlib.sha256(image_b64[:10000].encode()).hexdigest()[:32]
 
 # ================================================================
 # 🔍 DETECÇÃO AUTOMÁTICA DE MODALIDADE
@@ -238,11 +237,11 @@ async def _compute_embedding(query: str, modality: str, image_b64: Optional[str]
                 visual_query = await _generate_visual_search_query(image_b64)
                 query_to_embed = visual_query if visual_query else "imagem genérica"
             else:
-                # Se o usuário mandou texto junto (ex: "Como conserto isso?"), 
+                # Se o usuário mandou texto junto (ex: "Como conserto isso?"),
                 # usamos o texto dele + uma descrição breve da imagem
                 visual_desc = await _generate_visual_search_query(image_b64)
                 query_to_embed = f"{query} {visual_desc}"
-            
+
             # Embedamos o TEXTO resultante para buscar no banco de TEXTO
             return await asyncio.to_thread(embed_text, query_to_embed)
 
@@ -384,7 +383,7 @@ async def build_retrieval_bundle(
     bm25_doc_ids = []
     bm25_docs_map = {}
     bm25_meta_map: Dict[str, Dict[str, Any]] = {}
-    
+
     # Só faz sentido BM25 se houver query textual
     if query:
         try:
@@ -402,7 +401,7 @@ async def build_retrieval_bundle(
 
     # --- 3. Fusão Híbrida (RRF) ---
     merged_ids = reciprocal_rank_fusion(vector_doc_ids, bm25_doc_ids)
-    
+
     # Recupera os textos dos IDs vencedores
     candidate_items: List[Tuple[str, str, Dict[str, Any]]] = []
     for doc_id in merged_ids:
@@ -410,7 +409,7 @@ async def build_retrieval_bundle(
         txt = vector_docs_map.get(doc_id) or bm25_docs_map.get(doc_id)
         if txt:
             candidate_items.append((doc_id, txt, vector_meta_map.get(doc_id) or bm25_meta_map.get(doc_id) or {}))
-    
+
     # Se não achou nada, retorna query original
     if not candidate_items:
         try:

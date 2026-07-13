@@ -13,20 +13,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Optional
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from app.settings_dynamic import settings
 from app.observability import (
-    BACKPRESSURE_REJECTED,
     BACKPRESSURE_QUEUE_SIZE,
+    BACKPRESSURE_REJECTED,
 )
+from app.settings_dynamic import settings
+from app.utils.redis_distributed import RedisGlobalSemaphore
 
 logger = logging.getLogger(__name__)
+
+
+def _redis_backpressure_enabled() -> bool:
+    return str(settings.get("BACKPRESSURE_REDIS_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 class BackpressureSemaphore:
@@ -38,6 +42,7 @@ class BackpressureSemaphore:
 
     _instance: Optional["BackpressureSemaphore"] = None
     _lock = asyncio.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "BackpressureSemaphore":
         """Return the instance created for this class.
@@ -70,30 +75,24 @@ The constructor keeps setup local to the object so callers can use it without ad
             True if slot acquired, False if at capacity
         """
         try:
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=0.001)
             async with self._count_lock:
-                available_slots = int(getattr(self._semaphore, "_value", 0))
-                if available_slots <= 0 or self._current_count >= self._max_concurrent:
-                    return False
-                self._semaphore._value = available_slots - 1
                 self._current_count += 1
                 BACKPRESSURE_QUEUE_SIZE.set(self._current_count)
-                return True
-        except Exception:
-            return True  # On error, allow request through
+            return True
+        except (asyncio.TimeoutError, Exception):
+            return False
 
     async def release(self):
         """Release a processing slot."""
         try:
             async with self._count_lock:
-                if self._current_count <= 0:
-                    return
-                self._current_count = max(0, self._current_count - 1)
-                current_slots = int(getattr(self._semaphore, "_value", 0))
-                if current_slots < self._max_concurrent:
-                    self._semaphore._value = current_slots + 1
-                BACKPRESSURE_QUEUE_SIZE.set(self._current_count)
+                if self._current_count > 0:
+                    self._current_count -= 1
+                    BACKPRESSURE_QUEUE_SIZE.set(self._current_count)
+            self._semaphore.release()
         except Exception:
-            pass
+            logger.warning("[Backpressure] Failed to release semaphore slot", exc_info=True)
 
     @property
     def current_load(self) -> int:
@@ -135,27 +134,29 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
 
     # Paths that bypass backpressure (health checks, metrics)
     BYPASS_PATHS = {"/health", "/healthz", "/ready", "/metrics"}
-    QUERY_PATHS = {"/query", "/query/stream", "/v1/query"}
+    QUERY_PATHS = {"/query", "/query/stream", "/v1/query", "/v1/chat/completions"}
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        # Check if backpressure is enabled
-        """Execute the dispatch routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
         if not settings.BACKPRESSURE_ENABLED:
             return await call_next(request)
 
-        # Bypass for health checks and metrics
         if request.url.path in self.BYPASS_PATHS:
             return await call_next(request)
 
         if getattr(request.state, "defer_to_query_job", False):
             return await call_next(request)
 
-        backpressure = get_backpressure()
+        redis_sem: RedisGlobalSemaphore | None = None
+        acquired = False
+        backpressure = None
 
-        # Try to acquire a processing slot
-        acquired = await backpressure.acquire()
+        if _redis_backpressure_enabled():
+            limit = max(1, int(settings.MAX_CONCURRENT_REQUESTS))
+            redis_sem = RedisGlobalSemaphore("global-api", limit)
+            acquired = await redis_sem.acquire()
+        else:
+            backpressure = get_backpressure()
+            acquired = await backpressure.acquire()
 
         if not acquired:
             if request.url.path in self.QUERY_PATHS:
@@ -163,12 +164,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                 request.state.query_job_reason = "backpressure"
                 request.state.query_job_pressure_state = "congested"
                 return await call_next(request)
-            # System at capacity
             BACKPRESSURE_REJECTED.inc()
-            logger.warning(
-                f"[Backpressure] Rejecting request: at capacity "
-                f"({backpressure.current_load}/{backpressure.max_concurrent})"
-            )
+            logger.warning("[Backpressure] Rejecting request: at capacity")
             return JSONResponse(
                 status_code=503,
                 content={
@@ -182,4 +179,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         try:
             return await call_next(request)
         finally:
-            await backpressure.release()
+            if redis_sem is not None:
+                await redis_sem.release()
+            elif backpressure is not None:
+                await backpressure.release()

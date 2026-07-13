@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional, List
+from typing import Any, List, Optional
 
 import numpy as np
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import get_engine
-
 
 # ============================================================
 # Logging
@@ -41,7 +40,7 @@ def _get_engine():
 
 
 # Lazy engine accessor for backward compatibility
-engine = property(lambda self: _get_engine())
+engine: Any = property(lambda self: _get_engine())
 
 
 class _EngineProxy:
@@ -162,6 +161,7 @@ def ensure_query_log() -> None:
 
         -- contexto semântico opcional
         context_label VARCHAR(64),
+        tenant_id VARCHAR(128) NULL,
 
         -- payload multimodal COMPLETO
         raw_payload LONGTEXT,
@@ -170,7 +170,8 @@ def ensure_query_log() -> None:
 
         INDEX idx_created_at (created_at),
         INDEX idx_model (chosen_model),
-        INDEX idx_modality (modality)
+        INDEX idx_modality (modality),
+        INDEX idx_tenant_created (tenant_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     """
 
@@ -212,6 +213,7 @@ def ensure_query_log() -> None:
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS knowledge_version VARCHAR(255) DEFAULT NULL"))
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status VARCHAR(32) DEFAULT NULL"))
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS estimated_cost_usd FLOAT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(128) NULL"))
         logger.info("[query_service] Tabela 'query_log' pronta (EXTENDIDA multimodal).")
     except SQLAlchemyError as exc:
         logger.warning("[query_service] Falha ao criar tabela query_log: %s", exc)
@@ -245,6 +247,7 @@ def insert_query_log(
     knowledge_version: Optional[str] = None,
     review_status: Optional[str] = None,
     context_label: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     raw_payload: dict | list | str | None = None,
 
     # embeddings
@@ -272,7 +275,7 @@ def insert_query_log(
                      confidence_score, confidence_band, abstained, abstain_reason,
                      grounded, verification_status, knowledge_version, review_status,
                      latency_s, estimated_cost_usd, cost_per_1k, reward,
-                     context_label, raw_payload)
+                     context_label, tenant_id, raw_payload)
                     VALUES
                      (:q, :m, :mod, :ip,
                      :ans, :img,
@@ -281,7 +284,7 @@ def insert_query_log(
                      :confidence_score, :confidence_band, :abstained, :abstain_reason,
                      :grounded, :verification_status, :knowledge_version, :review_status,
                      :lat, :estimated_cost_usd, :cost, :rew,
-                     :ctx, :payload)
+                     :ctx, :tenant_id, :payload)
                 """),
                 {
                     "q": query_text,
@@ -309,6 +312,7 @@ def insert_query_log(
                     "cost": estimated_cost_usd,
                     "rew": reward,
                     "ctx": context_label,
+                    "tenant_id": tenant_id,
                     "payload": _safe_json(raw_payload),
                 }
             )

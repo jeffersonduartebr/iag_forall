@@ -6,11 +6,11 @@ test_providers_reliability.py — Tests for provider reliability patterns
 Tests circuit breaker, retry logic, and error handling in providers_async.py
 """
 
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
-import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
 import pybreaker
+import pytest
 
 
 class TestCircuitBreaker:
@@ -84,24 +84,28 @@ class TestRetryLogic:
 class TestProviderFactory:
     """Tests for ProviderFactory."""
 
-    def test_factory_returns_correct_provider_for_openai(self):
+    def test_factory_returns_correct_provider_for_openai(self, monkeypatch):
         """Factory should return OpenAIProvider for openai/ prefix."""
-        with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
-            from app.providers_async import ProviderFactory, OpenAIProvider
+        from app.providers_async import OpenAIProvider, ProviderFactory
 
+        from app import providers_async as pa
+
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        pa.reset_provider_runtime_state()
+        with patch.object(pa, "OPENAI_API_KEY", "test-key"):
             provider = ProviderFactory.get_provider("openai/gpt-4o")
             assert isinstance(provider, OpenAIProvider)
 
     def test_factory_returns_correct_provider_for_ollama(self):
         """Factory should return OllamaProvider for ollama/ prefix."""
-        from app.providers_async import ProviderFactory, OllamaProvider
+        from app.providers_async import OllamaProvider, ProviderFactory
 
         provider = ProviderFactory.get_provider("ollama/phi4:latest")
         assert isinstance(provider, OllamaProvider)
 
     def test_factory_returns_ollama_for_no_prefix(self):
         """Factory should default to OllamaProvider for models without prefix."""
-        from app.providers_async import ProviderFactory, OllamaProvider
+        from app.providers_async import OllamaProvider, ProviderFactory
 
         provider = ProviderFactory.get_provider("phi4:latest")
         assert isinstance(provider, OllamaProvider)
@@ -348,8 +352,9 @@ class TestOllamaProvider:
         mock_http_client.post.return_value = mock_response_obj
 
         with patch("app.providers_async.get_http_client", AsyncMock(return_value=mock_http_client)):
-            from app import providers_async as pa
             from app.providers_async import OllamaProvider, local_breaker
+
+            from app import providers_async as pa
 
             local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
             with patch.object(pa, "PROVIDER_INFLIGHT_REQUESTS", metric_inflight), \
@@ -549,7 +554,7 @@ class TestCallModelWrapper:
             )
             mock_factory.return_value = mock_provider
 
-            from app.providers_async import call_model, ProviderCircuitOpenError
+            from app.providers_async import ProviderCircuitOpenError, call_model
 
             with pytest.raises(ProviderCircuitOpenError):
                 await call_model(
@@ -565,7 +570,7 @@ class TestCallModelWrapper:
             mock_provider.generate.side_effect = Exception("Network error")
             mock_factory.return_value = mock_provider
 
-            from app.providers_async import call_model, ProviderCallError
+            from app.providers_async import ProviderCallError, call_model
 
             with pytest.raises(ProviderCallError) as exc:
                 await call_model(

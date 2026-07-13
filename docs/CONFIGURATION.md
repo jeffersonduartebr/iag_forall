@@ -70,6 +70,8 @@ flowchart TD
 - `REQUEST_TIMEOUT_SECONDS`, `REQUEST_DEDUP_ENABLED`
 - `BANDIT_EPSILON`
 - `NSGA_W_QUALITY`, `NSGA_W_LATENCY`, `NSGA_W_COST`, `NSGA_W_ALIGNMENT`
+- `CANDIDATE_MODELS_LIST`, `CANDIDATE_VISION_MODELS_LIST`, `CANDIDATE_MULTIMODAL_MODELS_LIST`
+- `CANDIDATE_TOOL_MODELS_LIST`: modelos habilitados para tool/function calling. Quando há `tools` na requisição, o roteador restringe a seleção a modelos com suporte (esta lista, ou capacidade inferida via registry/`supported_parameters` do OpenRouter). Sem nenhum candidato capaz → HTTP 422.
 
 ## Resiliência
 - `CIRCUIT_BREAKER_FAIL_MAX`, `CIRCUIT_BREAKER_RESET_TIMEOUT`

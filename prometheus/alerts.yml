@@ -1,0 +1,35 @@
+groups:
+  - name: llm_router_alerts
+    rules:
+      - alert: ApiDown
+        expr: up{job="llm_router_api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API router indisponível"
+          description: "O target llm_router_api não responde há 2 minutos."
+
+      - alert: HighErrorRate
+        expr: rate(api_requests_total[5m]) > 0 and rate(router_query_outcome_total{outcome!="success"}[5m]) / rate(api_requests_total[5m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taxa de erro elevada na API"
+
+      - alert: CircuitBreakerOpen
+        expr: component_health{component="circuit_breakers"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker aberto"
+
+      - alert: QueryJobBacklog
+        expr: query_job_queue_size > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fila de jobs assíncronos elevada"

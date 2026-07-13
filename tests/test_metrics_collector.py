@@ -55,7 +55,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 def test_ensure_table_and_persist_sample_success(monkeypatch):
     """Testa ensure table and persist sample success."""
     conn = _Conn()
-    monkeypatch.setattr(mc, "engine", SimpleNamespace(begin=lambda: _Ctx(conn)))
+    monkeypatch.setattr(mc, "_engine", lambda: SimpleNamespace(begin=lambda: _Ctx(conn)))
 
     mc._persist_sample(
         model_name="gpt-4o",

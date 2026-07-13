@@ -1,0 +1,20 @@
+# Pre-commit hooks para o Roteador Multiobjetivo de LLMs.
+# Uso: pip install pre-commit && pre-commit install && pre-commit run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        files: ^(app/app|tests)/.*\.py$
+      - id: ruff-format
+        files: ^(app/app|tests)/.*\.py$
+
+  - repo: local
+    hooks:
+      - id: check-file-length
+        name: Limite de 500 SLOC por arquivo (ratchet)
+        entry: python3 scripts/check_file_length.py
+        language: system
+        pass_filenames: false
+        always_run: true

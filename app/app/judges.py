@@ -10,28 +10,27 @@ disagree. This keeps the quality signal useful while limiting cost and latency.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import random
 import re
 import statistics
-import time
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Sequence, Tuple, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 
-from .settings_dynamic import settings
-from .providers_async import call_model
-from .vectorstore import query_embedding
+from .db import get_engine
 from .embeddings import embed_text
 from .model_registry import filter_configured_model_names, is_model_configured
-
-import asyncio
+from .providers_async import call_model
+from .settings_dynamic import settings
+from .vectorstore import query_embedding
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -115,13 +114,9 @@ def get_verdict_cache_stats() -> Dict[str, Any]:
 # ⚙️ Banco de dados
 # ============================================================
 
-DB_HOST = settings.DB_HOST
-DB_USER = settings.DB_USER
-DB_PASS = settings.DB_PASS
-DB_NAME = settings.DB_NAME
-DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
-
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+def _get_judge_engine():
+    """Return the shared database engine for judge persistence."""
+    return get_engine()
 
 
 # ============================================================
@@ -152,7 +147,7 @@ CONSIST_WINDOW_MIN = _safe_setting_int("JUDGES_WINDOW_MIN", 180)
 META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "ollama/phi4:latest"))
 
 # Aumentado para permitir CoT (Raciocínio)
-MAX_TOKENS_JUDGE = 512 
+MAX_TOKENS_JUDGE = 512
 TEMP_JUDGE = 0.0 # Temperatura zero para determinismo máximo
 
 W_FIT = _safe_setting_float("JUDGES_WEIGHT_FITNESS", 0.6)
@@ -270,7 +265,7 @@ def _ensure_judge_logs_table() -> None:
     Table creation is currently handled elsewhere in the application startup
     path, so this function remains as a stable no-op hook for older callers.
     """
-    pass 
+    pass
 
 
 # ============================================================
@@ -283,7 +278,7 @@ def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
     stats: Dict[str, JudgeStats] = {}
 
     try:
-        with engine.connect() as conn:
+        with _get_judge_engine().connect() as conn:
             rs = conn.execute(
                 text(
                     """
@@ -430,7 +425,7 @@ CREATE TABLE IF NOT EXISTS judge_calibration (
 def _ensure_judge_calibration_table():
     """Ensure judge_calibration table exists."""
     try:
-        with engine.begin() as conn:
+        with _get_judge_engine().begin() as conn:
             conn.execute(text(JUDGE_CALIBRATION_DDL))
     except Exception as exc:
         logger.warning("[Judges] Failed to create calibration table: %s", exc)
@@ -439,7 +434,7 @@ def _ensure_judge_calibration_table():
 def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitness):
     """Persist one aggregate judge-performance sample to the database."""
     try:
-        with engine.begin() as conn:
+        with _get_judge_engine().begin() as conn:
             conn.execute(
                 text(
                     """
@@ -463,13 +458,13 @@ def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=N
     try:
         q_short = query[:2000] if query else ""
         a_short = answer[:4000] if answer else ""
-        
-        with engine.begin() as conn:
+
+        with _get_judge_engine().begin() as conn:
             conn.execute(
                 text(
                     """
                     INSERT INTO judge_logs
-                    (query, answer, judge_model, score_before, score_after, 
+                    (query, answer, judge_model, score_before, score_after,
                      event_type, modality, image_hash, created_at)
                     VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, NOW())
                     """
@@ -542,19 +537,19 @@ def _extract_binary_verdict(text: str) -> float:
     Retorna 10.0 (CORRECT) ou 0.0 (INCORRECT).
     """
     if not text: return 0.0
-    
+
     # 1. Tenta extrair de XML (Mais robusto)
     match = re.search(r"<verdict>\s*(.*?)\s*</verdict>", text, re.IGNORECASE | re.DOTALL)
     if match:
         content = match.group(1).strip().upper()
         if "INCORRECT" in content: return 0.0
         if "CORRECT" in content: return 10.0
-    
+
     # 2. Fallback: Procura no texto inteiro
     text_upper = text.upper()
     if "VERDICT: INCORRECT" in text_upper or "VEREDITO: INCORRETO" in text_upper: return 0.0
     if "VERDICT: CORRECT" in text_upper or "VEREDITO: CORRETO" in text_upper: return 10.0
-        
+
     return 0.0
 
 
@@ -564,10 +559,10 @@ async def _meta_evaluate_binary(query, answer, conflicting_verdicts, base_prompt
     Acionado quando há conflito direto (0 vs 10).
     """
     meta_model = _resolve_meta_judge_model()
-    
+
     v1_model, v1_score = conflicting_verdicts[0]
     v2_model, v2_score = conflicting_verdicts[1]
-    
+
     v1_text = "CORRETO" if v1_score > 5 else "INCORRETO"
     v2_text = "CORRETO" if v2_score > 5 else "INCORRETO"
 
@@ -630,7 +625,7 @@ async def _llm_pair_score(query, answer, use_rag, modality, image_b64, reference
 
     rag_block = f"\nCONTEXTO ADICIONAL (RAG):\n{ctx}\n" if ctx else ""
     img_block = f"\nDESCRIÇÃO DA IMAGEM:\n{img_desc}\n" if img_desc else ""
-    
+
     # --- ESTRATÉGIA 1: REFERENCE-GUIDED ---
     if reference:
         ref_block = f"\nGABARITO OFICIAL (GROUND TRUTH): {reference}\n"
@@ -836,7 +831,7 @@ def record_judge_calibration(
         _ensure_judge_calibration_table()
         query_hash = hashlib.sha256(query.encode()).hexdigest()[:64]
 
-        with engine.begin() as conn:
+        with _get_judge_engine().begin() as conn:
             conn.execute(
                 text("""
                     INSERT INTO judge_calibration
@@ -866,7 +861,7 @@ def update_calibration_cache_status(query: str) -> None:
     try:
         query_hash = hashlib.sha256(query.encode()).hexdigest()[:64]
 
-        with engine.begin() as conn:
+        with _get_judge_engine().begin() as conn:
             # Update recent calibration records for this query
             conn.execute(
                 text("""
@@ -889,7 +884,7 @@ def get_judge_calibration_metrics() -> Dict[str, Dict[str, float]]:
         Dict mapping judge_model to metrics (cache_agreement, avg_score, etc.)
     """
     try:
-        with engine.connect() as conn:
+        with _get_judge_engine().connect() as conn:
             rows = conn.execute(
                 text("""
                     SELECT
@@ -930,7 +925,7 @@ def get_judge_calibration_metrics() -> Dict[str, Dict[str, float]]:
 
         # Update Prometheus metrics
         try:
-            from .observability import JUDGE_CALIBRATION_SCORE, JUDGE_CACHE_AGREEMENT
+            from .observability import JUDGE_CACHE_AGREEMENT, JUDGE_CALIBRATION_SCORE
             for model, metrics in result.items():
                 JUDGE_CALIBRATION_SCORE.labels(judge_model=model).set(metrics["calibration_score"])
                 JUDGE_CACHE_AGREEMENT.labels(judge_model=model).set(metrics["cache_agreement"])

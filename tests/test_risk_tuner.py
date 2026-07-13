@@ -4,8 +4,9 @@
 Tests for adaptive risk factor management.
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestPerformanceRecord:
@@ -111,7 +112,7 @@ class TestAdaptiveRiskTuner:
 
     def test_calculate_adjustment_clamps_to_bounds(self, risk_tuner):
         """Test that adjustment respects bounds."""
-        from app.risk_tuner import PerformanceRecord, RISK_FACTOR_MIN, RISK_FACTOR_MAX
+        from app.risk_tuner import RISK_FACTOR_MAX, RISK_FACTOR_MIN, PerformanceRecord
 
         # Create a record that would push factor way up
         record = PerformanceRecord(
@@ -158,7 +159,7 @@ class TestGetRiskTuner:
     def test_returns_singleton(self):
         """Test that get_risk_tuner returns singleton instance."""
         with patch("app.risk_tuner.get_redis", return_value=None):
-            from app.risk_tuner import get_risk_tuner, AdaptiveRiskTuner
+            from app.risk_tuner import AdaptiveRiskTuner, get_risk_tuner
             AdaptiveRiskTuner._instance = None
 
             tuner1 = get_risk_tuner()

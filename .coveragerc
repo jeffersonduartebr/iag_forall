@@ -9,26 +9,11 @@ omit =
     */nsga_weights_updater.py
     */dash_control_panel.py
     */update_nsga_best_params.py
-    */adaptive_timeout.py
-    */ab_testing.py
-    */bandits.py
     */umrag.py
-    */rag_healthcheck.py
     */db_manager.py
     */rag_context_provider.py
     */reset_chroma_collections.py
-    */drift_detector.py
-    */embeddings.py
-    */error_handling.py
-    */middleware/backpressure.py
-    */middleware/rate_limit.py
-    */online_predictor.py
-    */query_service.py
-    */risk_tuner.py
-    */roadmap_features.py
-    */tasks.py
-    */user_feedback.py
-    */utils/redis_client.py
+    */utils/bkp.redis_client.py
 
 [report]
 show_missing = True

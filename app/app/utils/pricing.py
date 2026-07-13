@@ -7,18 +7,20 @@ Provides model cost calculations with a two-tier cache:
 1. Redis cache (TTL 1 hour) - shared across workers
 2. In-memory cache (TTL 5 min) - process-local fallback
 """
-import time
 import json
 import logging
-from sqlalchemy import text
+import time
+from typing import Any
+
 from app.db import get_engine
-from app.utils.redis_client import get_redis_async_safe, ensure_redis_connected
+from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
+from sqlalchemy import text
 
 logger = logging.getLogger("pricing")
 
 # In-memory L1 cache
-_PRICING_CACHE = {}
-_LAST_UPDATE = 0
+_PRICING_CACHE: dict[str, Any] = {}
+_LAST_UPDATE = 0.0
 CACHE_TTL = 300  # 5 minutes for local cache
 
 # Redis L2 cache keys
@@ -116,6 +118,16 @@ def get_model_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     if not pricing:
         clean_model = model.split("/", 1)[1] if "/" in model else model
         pricing = _PRICING_CACHE.get(clean_model)
+
+    if not pricing:
+        slug_candidate = model.split("/", 1)[1] if model.startswith("openrouter/") else clean_model
+        if "/" in slug_candidate:
+            try:
+                from app.openrouter_catalog import get_openrouter_pricing_per_1k
+
+                pricing = get_openrouter_pricing_per_1k(slug_candidate)
+            except Exception:
+                pricing = None
 
     if not pricing:
         # Defaults (fallback for unconfigured models)

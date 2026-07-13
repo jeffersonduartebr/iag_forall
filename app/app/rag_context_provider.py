@@ -18,12 +18,12 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from app.vectorstore import query_embedding
 from app.embeddings import (
+    embed_multimodal,  # multimodal-aware
     embed_text,
-    embed_multimodal,   # multimodal-aware
 )
 from app.settings_dynamic import settings
+from app.vectorstore import query_embedding
 
 logger = logging.getLogger(__name__)
 

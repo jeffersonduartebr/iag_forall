@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -23,8 +24,13 @@ import numpy as np
 from sqlalchemy import text
 
 from .db import get_engine
+from .services.hot_path_cache import TTLCache, cache_hit
 
 logger = logging.getLogger(__name__)
+
+_HOTPATH_POLICY_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_POLICY_CACHE_TTL_S", "30")))
+_HOTPATH_TENANT_BUDGET_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_TENANT_BUDGET_CACHE_TTL_S", "60")))
+_HOTPATH_TENANT_USAGE_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_TENANT_USAGE_CACHE_TTL_S", "5")))
 
 try:
     from scipy import stats as scipy_stats
@@ -148,6 +154,51 @@ DDL_STATEMENTS = [
         INDEX idx_tenant_review_created (tenant_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     """,
+    """
+    CREATE TABLE IF NOT EXISTS expert_profiles (
+        user_id VARCHAR(128) PRIMARY KEY,
+        display_name VARCHAR(255) NULL,
+        theme_ids LONGTEXT NULL,
+        credentials_note TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS expert_accounts (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        display_name VARCHAR(255) NOT NULL,
+        phone VARCHAR(32) NULL,
+        enabled TINYINT NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_expert_enabled (enabled, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS expert_assessments (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        expert_id VARCHAR(128) NOT NULL,
+        benchmark_id VARCHAR(128) NOT NULL,
+        theme VARCHAR(128) NOT NULL,
+        query_text TEXT,
+        answer LONGTEXT,
+        reference LONGTEXT NULL,
+        eval_run_id VARCHAR(64) NULL,
+        judge_quality FLOAT NULL,
+        quality_score FLOAT NOT NULL,
+        rubric_json LONGTEXT NULL,
+        notes LONGTEXT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'submitted',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_expert_benchmark_run (expert_id, benchmark_id, eval_run_id),
+        INDEX idx_theme_created (theme, created_at),
+        INDEX idx_eval_run (eval_run_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    """,
 ]
 
 
@@ -187,6 +238,7 @@ def ensure_roadmap_tables() -> None:
 
 def set_tenant_budget(tenant_id: str, daily_usd_limit: float, monthly_usd_limit: float, enabled: bool = True) -> None:
     """Create/update budget limits for a tenant."""
+    _HOTPATH_TENANT_BUDGET_CACHE.invalidate(tenant_id)
     with get_engine().begin() as conn:
         conn.execute(
             text(
@@ -205,20 +257,43 @@ def set_tenant_budget(tenant_id: str, daily_usd_limit: float, monthly_usd_limit:
 
 def get_tenant_budget(tenant_id: str) -> Dict[str, Any]:
     """Get budget configuration for tenant."""
+    cached = _HOTPATH_TENANT_BUDGET_CACHE.get(tenant_id)
+    if cache_hit(cached):
+        return cached
+
     with get_engine().connect() as conn:
         row = conn.execute(
             text("SELECT tenant_id, daily_usd_limit, monthly_usd_limit, enabled FROM tenant_budgets WHERE tenant_id=:t"),
             {"t": tenant_id},
         ).mappings().first()
     if not row:
-        return {"tenant_id": tenant_id, "daily_usd_limit": 0.0, "monthly_usd_limit": 0.0, "enabled": False}
-    return dict(row)
+        out = {"tenant_id": tenant_id, "daily_usd_limit": 0.0, "monthly_usd_limit": 0.0, "enabled": False}
+    else:
+        out = dict(row)
+    _HOTPATH_TENANT_BUDGET_CACHE.set(tenant_id, out)
+    return out
+
+
+def list_tenant_budgets() -> List[Dict[str, Any]]:
+    """List all configured tenant budgets."""
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text("SELECT tenant_id, daily_usd_limit, monthly_usd_limit, enabled, updated_at FROM tenant_budgets ORDER BY tenant_id")
+            ).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
 
 
 def _usage_snapshot(tenant_id: str) -> Dict[str, float]:
     """Execute the usage snapshot routine.
 
 This helper encapsulates one focused step used by the surrounding workflow."""
+    cached = _HOTPATH_TENANT_USAGE_CACHE.get(tenant_id)
+    if cache_hit(cached):
+        return cached
+
     day_key = time.strftime("%Y-%m-%d")
     month_key = time.strftime("%Y-%m")
     with get_engine().connect() as conn:
@@ -230,7 +305,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             text("SELECT COALESCE(SUM(cost_usd),0) FROM tenant_usage WHERE tenant_id=:t AND month_key=:m"),
             {"t": tenant_id, "m": month_key},
         ).scalar() or 0.0
-    return {"daily": float(day_cost), "monthly": float(month_cost)}
+    out = {"daily": float(day_cost), "monthly": float(month_cost)}
+    _HOTPATH_TENANT_USAGE_CACHE.set(tenant_id, out)
+    return out
 
 
 def check_tenant_budget(tenant_id: Optional[str], projected_cost_usd: float = 0.0) -> BudgetCheck:
@@ -267,6 +344,7 @@ def record_tenant_usage(
     """Accumulate daily usage for tenant."""
     if not tenant_id:
         return
+    _HOTPATH_TENANT_USAGE_CACHE.invalidate(tenant_id)
     day_key = time.strftime("%Y-%m-%d")
     month_key = time.strftime("%Y-%m")
     with get_engine().begin() as conn:
@@ -380,6 +458,7 @@ def create_policy_version(version: str, config: Dict[str, Any], description: str
 
 def activate_policy_version(version: str) -> bool:
     """Mark one policy as active."""
+    _HOTPATH_POLICY_CACHE.clear()
     with get_engine().begin() as conn:
         exists = conn.execute(text("SELECT COUNT(*) FROM policy_versions WHERE version=:v"), {"v": version}).scalar() or 0
         if not exists:
@@ -391,17 +470,23 @@ def activate_policy_version(version: str) -> bool:
 
 def get_active_policy() -> Optional[Dict[str, Any]]:
     """Fetch active policy version."""
+    cached = _HOTPATH_POLICY_CACHE.get("active")
+    if cache_hit(cached):
+        return cached
+
     with get_engine().connect() as conn:
         row = conn.execute(
             text("SELECT version, description, config_json, is_active, created_at, updated_at FROM policy_versions WHERE is_active=1 LIMIT 1")
         ).mappings().first()
     if not row:
+        _HOTPATH_POLICY_CACHE.set("active", None)
         return None
     out = dict(row)
     try:
         out["config"] = json.loads(out.pop("config_json") or "{}")
     except Exception:
         out["config"] = {}
+    _HOTPATH_POLICY_CACHE.set("active", out)
     return out
 
 
@@ -733,20 +818,37 @@ def get_roles_for_user(user_id: str, tenant_id: Optional[str] = None) -> List[st
     return [str(r[0]) for r in rows]
 
 
-def check_access(*, user_id: Optional[str], required_roles: List[str], tenant_id: Optional[str] = None, header_roles: Optional[List[str]] = None) -> AccessDecision:
+def check_access(
+    *,
+    user_id: Optional[str],
+    required_roles: List[str],
+    tenant_id: Optional[str] = None,
+    header_roles: Optional[List[str]] = None,
+    jwt_roles: Optional[List[str]] = None,
+) -> AccessDecision:
     """Check access by required roles."""
     if not required_roles:
         return AccessDecision(True, "no_required_role", [])
 
     roles: List[str] = []
+    if jwt_roles:
+        roles.extend([str(r).strip() for r in jwt_roles if str(r).strip()])
     if user_id:
         roles.extend(get_roles_for_user(user_id=user_id, tenant_id=tenant_id))
-    if header_roles:
+    trust_headers = False
+    try:
+        from .settings_dynamic import settings as _settings
+
+        trust_headers = _settings._get_bool("TRUST_HEADER_ROLES", False)
+    except Exception:
+        trust_headers = False
+    if header_roles and trust_headers:
         roles.extend([str(r).strip() for r in header_roles if str(r).strip()])
     roles = sorted(set(roles))
 
     if any(role in roles for role in required_roles):
-        return AccessDecision(True, "ok", roles)
+        source = "jwt" if jwt_roles else "rbac"
+        return AccessDecision(True, source, roles)
     return AccessDecision(False, "missing_required_role", roles)
 
 
@@ -767,6 +869,8 @@ def _welch_ttest(a: List[float], b: List[float]) -> Dict[str, Any]:
 
 def eval_significance_report(run_id: str) -> Dict[str, Any]:
     """Build per-model leaderboard and significance against the top model by quality."""
+    from .services.academic_stats import build_model_comparison_report
+
     rows = list_eval_run_results(run_id)
     if not rows:
         return {"run_id": run_id, "error": "no_results"}
@@ -779,41 +883,282 @@ def eval_significance_report(run_id: str) -> Dict[str, Any]:
         slot["latency"].append(float(row.get("latency_s") or 0.0))
         slot["cost"].append(float(row.get("cost_usd") or 0.0))
 
-    leaderboard: List[Dict[str, Any]] = []
-    for model, metrics in by_model.items():
-        leaderboard.append(
+    report = build_model_comparison_report(by_model)
+    report["run_id"] = run_id
+    return report
+
+
+def upsert_expert_profile(
+    user_id: str,
+    *,
+    display_name: Optional[str] = None,
+    theme_ids: Optional[List[str]] = None,
+    credentials_note: Optional[str] = None,
+) -> None:
+    """Create or update one expert reviewer profile."""
+    with get_engine().begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO expert_profiles (user_id, display_name, theme_ids, credentials_note)
+                VALUES (:u, :d, :t, :c)
+                ON DUPLICATE KEY UPDATE
+                    display_name=COALESCE(:d, display_name),
+                    theme_ids=COALESCE(:t, theme_ids),
+                    credentials_note=COALESCE(:c, credentials_note)
+                """
+            ),
             {
-                "model": model,
-                "n": len(metrics["quality"]),
-                "quality_mean": float(np.mean(metrics["quality"])) if metrics["quality"] else 0.0,
-                "latency_mean": float(np.mean(metrics["latency"])) if metrics["latency"] else 0.0,
-                "cost_mean": float(np.mean(metrics["cost"])) if metrics["cost"] else 0.0,
-                "_quality_values": metrics["quality"],
-            }
+                "u": user_id[:128],
+                "d": display_name,
+                "t": json.dumps(theme_ids or [], ensure_ascii=False) if theme_ids is not None else None,
+                "c": credentials_note,
+            },
         )
 
-    leaderboard.sort(key=lambda x: x["quality_mean"], reverse=True)
-    top = leaderboard[0] if leaderboard else None
 
-    comparisons: List[Dict[str, Any]] = []
-    if top:
-        for item in leaderboard[1:]:
-            test = _welch_ttest(top["_quality_values"], item["_quality_values"])
-            comparisons.append(
-                {
-                    "top_model": top["model"],
-                    "challenger_model": item["model"],
-                    "delta_quality_mean": top["quality_mean"] - item["quality_mean"],
-                    **test,
-                }
-            )
+def get_expert_profile(user_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch expert profile for one user."""
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text("SELECT user_id, display_name, theme_ids, credentials_note, created_at, updated_at FROM expert_profiles WHERE user_id=:u"),
+            {"u": user_id},
+        ).mappings().first()
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["theme_ids"] = json.loads(out.pop("theme_ids") or "[]")
+    except Exception:
+        out["theme_ids"] = []
+    return out
 
-    for item in leaderboard:
-        item.pop("_quality_values", None)
 
-    return {
-        "run_id": run_id,
-        "models": leaderboard,
-        "comparisons": comparisons,
-        "significance_threshold": 0.05,
-    }
+def create_expert_account(
+    *,
+    email: str,
+    password_hash: str,
+    display_name: str,
+    phone: Optional[str] = None,
+) -> int:
+    """Insert one expert account and return its id."""
+    with get_engine().begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO expert_accounts (email, password_hash, display_name, phone, enabled)
+                VALUES (:email, :password_hash, :display_name, :phone, 1)
+                """
+            ),
+            {
+                "email": email[:255],
+                "password_hash": password_hash,
+                "display_name": display_name[:255],
+                "phone": phone[:32] if phone else None,
+            },
+        )
+        return int(result.lastrowid or 0)
+
+
+def get_expert_account_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Fetch expert account by email including password hash."""
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT id, email, password_hash, display_name, phone, enabled, created_at, updated_at
+                FROM expert_accounts WHERE email=:email
+                """
+            ),
+            {"email": email},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
+def get_expert_account_by_id(account_id: int) -> Optional[Dict[str, Any]]:
+    """Fetch expert account by id including password hash."""
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT id, email, password_hash, display_name, phone, enabled, created_at, updated_at
+                FROM expert_accounts WHERE id=:id
+                """
+            ),
+            {"id": int(account_id)},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
+def list_expert_accounts(limit: int = 500) -> List[Dict[str, Any]]:
+    """List expert accounts ordered by newest first."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT id, email, password_hash, display_name, phone, enabled, created_at, updated_at
+                FROM expert_accounts
+                ORDER BY id DESC
+                LIMIT :l
+                """
+            ),
+            {"l": max(1, min(int(limit), 1000))},
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def update_expert_account(
+    account_id: int,
+    *,
+    display_name: Optional[str] = None,
+    phone: Optional[str] = None,
+    password_hash: Optional[str] = None,
+    enabled: Optional[bool] = None,
+) -> bool:
+    """Update mutable expert account fields."""
+    sets: List[str] = []
+    params: Dict[str, Any] = {"id": int(account_id)}
+    if display_name is not None:
+        sets.append("display_name=:display_name")
+        params["display_name"] = display_name[:255]
+    if phone is not None:
+        sets.append("phone=:phone")
+        params["phone"] = phone[:32] if phone else None
+    if password_hash is not None:
+        sets.append("password_hash=:password_hash")
+        params["password_hash"] = password_hash
+    if enabled is not None:
+        sets.append("enabled=:enabled")
+        params["enabled"] = 1 if enabled else 0
+    if not sets:
+        return False
+    sql = f"UPDATE expert_accounts SET {', '.join(sets)} WHERE id=:id"
+    with get_engine().begin() as conn:
+        result = conn.execute(text(sql), params)
+    return bool(result.rowcount)
+
+
+def create_expert_assessment(
+    *,
+    expert_id: str,
+    benchmark_id: str,
+    theme: str,
+    query_text: str,
+    answer: str,
+    reference: Optional[str],
+    eval_run_id: Optional[str],
+    judge_quality: Optional[float],
+    quality_score: float,
+    rubric: Dict[str, Any],
+    notes: Optional[str] = None,
+) -> int:
+    """Persist one human expert assessment."""
+    with get_engine().begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO expert_assessments (
+                    expert_id, benchmark_id, theme, query_text, answer, reference,
+                    eval_run_id, judge_quality, quality_score, rubric_json, notes
+                )
+                VALUES (
+                    :expert_id, :benchmark_id, :theme, :query_text, :answer, :reference,
+                    :eval_run_id, :judge_quality, :quality_score, :rubric_json, :notes
+                )
+                ON DUPLICATE KEY UPDATE
+                    quality_score=:quality_score,
+                    rubric_json=:rubric_json,
+                    notes=:notes,
+                    judge_quality=COALESCE(:judge_quality, judge_quality),
+                    answer=:answer,
+                    reference=:reference
+                """
+            ),
+            {
+                "expert_id": expert_id[:128],
+                "benchmark_id": benchmark_id[:128],
+                "theme": theme[:128],
+                "query_text": query_text,
+                "answer": answer,
+                "reference": reference,
+                "eval_run_id": eval_run_id,
+                "judge_quality": judge_quality,
+                "quality_score": float(quality_score),
+                "rubric_json": json.dumps(rubric, ensure_ascii=False),
+                "notes": notes,
+            },
+        )
+        return int(result.lastrowid or 0)
+
+
+def list_expert_assessments(
+    expert_id: Optional[str] = None,
+    theme: Optional[str] = None,
+    eval_run_id: Optional[str] = None,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    """List expert assessments with optional filters."""
+    sql = """
+        SELECT id, expert_id, benchmark_id, theme, query_text, answer, reference,
+               eval_run_id, judge_quality, quality_score, rubric_json, notes, status,
+               created_at, updated_at
+        FROM expert_assessments
+        WHERE 1=1
+    """
+    params: Dict[str, Any] = {"l": max(1, min(int(limit), 2000))}
+    if expert_id:
+        sql += " AND expert_id=:expert_id"
+        params["expert_id"] = expert_id
+    if theme:
+        sql += " AND theme=:theme"
+        params["theme"] = theme
+    if eval_run_id:
+        sql += " AND eval_run_id=:eval_run_id"
+        params["eval_run_id"] = eval_run_id
+    sql += " ORDER BY id DESC LIMIT :l"
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["rubric"] = json.loads(item.pop("rubric_json") or "{}")
+        except Exception:
+            item["rubric"] = {}
+        out.append(item)
+    return out
+
+
+def list_assessed_benchmark_ids(expert_id: str, eval_run_id: Optional[str] = None) -> List[str]:
+    """Return benchmark ids already assessed by one expert."""
+    sql = "SELECT benchmark_id FROM expert_assessments WHERE expert_id=:expert_id"
+    params: Dict[str, Any] = {"expert_id": expert_id}
+    if eval_run_id:
+        sql += " AND eval_run_id=:eval_run_id"
+        params["eval_run_id"] = eval_run_id
+    else:
+        sql += " AND eval_run_id IS NULL"
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def get_expert_assessment_stats() -> Dict[str, Any]:
+    """Aggregate counts for expert review dashboard."""
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*) AS total,
+                           COUNT(DISTINCT expert_id) AS experts,
+                           COUNT(DISTINCT theme) AS themes,
+                           COALESCE(AVG(ABS(quality_score - judge_quality)), 0) AS mae
+                    FROM expert_assessments
+                    WHERE judge_quality IS NOT NULL
+                    """
+                )
+            ).mappings().first()
+        return dict(row or {"total": 0, "experts": 0, "themes": 0, "mae": 0.0})
+    except Exception:
+        return {"total": 0, "experts": 0, "themes": 0, "mae": 0.0}

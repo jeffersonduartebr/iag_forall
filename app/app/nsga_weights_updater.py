@@ -12,24 +12,20 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import random
 import threading
 import time
-import socket
-import math
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple
 
-import pymysql
 import redis
 import uvicorn
 from deap import algorithms, base, creator, tools
-from fastapi import FastAPI, Body, Path
+from fastapi import FastAPI, Path
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import create_engine, text
-from prometheus_client import Counter, Gauge, REGISTRY, generate_latest
+from prometheus_client import REGISTRY, Counter, Gauge, generate_latest
+from sqlalchemy import text
 
+from app.db import get_engine
 from app.settings_dynamic import settings
 
 # ============================================================
@@ -58,8 +54,8 @@ REDIS_KEY_EFFICIENCY_HISTORY = {m: f"nsga:efficiency_history:{m}" for m in MODAL
 # Conexões (DB & Redis)
 # ============================================================
 
-DB_URL = f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+def _db_engine():
+    return get_engine()
 
 def get_redis_client():
     """Return redis client.
@@ -98,7 +94,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
     try:
-        with engine.begin() as conn:
+        with _db_engine().begin() as conn:
             conn.execute(text(DDL))
         logger.info("[NSGA] Tabela 'nsga_weights' verificada.")
     except Exception as e:
@@ -154,7 +150,7 @@ def aggregate_ema_by_model(modality: str, models: List[str]) -> Dict[str, Dict[s
 
 This helper encapsulates one focused step used by the surrounding workflow."""
     try:
-        with engine.connect() as conn:
+        with _db_engine().connect() as conn:
             rows = conn.execute(
                 text("""
                     SELECT model, ema_latency, ema_cost, ema_quality, ema_alignment
@@ -163,7 +159,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                 """),
                 {"m": modality}
             ).mappings().all()
-        
+
         db_data = {r["model"]: dict(r) for r in rows}
 
     except Exception as e:
@@ -185,7 +181,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             final_data[m] = {
                 "latency": 2.0, "cost": 0.001, "quality": 5.0, "alignment": 1.0
             }
-            
+
     return final_data
 
 
@@ -361,7 +357,7 @@ def run_nsga_optimization(
 This helper encapsulates one focused step used by the surrounding workflow."""
         s = sum(individual) or 1.0
         w = [x/s for x in individual]
-        
+
         lat = sum(w[i] * metrics[models[i]]["latency"] for i in range(n))
         cst = sum(w[i] * metrics[models[i]]["cost"] for i in range(n))
         qlt = sum(w[i] * metrics[models[i]]["quality"] for i in range(n))
@@ -374,19 +370,19 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     toolbox.register("select", tools.selNSGA2)
 
     pop = toolbox.population(n=n_pop)
-    algorithms.eaMuPlusLambda(pop, toolbox, mu=n_pop, lambda_=n_pop, 
+    algorithms.eaMuPlusLambda(pop, toolbox, mu=n_pop, lambda_=n_pop,
                               cxpb=0.9, mutpb=0.1, ngen=n_gen, verbose=False)
 
     best_ind = tools.selBest(pop, 1)[0]
     s = sum(best_ind) or 1.0
     norm_weights = [x/s for x in best_ind]
-    
+
     weights_map = {models[i]: norm_weights[i] for i in range(n)}
-    
+
     # Métricas do sistema ideal encontrado
     sys_lat, sys_cst, sys_qlt, _ = evaluate(best_ind)
     efficiency_score = (sys_qlt / max(0.01, sys_lat))
-    
+
     return weights_map, efficiency_score, (sys_lat, sys_cst, sys_qlt)
 
 
@@ -398,7 +394,7 @@ def tune_uncertainty_threshold(current_efficiency: float) -> float:
 
 This helper encapsulates one focused step used by the surrounding workflow."""
     current_thresh = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
-    
+
     if current_efficiency < 2.0:
         new_thresh = max(0.20, current_thresh - 0.05)
         action = "TIGHTEN"
@@ -408,12 +404,12 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     else:
         new_thresh = current_thresh
         action = "KEEP"
-        
+
     if action != "KEEP":
         logger.info(f"[UQ-Tuning] Eficiência={current_efficiency:.2f}. {action} Threshold: {current_thresh:.2f} -> {new_thresh:.2f}")
         settings.set("UNCERTAINTY_THRESHOLD", str(new_thresh), actor="nsga-updater")
         NSGA_UQ_THRESH.set(new_thresh)
-        
+
     return new_thresh
 
 
@@ -424,21 +420,21 @@ def tune_global_strategy_weights(sys_metrics: Tuple[float, float, float]):
     """
     Ajusta os pesos globais (NSGA_W_QUALITY, etc.) baseado no desempenho
     do melhor indivíduo encontrado pelo AG.
-    
+
     Se o sistema ideal encontrado ainda é lento, aumentamos a penalidade de latência.
     Se a qualidade está baixa, aumentamos o peso da qualidade.
     """
     sys_lat, sys_cst, sys_qlt = sys_metrics
-    
+
     # Lê valores atuais
     w_qual = settings.NSGA_W_QUALITY
     w_lat = settings.NSGA_W_LATENCY
     w_cost = settings.NSGA_W_COST
-    
+
     changes = []
 
     # --- Lógica de Controle (P-Controller simples) ---
-    
+
     # 1. Controle de Latência (Target: < 3.0s)
     if sys_lat > 3.0:
         # Sistema lento -> Aumenta importância da latência
@@ -491,10 +487,10 @@ def tune_risk_factors() -> Dict[str, Any]:
     if not settings.RISK_FACTOR_ADAPT_ENABLED:
         return {"status": "disabled"}
 
-    result = {"adjustments": [], "metrics": {}}
+    result: dict[str, Any] = {"adjustments": [], "metrics": {}}
 
     try:
-        with engine.connect() as conn:
+        with _db_engine().connect() as conn:
             # Query recent data with UQ scores from raw_payload
             rows = conn.execute(
                 text("""
@@ -644,10 +640,10 @@ def calibrate_uncertainty_threshold() -> Dict[str, Any]:
     if not settings.UQ_CALIBRATION_ENABLED:
         return {"status": "disabled"}
 
-    result = {"old_threshold": None, "new_threshold": None, "metrics": {}}
+    result: dict[str, Any] = {"old_threshold": None, "new_threshold": None, "metrics": {}}
 
     try:
-        with engine.connect() as conn:
+        with _db_engine().connect() as conn:
             # Query data grouped by UQ level
             rows = conn.execute(
                 text("""
@@ -750,7 +746,7 @@ def persist_results(modality: str, weights: Dict[str, float]):
 
 This helper encapsulates one focused step used by the surrounding workflow."""
     try:
-        with engine.begin() as conn:
+        with _db_engine().begin() as conn:
             for m, w in weights.items():
                 conn.execute(
                     text("""
@@ -780,7 +776,7 @@ def tune_weights_from_judge_feedback() -> None:
     better-performing models.
     """
     try:
-        with engine.connect() as conn:
+        with _db_engine().connect() as conn:
             min_samples = int(settings.get("JUDGE_FEEDBACK_MIN_SAMPLES", 30))
             threshold = float(settings.get("JUDGE_FEEDBACK_ERROR_THRESHOLD", 5.0))
 
@@ -972,7 +968,7 @@ def calibration_status():
 
     # Add cache stats
     try:
-        from app.semantic_cache import get_l1_cache_stats, get_cache_hit_rate
+        from app.semantic_cache import get_cache_hit_rate, get_l1_cache_stats
         result["cache"]["l1_stats"] = get_l1_cache_stats()
         result["cache"]["hit_rate"] = get_cache_hit_rate()
     except Exception:
@@ -1011,8 +1007,9 @@ def run_calibration_cycle():
 
     # 3. Cache Threshold Tuning (Improvement 3)
     try:
-        from app.semantic_cache import tune_cache_threshold
         import asyncio
+
+        from app.semantic_cache import tune_cache_threshold
         # Run async function
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -1035,7 +1032,7 @@ def run_calibration_cycle():
 
         # Update Prometheus metrics
         try:
-            from app.observability import PREDICTOR_BRIER_SCORE, PREDICTOR_ACCURACY, PREDICTOR_CALIBRATION_TEMP
+            from app.observability import PREDICTOR_ACCURACY, PREDICTOR_BRIER_SCORE, PREDICTOR_CALIBRATION_TEMP
             for model, m in metrics.items():
                 PREDICTOR_BRIER_SCORE.labels(model=model).set(m.get("brier_score", 0.25))
                 PREDICTOR_ACCURACY.labels(model=model).set(m.get("accuracy", 0.5))

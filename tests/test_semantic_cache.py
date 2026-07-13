@@ -6,15 +6,16 @@ handling for the corresponding runtime component.
 """
 
 
-import pytest
 import time
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
+
+import pytest
 from app.semantic_cache import (
-    check_cache,
-    _compute_sha256,
     L1Cache,
-    get_l1_cache_stats,
+    _compute_sha256,
     _l1_cache,
+    check_cache,
+    get_l1_cache_stats,
 )
 
 

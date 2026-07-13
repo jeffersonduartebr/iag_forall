@@ -12,16 +12,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import time
-from typing import Dict, Optional, Callable, Any, TypeVar, Tuple, List
-from dataclasses import dataclass, field
-from functools import wraps
 import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 import pybreaker
 
-from .model_registry import get_model_registry, ModelConfig
-from .error_handling import log_provider_error, ErrorCategory
+from .error_handling import ErrorCategory, log_provider_error
+from .model_registry import get_model_registry
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +55,7 @@ class ModelCircuitBreakerManager:
 
     _instance: Optional["ModelCircuitBreakerManager"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "ModelCircuitBreakerManager":
         """Return the process-wide singleton instance.
@@ -182,6 +182,7 @@ class RequestDeduplicator:
 
     _instance: Optional["RequestDeduplicator"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "RequestDeduplicator":
         """Return the process-wide request deduplicator singleton."""
@@ -450,7 +451,7 @@ async def check_model_health(model_name: str) -> Dict[str, Any]:
 async def check_all_models_health() -> Dict[str, Any]:
     """Check health of all registered models."""
     registry = get_model_registry()
-    breaker_manager = get_circuit_breaker_manager()
+    get_circuit_breaker_manager()
 
     models = registry.list_models()
     health_checks = []
@@ -495,6 +496,7 @@ class CascadeDetector:
 
     _instance: Optional["CascadeDetector"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "CascadeDetector":
         """Return the process-wide cascade detector singleton."""
@@ -517,6 +519,8 @@ class CascadeDetector:
 
         # Load emergency fallback models from settings
         try:
+            from .settings_dynamic import settings as dynamic_settings
+
             self._emergency_fallback_models = dynamic_settings.EMERGENCY_FALLBACK_MODELS
             if not self._emergency_fallback_models:
                 # Default fallback if setting is empty

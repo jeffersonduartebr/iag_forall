@@ -18,7 +18,7 @@ def test_require_admin_or_role_happy_paths(monkeypatch):
     monkeypatch.setattr(
         deps,
         "check_access",
-        lambda user_id, tenant_id, required_roles, header_roles: SimpleNamespace(allowed=True, roles=["platform_admin"]),
+        lambda **kwargs: SimpleNamespace(allowed=True, roles=["platform_admin"], reason="rbac"),
     )
     out = deps.require_admin_or_role(
         admin_token="wrong",
@@ -31,7 +31,7 @@ def test_require_admin_or_role_happy_paths(monkeypatch):
     monkeypatch.setattr(
         deps,
         "check_access",
-        lambda user_id, tenant_id, required_roles, header_roles: SimpleNamespace(allowed=False, roles=[]),
+        lambda **kwargs: SimpleNamespace(allowed=False, roles=[], reason="missing_required_role"),
     )
     with pytest.raises(HTTPException) as exc:
         deps.require_admin_or_role(
@@ -60,7 +60,13 @@ def test_guardrails_paths():
 def test_governance_routes(monkeypatch):
     """Governance routes should validate payloads and delegate to roadmap features."""
     from app.api import governance_routes as gr
-    from app.schemas import PolicyCreateRequest, ResponseReviewUpdateRequest, RoleGrantRequest, RoleRevokeRequest, TenantBudgetUpdateRequest
+    from app.schemas import (
+        PolicyCreateRequest,
+        ResponseReviewUpdateRequest,
+        RoleGrantRequest,
+        RoleRevokeRequest,
+        TenantBudgetUpdateRequest,
+    )
 
     monkeypatch.setattr(gr, "require_admin", lambda token: None)
     monkeypatch.setattr(gr, "require_admin_or_role", lambda **kwargs: {"authorized_by": "rbac", "roles": ["platform_admin"]})

@@ -12,96 +12,122 @@ ATUALIZAÇÃO (Tese):
 
 from __future__ import annotations
 
-import logging
-import time
-import json
 import asyncio
-import threading
-import uuid
+import logging
 import random
-from typing import Dict, Tuple, Any, Optional
+import threading
+from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from .bandits import _get_ctx_stats, bandit_update, compute_reward, select_model, select_model_async
+from .db import get_engine
+from .embeddings import embed_text
+from .judges import judge_answer
+from .observability import (
+    BACKGROUND_JUDGE_SKIPPED,
+    DEPENDENCY_FAILURES,
+    EMA_BATCH_FLUSHES,
+    EMA_BATCH_QUEUE_SIZE,
+    EMA_LOG_CLEANUP_ROWS,
+    FALLBACK_USED,
+    FEEDBACK_BACKLOG_AGE,
+    FEEDBACK_PROCESSING_LATENCY,
+    FEEDBACK_TASK_FAILURES,
+    ROUTER_ATTEMPTS_PER_QUERY,
+    ROUTER_FALLBACK_SKIPPED,
+    ROUTER_HISTORY_ENTRIES,
+    ROUTER_LOCAL_USAGE_RATIO,
+    ROUTER_QUALITY_AVG,
+    ROUTER_RESPONSE_EMPTY,
+    ROUTER_RETRY_TOTAL,
+    ROUTER_ROUTE_COST,
+    ROUTER_STAGE_LATENCY,
+)
+from .online_predictor import get_predictor  # <--- NOVO IMPORT
+
 # --- Módulos Internos ---
+from .openrouter_explorer import (
+    maybe_pick_exploration_model,
+    maybe_run_shadow_comparison,
+    record_exploration_outcome,
+)
 from .providers_async import (
-    call_model,
-    _ensure_ollama_model,
-    is_ollama_model_verified,
     ProviderCallError,
+    _ensure_ollama_model,
     apply_ollama_performance_preferences,
+    call_model,
+    is_ollama_model_verified,
     should_throttle_background_judge,
+)
+from .query_jobs import get_pending_query_jobs_count
+from .query_service import ensure_query_log, insert_query_log
+from .rag_local import build_augmented_prompt, build_retrieval_bundle
+from .reliability import (  # noqa: F401  (get_request_deduplicator re-export p/ testes)
+    execute_with_fallback,
+    get_request_deduplicator,
 )
 from .router_strategy import choose_top2_models
 from .semantic_cache import check_cache, store_cache
-from .settings_dynamic import settings
-from .db import get_engine
-from .bandits import select_model, bandit_update, compute_reward, _get_ctx_stats
-from .judges import judge_answer
-from .metrics_collector import update_model_metrics
-from .rag_local import build_augmented_prompt, build_retrieval_bundle
-from .embeddings import embed_text
-from .query_service import insert_query_log, ensure_query_log
-from .online_predictor import get_predictor  # <--- NOVO IMPORT
-from .reliability import get_request_deduplicator, execute_with_fallback  # Request deduplication
-from .services.router_services import (
-    normalize_modality,
-    build_final_prompt,
-    parse_meta_cost,
-    should_enable_dedup,
-    compute_judge_probability,
-)
-from .services.router_maintenance import create_background_threads
-from .services.router_feedback import process_background_feedback_impl
-from .query_jobs import get_pending_query_jobs_count
 from .services.router_execution import route_and_answer_internal_impl
+from .services.router_facade import (
+    build_internal_route_coro,
+    route_and_answer_with_resilience,
+)
+from .services.router_feedback import process_background_feedback_impl
+from .services.router_maintenance import create_background_threads
 from .services.router_resilience import (
     dep_cache_breaker as _dep_cache_breaker,
+)
+from .services.router_resilience import (
     dep_uq_breaker as _dep_uq_breaker,
+)
+from .services.router_resilience import (
     get_router_redis,
+)
+from .services.router_resilience import (
     is_error_budget_exceeded as _is_error_budget_exceeded_impl,
+)
+from .services.router_resilience import (
+    is_error_budget_exceeded_async as _is_error_budget_exceeded_async_impl,
+)
+from .services.router_resilience import (
     record_dependency_breaker_metrics as _record_dependency_breaker_metrics_impl,
+)
+from .services.router_resilience import (
     record_request_outcome as _record_request_outcome_impl,
+)
+from .services.router_resilience import (
     safe_setting_bool as _safe_setting_bool_impl,
+)
+from .services.router_resilience import (
     safe_setting_float as _safe_setting_float_impl,
+)
+from .services.router_resilience import (
     safe_setting_int as _safe_setting_int_impl,
+)
+from .services.router_services import (
+    build_final_prompt,
+    compute_judge_probability,
+    normalize_modality,
+    parse_meta_cost,
 )
 from .services.router_state import (
     EMABatchQueue as BaseEMABatchQueue,
+)
+from .services.router_state import (
     EMAHistoryCache,
 )
+from .services.router_strategy_weights import (
+    get_dynamic_strategy_weights,
+    get_dynamic_strategy_weights_async,
+)
+from .settings_dynamic import settings, update_db_pool_metrics
 
 # --- Novos Módulos de Inteligência e Precisão ---
 from .utils.pricing import get_model_cost
 from .utils.uncertainty import get_uncertainty_score
-
-from .observability import (
-    ROUTER_MODEL_COST,
-    ROUTER_QUALITY_AVG,
-    ROUTER_COST_SAVINGS,
-    ROUTER_LOCAL_USAGE_RATIO,
-    ROUTER_COST_PER_QUERY,
-    ROUTER_HISTORY_ENTRIES,
-    FEEDBACK_PROCESSING_LATENCY,
-    FEEDBACK_BACKLOG_AGE,
-    FEEDBACK_TASK_FAILURES,
-    BACKGROUND_JUDGE_SKIPPED,
-    EMA_BATCH_QUEUE_SIZE,
-    EMA_BATCH_FLUSHES,
-    EMA_LOG_CLEANUP_ROWS,
-    DEPENDENCY_CIRCUIT_STATE,
-    DEPENDENCY_FAILURES,
-    ROUTER_ROUTE_COST,
-    ROUTER_STAGE_LATENCY,
-    ROUTER_ATTEMPTS_PER_QUERY,
-    ROUTER_RETRY_TOTAL,
-    ROUTER_RESPONSE_EMPTY,
-    ROUTER_FALLBACK_SKIPPED,
-    ROUTER_SYNC_DEADLINE_EXCEEDED,
-    FALLBACK_USED,
-)
-from .settings_dynamic import update_db_pool_metrics
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -183,6 +209,11 @@ def _is_error_budget_exceeded() -> bool:
 
 This helper encapsulates one focused step used by the surrounding workflow."""
     return _is_error_budget_exceeded_impl(settings_getter=_settings_getter)
+
+
+async def _is_error_budget_exceeded_async() -> bool:
+    """Async error-budget check for request routing."""
+    return await _is_error_budget_exceeded_async_impl(settings_getter=_settings_getter)
 
 # ============================================================
 # EMA History com TTL e LRU Eviction
@@ -300,30 +331,6 @@ def _update_db_pool_metrics() -> None:
 
 
 # ============================================================
-# 🧠 RECUPERAÇÃO DINÂMICA DE PESOS (NSGA-II)
-# ============================================================
-
-def get_dynamic_strategy_weights(modality: str) -> Dict[str, float]:
-    """
-    Recupera os pesos da estratégia (Objetivos) diretamente do Settings Dinâmico.
-    """
-    def _safe_attr(name: str, default: float) -> float:
-        """Execute the safe attr routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-        try:
-            return float(getattr(settings, name))
-        except Exception:
-            return float(default)
-
-    return {
-        "w_quality": _safe_attr("NSGA_W_QUALITY", 1.0),
-        "w_latency": _safe_attr("NSGA_W_LATENCY", 0.5),
-        "w_cost": _safe_attr("NSGA_W_COST", 100.0),
-    }
-
-
-# ============================================================
 # EMA & Manutenção (Background)
 # ============================================================
 
@@ -436,49 +443,11 @@ async def _route_and_answer_internal(
     rag_modality: str = "text",
     use_cache: bool = True,
     runtime_hints: Dict[str, Any] | None = None,
+    tenant_id: str | None = None,
 ) -> Dict[str, Any]:
-    """
-    Internal implementation of route_and_answer.
-    Separated to allow wrapping with timeout.
-    """
+    """Internal implementation of route_and_answer."""
     return await route_and_answer_internal_impl(
-        deps={
-            "asyncio": asyncio,
-            "settings": settings,
-            "normalize_modality": normalize_modality,
-            "_dep_cache_breaker": _dep_cache_breaker,
-            "_dep_uq_breaker": _dep_uq_breaker,
-            "check_cache": check_cache,
-            "_record_dependency_breaker_metrics": _record_dependency_breaker_metrics,
-            "DEPENDENCY_FAILURES": DEPENDENCY_FAILURES,
-            "logger": logger,
-            "ROUTER_ROUTE_COST": ROUTER_ROUTE_COST,
-            "ROUTER_STAGE_LATENCY": ROUTER_STAGE_LATENCY,
-            "ROUTER_ATTEMPTS_PER_QUERY": ROUTER_ATTEMPTS_PER_QUERY,
-            "ROUTER_RETRY_TOTAL": ROUTER_RETRY_TOTAL,
-            "ROUTER_RESPONSE_EMPTY": ROUTER_RESPONSE_EMPTY,
-            "ROUTER_FALLBACK_SKIPPED": ROUTER_FALLBACK_SKIPPED,
-            "FALLBACK_USED": FALLBACK_USED,
-            "get_uncertainty_score": get_uncertainty_score,
-            "BLOCKED_PREFIXES": BLOCKED_PREFIXES,
-            "_is_error_budget_exceeded": _is_error_budget_exceeded,
-            "get_dynamic_strategy_weights": get_dynamic_strategy_weights,
-            "choose_top2_models": choose_top2_models,
-            "select_model": select_model,
-            "apply_ollama_performance_preferences": apply_ollama_performance_preferences,
-            "_ensure_ollama_model": _ensure_ollama_model,
-            "is_ollama_model_verified": is_ollama_model_verified,
-            "build_augmented_prompt": build_augmented_prompt,
-            "build_retrieval_bundle": build_retrieval_bundle,
-            "build_final_prompt": build_final_prompt,
-            "_safe_setting_bool": _safe_setting_bool,
-            "_safe_setting_int": _safe_setting_int,
-            "call_model": call_model,
-            "execute_with_fallback": execute_with_fallback,
-            "ProviderCallError": ProviderCallError,
-            "parse_meta_cost": parse_meta_cost,
-            "get_model_cost": get_model_cost,
-        },
+        deps=_build_route_deps(),
         query=query,
         system_prompt=system_prompt,
         use_rag=use_rag,
@@ -489,7 +458,53 @@ async def _route_and_answer_internal(
         rag_modality=rag_modality,
         use_cache=use_cache,
         runtime_hints=runtime_hints,
+        tenant_id=tenant_id,
     )
+
+
+def _build_route_deps() -> Dict[str, Any]:
+    """Shared dependency map for router execution."""
+    return {
+        "asyncio": asyncio,
+        "settings": settings,
+        "normalize_modality": normalize_modality,
+        "_dep_cache_breaker": _dep_cache_breaker,
+        "_dep_uq_breaker": _dep_uq_breaker,
+        "check_cache": check_cache,
+        "_record_dependency_breaker_metrics": _record_dependency_breaker_metrics,
+        "DEPENDENCY_FAILURES": DEPENDENCY_FAILURES,
+        "logger": logger,
+        "ROUTER_ROUTE_COST": ROUTER_ROUTE_COST,
+        "ROUTER_STAGE_LATENCY": ROUTER_STAGE_LATENCY,
+        "ROUTER_ATTEMPTS_PER_QUERY": ROUTER_ATTEMPTS_PER_QUERY,
+        "ROUTER_RETRY_TOTAL": ROUTER_RETRY_TOTAL,
+        "ROUTER_RESPONSE_EMPTY": ROUTER_RESPONSE_EMPTY,
+        "ROUTER_FALLBACK_SKIPPED": ROUTER_FALLBACK_SKIPPED,
+        "FALLBACK_USED": FALLBACK_USED,
+        "get_uncertainty_score": get_uncertainty_score,
+        "BLOCKED_PREFIXES": BLOCKED_PREFIXES,
+        "_is_error_budget_exceeded": _is_error_budget_exceeded,
+        "_is_error_budget_exceeded_async": _is_error_budget_exceeded_async,
+        "get_dynamic_strategy_weights": get_dynamic_strategy_weights,
+        "get_dynamic_strategy_weights_async": get_dynamic_strategy_weights_async,
+        "choose_top2_models": choose_top2_models,
+        "select_model": select_model,
+        "select_model_async": select_model_async,
+        "apply_ollama_performance_preferences": apply_ollama_performance_preferences,
+        "_ensure_ollama_model": _ensure_ollama_model,
+        "is_ollama_model_verified": is_ollama_model_verified,
+        "build_augmented_prompt": build_augmented_prompt,
+        "build_retrieval_bundle": build_retrieval_bundle,
+        "build_final_prompt": build_final_prompt,
+        "_safe_setting_bool": _safe_setting_bool,
+        "_safe_setting_int": _safe_setting_int,
+        "call_model": call_model,
+        "execute_with_fallback": execute_with_fallback,
+        "ProviderCallError": ProviderCallError,
+        "parse_meta_cost": parse_meta_cost,
+        "get_model_cost": get_model_cost,
+        "maybe_pick_openrouter_exploration": maybe_pick_exploration_model,
+    }
 
 
 async def route_and_answer(
@@ -505,78 +520,44 @@ async def route_and_answer(
     timeout_seconds: int | None = None,
     deduplicate: bool = True,
     runtime_hints: Dict[str, Any] | None = None,
+    tenant_id: str | None = None,
+    tools: list | None = None,
+    tool_choice: Any = None,
+    messages: list | None = None,
 ) -> Dict[str, Any]:
-    """Execute the route and answer routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-    # Calculate effective timeout
-    default_timeout = _safe_setting_int("REQUEST_TIMEOUT_SECONDS", 120)
-    effective_timeout = timeout_seconds or default_timeout
-    effective_runtime_hints = dict(runtime_hints or {})
-    effective_runtime_hints["request_deadline_ts"] = time.monotonic() + float(effective_timeout)
-
-    async def _execute_request():
-        """Inner function for request execution."""
-        return await _route_and_answer_internal(
-            query=query,
-            system_prompt=system_prompt,
-            use_rag=use_rag,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            modality=modality,
-            image_b64=image_b64,
-            rag_modality=rag_modality,
-            use_cache=use_cache,
-            runtime_hints=effective_runtime_hints,
-        )
-
-    try:
-        max_retries = _safe_setting_int("REQUEST_MAX_RETRIES", 1)
-        # Check if deduplication is enabled
-        dedup_enabled = should_enable_dedup(settings.get, deduplicate)
-
-        last_exc: Optional[Exception] = None
-        for attempt in range(max_retries + 1):
-            try:
-                if dedup_enabled:
-                    deduplicator = get_request_deduplicator()
-                    result = await asyncio.wait_for(
-                        deduplicator.deduplicate(
-                            query=query,
-                            model="auto",
-                            execute_fn=_execute_request,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            system_prompt=system_prompt,
-                        ),
-                        timeout=effective_timeout,
-                    )
-                else:
-                    result = await asyncio.wait_for(_execute_request(), timeout=effective_timeout)
-
-                _record_request_outcome(success=True)
-                return result
-            except asyncio.TimeoutError:
-                _record_request_outcome(success=False)
-                try:
-                    ROUTER_SYNC_DEADLINE_EXCEEDED.labels(
-                        workload_class=str(effective_runtime_hints.get("workload_class", "unknown"))
-                    ).inc()
-                except Exception:
-                    pass
-                logger.error(f"[router] Request timeout after {effective_timeout}s for query: {query[:60]}...")
-                raise
-            except Exception as e:
-                last_exc = e
-                _record_request_outcome(success=False)
-                if attempt >= max_retries:
-                    raise
-                await asyncio.sleep(min(1.5, 0.25 * (2 ** attempt)))
-
-        if last_exc:
-            raise last_exc
-    except asyncio.TimeoutError:
-        raise
+    """Execute the route and answer routine with retry, dedup, and timeout handling."""
+    # Tools/multi-turn desabilitam a deduplicação: requisições com o mesmo texto
+    # mas tools/resultados diferentes não devem colidir.
+    if tools or messages:
+        deduplicate = False
+    internal_coro = build_internal_route_coro(
+        deps=_build_route_deps(),
+        query=query,
+        system_prompt=system_prompt,
+        use_rag=use_rag,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        modality=modality,
+        image_b64=image_b64,
+        rag_modality=rag_modality,
+        use_cache=use_cache,
+        tenant_id=tenant_id,
+        tools=tools,
+        tool_choice=tool_choice,
+        messages=messages,
+    )
+    return await route_and_answer_with_resilience(
+        settings=settings,
+        deps=_build_route_deps(),
+        internal_coro_factory=internal_coro,
+        query=query,
+        timeout_seconds=timeout_seconds,
+        runtime_hints=runtime_hints,
+        deduplicate=deduplicate,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system_prompt=system_prompt,
+    )
 
 
 # ============================================================
@@ -626,6 +607,11 @@ async def process_background_feedback(
             "BACKGROUND_JUDGE_SKIPPED": BACKGROUND_JUDGE_SKIPPED,
             "should_throttle_background_judge": should_throttle_background_judge,
             "get_pending_query_jobs_count": get_pending_query_jobs_count,
+            "record_openrouter_exploration": record_exploration_outcome,
+            "maybe_run_shadow_comparison": maybe_run_shadow_comparison,
+            "call_model": call_model,
+            "parse_meta_cost": parse_meta_cost,
+            "get_model_cost": get_model_cost,
         },
         state={"EMA_HISTORY": EMA_HISTORY},
         query=query,

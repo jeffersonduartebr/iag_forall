@@ -4,8 +4,9 @@
 Tests for user feedback processing.
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestFeedbackQualityMapping:
@@ -46,9 +47,9 @@ class TestGetQualityFromFeedback:
     def test_thumbs_up(self):
         """Test getting quality from thumbs up feedback."""
         from app.user_feedback import (
-            get_quality_from_feedback,
-            UserFeedbackRequest,
             FeedbackType,
+            UserFeedbackRequest,
+            get_quality_from_feedback,
         )
 
         request = UserFeedbackRequest(
@@ -62,9 +63,9 @@ class TestGetQualityFromFeedback:
     def test_thumbs_down(self):
         """Test getting quality from thumbs down feedback."""
         from app.user_feedback import (
-            get_quality_from_feedback,
-            UserFeedbackRequest,
             FeedbackType,
+            UserFeedbackRequest,
+            get_quality_from_feedback,
         )
 
         request = UserFeedbackRequest(
@@ -78,9 +79,9 @@ class TestGetQualityFromFeedback:
     def test_rating(self):
         """Test getting quality from rating feedback."""
         from app.user_feedback import (
-            get_quality_from_feedback,
-            UserFeedbackRequest,
             FeedbackType,
+            UserFeedbackRequest,
+            get_quality_from_feedback,
         )
 
         request = UserFeedbackRequest(
@@ -95,9 +96,9 @@ class TestGetQualityFromFeedback:
     def test_rating_missing_value(self):
         """Test that rating without value raises error."""
         from app.user_feedback import (
-            get_quality_from_feedback,
-            UserFeedbackRequest,
             FeedbackType,
+            UserFeedbackRequest,
+            get_quality_from_feedback,
         )
 
         request = UserFeedbackRequest(
@@ -112,9 +113,9 @@ class TestGetQualityFromFeedback:
     def test_explicit_quality(self):
         """Test getting quality from explicit quality feedback."""
         from app.user_feedback import (
-            get_quality_from_feedback,
-            UserFeedbackRequest,
             FeedbackType,
+            UserFeedbackRequest,
+            get_quality_from_feedback,
         )
 
         request = UserFeedbackRequest(
@@ -171,10 +172,10 @@ class TestProcessFeedback:
     def test_process_feedback_returns_result(self):
         """Test that process_feedback returns ProcessedFeedback."""
         from app.user_feedback import (
-            process_feedback,
-            UserFeedbackRequest,
             FeedbackType,
             ProcessedFeedback,
+            UserFeedbackRequest,
+            process_feedback,
         )
 
         with patch("app.user_feedback.settings") as mock_settings:
@@ -201,9 +202,9 @@ class TestProcessFeedback:
     def test_process_feedback_updates_bandit(self):
         """Test that process_feedback calls bandit_update."""
         from app.user_feedback import (
-            process_feedback,
-            UserFeedbackRequest,
             FeedbackType,
+            UserFeedbackRequest,
+            process_feedback,
         )
 
         with patch("app.user_feedback.settings") as mock_settings:
@@ -230,7 +231,7 @@ class TestUserFeedbackRequest:
 
     def test_valid_thumbs_up(self):
         """Test valid thumbs up request."""
-        from app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import FeedbackType, UserFeedbackRequest
 
         request = UserFeedbackRequest(
             query="test",
@@ -242,7 +243,7 @@ class TestUserFeedbackRequest:
 
     def test_valid_rating(self):
         """Test valid rating request."""
-        from app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import FeedbackType, UserFeedbackRequest
 
         request = UserFeedbackRequest(
             query="test",
@@ -255,7 +256,7 @@ class TestUserFeedbackRequest:
 
     def test_rating_out_of_range(self):
         """Test that rating must be 1-5."""
-        from app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import FeedbackType, UserFeedbackRequest
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
@@ -268,7 +269,7 @@ class TestUserFeedbackRequest:
 
     def test_quality_out_of_range(self):
         """Test that quality must be 0-10."""
-        from app.user_feedback import UserFeedbackRequest, FeedbackType
+        from app.user_feedback import FeedbackType, UserFeedbackRequest
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):

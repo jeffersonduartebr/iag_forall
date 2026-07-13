@@ -4,9 +4,10 @@
 Tests for query distribution drift detection.
 """
 
-import pytest
+from unittest.mock import patch
+
 import numpy as np
-from unittest.mock import MagicMock, patch
+import pytest
 
 
 class TestCosineDistance:
@@ -153,7 +154,7 @@ class TestGetDriftDetector:
                 mock_settings.DRIFT_WINDOW_SIZE = 100
                 mock_settings.DRIFT_THRESHOLD = 0.15
 
-                from app.drift_detector import get_drift_detector, QueryDriftDetector
+                from app.drift_detector import QueryDriftDetector, get_drift_detector
                 QueryDriftDetector._instance = None
 
                 detector1 = get_drift_detector()

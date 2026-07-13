@@ -9,15 +9,16 @@ Tests for correlation.py module including:
 - Context manager functionality
 """
 
-import pytest
 import asyncio
+
+import pytest
 from app.correlation import (
-    generate_correlation_id,
-    set_correlation_id,
-    get_correlation_id,
-    clear_correlation_id,
-    CorrelationIdContext,
     CORRELATION_ID_HEADER,
+    CorrelationIdContext,
+    clear_correlation_id,
+    generate_correlation_id,
+    get_correlation_id,
+    set_correlation_id,
 )
 
 
@@ -119,13 +120,13 @@ class TestCorrelationIdContext:
         """Nested context managers should work correctly."""
         clear_correlation_id()
 
-        with CorrelationIdContext("level-1") as l1:
+        with CorrelationIdContext("level-1"):
             assert get_correlation_id() == "level-1"
 
-            with CorrelationIdContext("level-2") as l2:
+            with CorrelationIdContext("level-2"):
                 assert get_correlation_id() == "level-2"
 
-                with CorrelationIdContext("level-3") as l3:
+                with CorrelationIdContext("level-3"):
                     assert get_correlation_id() == "level-3"
 
                 assert get_correlation_id() == "level-2"

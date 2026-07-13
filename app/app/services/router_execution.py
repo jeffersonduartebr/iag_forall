@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
-from app.model_registry import filter_configured_model_names
+from app.model_registry import filter_configured_model_names, filter_tool_capable_model_names
 
 
 def _deadline_remaining_seconds(runtime_hints: Dict[str, Any] | None) -> float:
@@ -84,9 +84,18 @@ async def route_and_answer_internal_impl(
     rag_modality: str,
     use_cache: bool,
     runtime_hints: Dict[str, Any] | None = None,
+    tenant_id: str | None = None,
+    tools: list | None = None,
+    tool_choice: Any = None,
+    messages: list | None = None,
 ) -> Dict[str, Any]:
     """Execute the synchronous routing path using injected dependencies."""
     start_time = time.time()
+    tools_requested = bool(tools)
+    # Turnos de tool (com tools declaradas ou histórico multi-turn) não são
+    # cacheáveis: a resposta depende de resultados de tool específicos do turno.
+    if tools_requested or messages:
+        use_cache = False
 
     def _observe_stage(stage: str, started_at: float) -> None:
         try:
@@ -109,9 +118,12 @@ async def route_and_answer_internal_impl(
                         query,
                         modality=modality,
                         image_b64=image_b64,
+                        tenant_id=tenant_id,
                     )
                 except Exception:
-                    cached = await deps["check_cache"](query, modality=modality, image_b64=image_b64)
+                    cached = await deps["check_cache"](
+                        query, modality=modality, image_b64=image_b64, tenant_id=tenant_id
+                    )
             deps["_record_dependency_breaker_metrics"]()
         except Exception:
             try:
@@ -188,31 +200,128 @@ async def route_and_answer_internal_impl(
         except Exception as exc:
             deps["logger"].warning(f"[router] Failed to apply Ollama performance preferences: {exc}")
 
+    if (runtime_hints or {}).get("prefer_cloud_models"):
+        cloud_models = [model for model in valid_models if not str(model).startswith("ollama/")]
+        local_models = [model for model in valid_models if str(model).startswith("ollama/")]
+        if cloud_models:
+            valid_models = cloud_models + local_models
+
+    if not valid_models:
+        cloud_fallback = [
+            m
+            for m in (deps["settings"].CANDIDATE_MODELS_LIST or [])
+            if isinstance(m, str) and m.startswith(("openrouter/", "openai/", "anthropic/", "gemini/"))
+        ]
+        valid_models = filter_configured_model_names(cloud_fallback)
     if not valid_models:
         valid_models = ["ollama/phi4:latest"]
-    elif deps["_is_error_budget_exceeded"]():
-        local_models = [model for model in valid_models if model.startswith("ollama/")]
-        if local_models:
-            valid_models = local_models
-            deps["logger"].warning("[router] Error budget exceeded; forcing local-only candidate set")
+    else:
+        budget_check_async = deps.get("_is_error_budget_exceeded_async")
+        if budget_check_async is not None:
+            exceeded = await budget_check_async()
+        else:
+            exceeded = deps["_is_error_budget_exceeded"]()
+        if exceeded:
+            local_models = [model for model in valid_models if model.startswith("ollama/")]
+            if local_models:
+                valid_models = local_models
+                deps["logger"].warning("[router] Error budget exceeded; forcing local-only candidate set")
 
-    current_weights = deps["get_dynamic_strategy_weights"](modality)
-    top2 = deps["choose_top2_models"](
-        candidates=valid_models,
-        weights=current_weights,
-        query_text=query,
-        modality=modality,
-        uncertainty_score=uncertainty_score,
+    # Roteamento estrito por capacidade: se o cliente pediu tools, restringe os
+    # candidatos aos modelos com suporte a function calling. Se nenhum candidato
+    # configurado suportar, falha com erro claro (mapeado para HTTP 422).
+    if tools_requested:
+        configured_tool_models = [
+            m
+            for m in (getattr(deps["settings"], "CANDIDATE_TOOL_MODELS_LIST", None) or [])
+            if isinstance(m, str) and not any(m.startswith(prefix) for prefix in deps["BLOCKED_PREFIXES"])
+        ]
+        if configured_tool_models:
+            tool_candidates = filter_configured_model_names(configured_tool_models)
+        else:
+            tool_candidates = filter_tool_capable_model_names(valid_models)
+        if not tool_candidates:
+            raise deps["ProviderCallError"](
+                model="none",
+                message=(
+                    "Nenhum modelo com suporte a tools está configurado. "
+                    "Defina CANDIDATE_TOOL_MODELS_LIST ou inclua um modelo com function calling."
+                ),
+                category="no_tool_model",
+                retryable=False,
+            )
+        valid_models = tool_candidates
+
+    exploration_mode = False
+    exploration_info: Dict[str, Any] = {}
+    # Exploração escolhe modelos fora da lista de candidatos, que podem não
+    # suportar tools; desabilitada quando há tools na requisição.
+    pick_exploration = deps.get("maybe_pick_openrouter_exploration") if not tools_requested else None
+    if pick_exploration is not None:
+        try:
+            exploration_result = await pick_exploration(
+                known_models=set(valid_models),
+                modality=modality,
+                settings=deps["settings"],
+                uncertainty_score=uncertainty_score,
+            )
+            if exploration_result:
+                chosen, exploration_info = exploration_result
+                exploration_mode = True
+                try:
+                    current_weights = await deps["get_dynamic_strategy_weights_async"](modality)
+                    top2_incumbent = await deps["asyncio"].to_thread(
+                        deps["choose_top2_models"],
+                        valid_models,
+                        current_weights,
+                        query,
+                        modality,
+                        uncertainty_score,
+                    )
+                    select_async = deps.get("select_model_async")
+                    if select_async is not None:
+                        incumbent = await select_async(top2_incumbent, query, modality)
+                    else:
+                        incumbent = await deps["asyncio"].to_thread(
+                            deps["select_model"], top2_incumbent, query, modality
+                        )
+                    exploration_info["incumbent_model"] = incumbent
+                except Exception as exc:
+                    deps["logger"].debug("[router] incumbent pick for shadow failed: %s", exc)
+                deps["logger"].info("[router] OpenRouter exploration: %s", chosen)
+        except Exception as exc:
+            deps["logger"].warning("[router] OpenRouter exploration pick failed: %s", exc)
+
+    if not exploration_mode:
+        current_weights = await deps["get_dynamic_strategy_weights_async"](modality)
+        top2 = await deps["asyncio"].to_thread(
+            deps["choose_top2_models"],
+            valid_models,
+            current_weights,
+            query,
+            modality,
+            uncertainty_score,
+        )
+        select_async = deps.get("select_model_async")
+        if select_async is not None:
+            chosen = await select_async(top2, query, modality)
+        else:
+            chosen = await deps["asyncio"].to_thread(deps["select_model"], top2, query, modality)
+    else:
+        top2 = [chosen]
+
+    deps["logger"].info(
+        f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | exploration={exploration_mode}"
     )
-    chosen = deps["select_model"](top2, query, modality)
-    deps["logger"].info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | W: {current_weights}")
 
     if chosen.startswith("ollama/") and not deps["is_ollama_model_verified"](chosen.replace("ollama/", "")):
         deps["asyncio"].create_task(
             deps["asyncio"].to_thread(deps["_ensure_ollama_model"], chosen.replace("ollama/", ""))
         )
 
-    should_skip_rag = _should_bypass_rag(
+    # Follow-up multi-turn (messages) é a fonte da verdade: não há "query" única
+    # para aumentar, então o RAG é ignorado (grounding só se aplica ao 1º turno).
+    should_skip_rag = bool(messages) or _should_bypass_rag(
         deps=deps,
         query=query,
         modality=modality,
@@ -324,6 +433,10 @@ async def route_and_answer_internal_impl(
                 max_tokens=max_tokens,
                 timeout_seconds=_effective_provider_timeout_seconds(runtime_hints),
                 workload_class=(runtime_hints or {}).get("workload_class"),
+                tools=tools,
+                tool_choice=tool_choice,
+                messages=messages,
+                system_prompt=system_prompt,
             )
 
         provider_started_at = time.time()
@@ -394,6 +507,10 @@ async def route_and_answer_internal_impl(
             max_tokens=max_tokens,
             timeout_seconds=_effective_provider_timeout_seconds(runtime_hints),
             workload_class=(runtime_hints or {}).get("workload_class"),
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+            system_prompt=system_prompt,
         )
         _observe_stage("provider_call", provider_started_at)
         retry_count = 0
@@ -424,7 +541,10 @@ async def route_and_answer_internal_impl(
         pass
 
     answer_text = out if isinstance(out, str) else str(out)
-    if not answer_text.strip():
+    tool_calls = meta.get("tool_calls") if isinstance(meta, dict) else None
+    finish_reason = meta.get("finish_reason") if isinstance(meta, dict) else None
+    # Um turno de tool call legitimamente tem answer vazio — não conta como resposta vazia.
+    if not answer_text.strip() and not tool_calls:
         empty_reason = "thinking_only" if (meta_safe.get("reasoning") or meta.get("reasoning")) else "empty_content"
         try:
             deps["ROUTER_RESPONSE_EMPTY"].labels(model=chosen, reason=empty_reason).inc()
@@ -433,6 +553,8 @@ async def route_and_answer_internal_impl(
 
     return {
         "answer": answer_text,
+        "tool_calls": tool_calls,
+        "finish_reason": finish_reason,
         "model": chosen,
         "modality": modality,
         "image_output_b64": meta_safe.get("image_output_b64"),
@@ -452,6 +574,8 @@ async def route_and_answer_internal_impl(
             "knowledge_version": retrieval_bundle.get("knowledge_version"),
             "retrieval_mode": retrieval_bundle.get("retrieval_mode"),
             "retrieval_skipped_reason": retrieval_bundle.get("retrieval_skipped_reason"),
+            "openrouter_exploration": exploration_mode,
+            "exploration_info": exploration_info,
         },
         "route": {
             "chosen_model": chosen,
@@ -463,7 +587,11 @@ async def route_and_answer_internal_impl(
                 "uncertainty": uncertainty_score,
             },
             "pareto_front": [],
-            "explanation": f"Selected {chosen} (UQ={uncertainty_score:.2f})",
+            "explanation": (
+                f"OpenRouter exploration: {chosen}"
+                if exploration_mode
+                else f"Selected {chosen} (UQ={uncertainty_score:.2f})"
+            ),
             "fallback": {
                 "used": fallback_used,
                 "models_tried": fallback_models_tried,

@@ -15,10 +15,11 @@ Suporta:
 """
 
 from __future__ import annotations
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
-from enum import Enum
 
+from enum import Enum
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ============================================================
 # Enums for Validation
@@ -82,6 +83,13 @@ class QualitySource(str, Enum):
 # ============================================================
 # 1. Entrada (Request)
 # ============================================================
+
+class WorkloadHints(BaseModel):
+    """Optional client hints; complexity is always detected at runtime."""
+    theme: Optional[str] = Field(None, max_length=128, description="Benchmark or domain theme for telemetry.")
+    benchmark_id: Optional[str] = Field(None, max_length=128, description="Catalog entry id when known.")
+    expected_tokens: Optional[int] = Field(None, ge=32, le=32000, description="Desired response length floor.")
+
 
 class QueryRequest(BaseModel):
     """
@@ -184,6 +192,29 @@ class QueryRequest(BaseModel):
         max_length=256,
         description="Chave estável de usuário para assignment consistente em experimento.",
     )
+    webhook_url: Optional[str] = Field(
+        None,
+        max_length=2048,
+        description="URL para notificação HTTP quando job assíncrono (202) for concluído.",
+    )
+    workload_hints: Optional[WorkloadHints] = Field(
+        None,
+        description="Optional domain hints; routing complexity is inferred at runtime.",
+    )
+
+    # --- Tool / function calling (formato OpenAI, pass-through) ---
+    tools: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Lista de tools no formato OpenAI: [{type:function, function:{name,description,parameters}}].",
+    )
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = Field(
+        None,
+        description="Controle de tools: 'auto' | 'none' | 'required' | {type:function, function:{name}}.",
+    )
+    messages: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Histórico multi-turn (formato OpenAI) para follow-up com resultados de tools (role:tool).",
+    )
 
     @field_validator("query")
     @classmethod
@@ -225,24 +256,24 @@ class CandidateResult(BaseModel):
     """
     model: str
     modality: str = "text"
-    
+
     # Saídas
     output: str = ""
     image_output_b64: Optional[str] = None
-    
+
     # Métricas de Execução
     latency_s: float = 0.0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     estimated_cost_usd: float = 0.0
-    
+
     # Avaliação (Quality)
     judge_scores: List[JudgeScore] = []
     quality_score: float = 0.0
-    
+
     # Vetores (Opcional - geralmente omitido na API pública para economizar banda, mas útil para debug)
     embedding_vectors: Optional[Dict[str, List[float]]] = None
-    
+
     # Dados Brutos do Provider (flexível para aceitar Dict ou String JSON)
     payload: Optional[Any] = None
 
@@ -276,16 +307,16 @@ class RouteDecision(BaseModel):
     chosen_model: str
     modality_selected: str = "text"
     is_multimodal_route: bool = False
-    
+
     # Objetivos otimizados (NSGA-II / Bandit)
     objectives: Dict[str, float] = Field(
-        default_factory=dict, 
+        default_factory=dict,
         description="Métricas consideradas: cost, latency, quality, reward."
     )
-    
+
     # Fronteira de Pareto (para visualização de trade-offs)
     pareto_front: List[Dict[str, Any]] = []
-    
+
     explanation: str = ""
 
 
@@ -333,6 +364,7 @@ class ResponseDiagnostics(BaseModel):
     perf_mode_enabled: Optional[bool] = None
     retrieval_mode: Optional[str] = None
     workload_class: Optional[str] = None
+    detected_complexity: Optional[str] = None
     raw_payload: Optional[Any] = None
 
 
@@ -388,6 +420,14 @@ class QueryResponse(BaseModel):
     provenance: ResponseProvenance = Field(
         default_factory=ResponseProvenance,
         description="Grounding and provenance metadata for the answer.",
+    )
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Tool/function calls solicitadas pelo modelo (formato OpenAI). O cliente executa e reenvia.",
+    )
+    finish_reason: Optional[str] = Field(
+        None,
+        description="Motivo de término: 'stop' | 'tool_calls' | 'length' | ...",
     )
     diagnostics: Optional[ResponseDiagnostics] = Field(
         None,
@@ -456,6 +496,67 @@ class ResponseReviewUpdateRequest(BaseModel):
     corrected_answer: Optional[str] = None
 
 
+class ExpertProfileUpdateRequest(BaseModel):
+    """Expert reviewer profile with areas of expertise (benchmark themes)."""
+    display_name: Optional[str] = Field(None, max_length=255)
+    theme_ids: List[str] = Field(default_factory=list, description="Benchmark theme ids the expert can review.")
+    credentials_note: Optional[str] = Field(None, max_length=512)
+
+
+class ExpertLoginRequest(BaseModel):
+    """Expert portal login with email and password."""
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class ExpertAccountCreateRequest(BaseModel):
+    """Admin registration payload for a new human expert."""
+    display_name: str = Field(..., min_length=2, max_length=255)
+    email: str = Field(..., min_length=5, max_length=255)
+    phone: Optional[str] = Field(None, max_length=32)
+    password: str = Field(..., min_length=8, max_length=256)
+
+
+class ExpertAccountUpdateRequest(BaseModel):
+    """Admin update payload for an existing expert account."""
+    display_name: Optional[str] = Field(None, min_length=2, max_length=255)
+    phone: Optional[str] = Field(None, max_length=32)
+    password: Optional[str] = Field(None, min_length=8, max_length=256)
+    enabled: Optional[bool] = None
+
+
+class ExpertRubricScores(BaseModel):
+    """Pedagogical rubric dimensions scored 0-10 by human experts."""
+    factual_correctness: float = Field(..., ge=0.0, le=10.0)
+    task_completion: float = Field(..., ge=0.0, le=10.0)
+    clarity_structure: float = Field(..., ge=0.0, le=10.0)
+    scaffolding: float = Field(..., ge=0.0, le=10.0)
+    audience_fit: float = Field(..., ge=0.0, le=10.0)
+    misconception_handling: float = Field(..., ge=0.0, le=10.0)
+
+
+class ExpertPreviewRequest(BaseModel):
+    """Run one benchmark query through the router for expert review."""
+    query: str = Field(..., min_length=1)
+    theme: Optional[str] = Field(None, max_length=128)
+    benchmark_id: Optional[str] = Field(None, max_length=128)
+    frozen_policy: bool = False
+
+
+class ExpertAssessmentSubmitRequest(BaseModel):
+    """Human expert analysis for one benchmark query + system answer."""
+    benchmark_id: str = Field(..., min_length=1, max_length=128)
+    theme: str = Field(..., min_length=1, max_length=128)
+    query_text: str = Field(..., min_length=1)
+    answer: str = Field(..., min_length=1)
+    reference: Optional[str] = None
+    eval_run_id: Optional[str] = Field(None, max_length=64)
+    judge_quality: Optional[float] = Field(None, ge=0.0, le=10.0)
+    quality_score: float = Field(..., ge=0.0, le=10.0)
+    rubric: ExpertRubricScores
+    notes: Optional[str] = None
+
+
 class EvalRunCreateRequest(BaseModel):
     """Represent the creation payload for one evaluation run."""
     prompts: List[str] = Field(default_factory=list)
@@ -464,6 +565,25 @@ class EvalRunCreateRequest(BaseModel):
     tenant_id: Optional[str] = Field(None, max_length=128)
     notes: str = ""
     golden_set_id: Optional[str] = Field(None, max_length=128)
+    benchmark_theme: Optional[str] = Field(None, max_length=128)
+    benchmark_themes: List[str] = Field(default_factory=list)
+    benchmark_sample_size: Optional[int] = Field(None, ge=1, le=500)
+    benchmark_tags: List[str] = Field(default_factory=list)
+    benchmark_difficulty: Optional[str] = Field(
+        None,
+        max_length=32,
+        description="Catalog sampling filter only; routing detects complexity at runtime.",
+    )
+    benchmark_seed: Optional[int] = Field(None, description="Deterministic catalog sample seed.")
+    benchmark_split: Optional[str] = Field(
+        None,
+        max_length=16,
+        description="Catalog split filter: dev or held_out (primary metrics should use held_out).",
+    )
+    frozen_policy: bool = Field(
+        False,
+        description="Freeze routing weights/exploration during eval for reproducible academic runs.",
+    )
 
 
 class EvalRunExecuteRequest(BaseModel):

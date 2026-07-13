@@ -6,8 +6,19 @@ from __future__ import annotations
 import json
 from typing import Dict, List
 
-
 SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
+    "auth": {
+        "REQUIRE_API_AUTH": "0",
+        "API_KEYS": "",
+        "JWT_SECRET": "",
+        "JWT_ALGORITHM": "HS256",
+        "ENV": "development",
+        "METRICS_TOKEN": "",
+        "TRUSTED_PROXY_IPS": "",
+        "TRUST_HEADER_ROLES": "0",
+        "ENFORCE_TENANT_BINDING": "1",
+        "ROADMAP_AUTO_DDL": "1",
+    },
     "runtime": {
         "MAX_TOKENS_DEFAULT": "2000",
         "ROUTER_SIMPLE_QUERY_MAX_TOKENS": "512",
@@ -18,6 +29,9 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "REQUEST_DEDUP_ENABLED": "1",
         "MAX_CONCURRENT_REQUESTS": "500",
         "BACKPRESSURE_ENABLED": "1",
+        "BACKPRESSURE_REDIS_ENABLED": "0",
+        "REDIS_REQUIRED_IN_PRODUCTION": "1",
+        "REDIS_DEDUP_ENABLED": "1",
         "ADAPTIVE_LIMITER_ENABLED": "1",
         "ADAPTIVE_LIMITER_WINDOW_SECONDS": "15",
         "ADAPTIVE_LIMITER_HYSTERESIS_WINDOWS": "3",
@@ -49,6 +63,9 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "REDIS_PORT": "6379",
         "REDIS_DB": "0",
         "REDIS_PASSWORD": "",
+        "TENANT_RATE_LIMIT_ENABLED": "1",
+        "TENANT_RATE_LIMIT_RPM": "120",
+        "TENANT_RATE_LIMIT_WINDOW_S": "60",
     },
     "embeddings": {
         "EMBED_MODEL": "nomic-embed-text",
@@ -82,6 +99,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "JUDGE_MODELS": "[]",
     },
     "providers": {
+        "OPENROUTER_API_KEY": "",
         "OLLAMA_BASE_URL": "http://ollama:11434",
         "OLLAMA_HOST": "http://ollama:11434",
         "OLLAMA_CONCURRENCY_LIMIT": "5",
@@ -108,6 +126,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "CANDIDATE_MODELS_LIST": "[]",
         "CANDIDATE_VISION_MODELS_LIST": "[]",
         "CANDIDATE_MULTIMODAL_MODELS_LIST": "[]",
+        "CANDIDATE_TOOL_MODELS_LIST": "[]",
         "VLM_OLLAMA_MODELS": json.dumps(
             [
                 "qwen3-vl:8b",
@@ -149,9 +168,33 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "RERANK_MODEL": "cross-encoder/ms-marco-MiniLM-L-6-v2",
         "RERANK_ENABLED": "1",
         "RAG_DATA_DIR": "/app/data",
+        "CHROMA_HOST": "",
+        "CHROMA_PORT": "8000",
+        "CHROMA_PATH": "/data/chroma",
     },
     "routing": {
         "BANDIT_EPSILON": "0.12",
+        "OPENROUTER_EXPLORATION_ENABLED": "0",
+        "OPENROUTER_EXPLORATION_MODE": "balanced",
+        "OPENROUTER_EXPLORATION_RATE": "0.10",
+        "OPENROUTER_EXPLORATION_MAX_PER_DAY": "100",
+        "OPENROUTER_EXPLORATION_MAX_USD_PER_DAY": "3.0",
+        "OPENROUTER_EXPLORATION_MAX_PRICE_PROMPT_1K": "0.01",
+        "OPENROUTER_EXPLORATION_MAX_PRICE_COMPLETION_1K": "0.03",
+        "OPENROUTER_EXPLORATION_PROMOTE_MIN_SAMPLES": "15",
+        "OPENROUTER_EXPLORATION_PROMOTE_MIN_REWARD": "0.72",
+        "OPENROUTER_EXPLORATION_PROMOTE_MAX_LATENCY_S": "30.0",
+        "OPENROUTER_EXPLORATION_PROMOTE_MAX_COST_USD_PER_1K": "0.02",
+        "OPENROUTER_EXPLORATION_PROMOTE_MAX_FAILURE_RATE": "0.20",
+        "OPENROUTER_EXPLORATION_AUTO_PROMOTE_ENABLED": "1",
+        "OPENROUTER_EXPLORATION_ADAPTIVE_RATE_ENABLED": "1",
+        "OPENROUTER_EXPLORATION_POOL_CACHE_TTL_S": "600",
+        "OPENROUTER_EXPLORATION_SHADOW_COMPARE_RATE": "0.05",
+        "OPENROUTER_EXPLORATION_CONSECUTIVE_FAILURE_BLOCK": "3",
+        "OPENROUTER_EXPLORATION_PROVIDER_ALLOWLIST": json.dumps(
+            ["anthropic", "openai", "google", "meta-llama", "mistralai"]
+        ),
+        "OPENROUTER_EXPLORATION_POOL_SIZE": "40",
         "NSGA_W_QUALITY": "1.0",
         "NSGA_W_LATENCY": "0.5",
         "NSGA_W_COST": "100.0",
@@ -229,6 +272,9 @@ REQUIRES_RESTART_KEYS = {
     "IMAGE_EMBEDDING_MODEL",
     "MULTIMODAL_EMBEDDING_MODEL",
     "RAG_DATA_DIR",
+    "CHROMA_HOST",
+    "CHROMA_PORT",
+    "CHROMA_PATH",
 }
 
 SETTING_METADATA: Dict[str, Dict[str, str]] = {

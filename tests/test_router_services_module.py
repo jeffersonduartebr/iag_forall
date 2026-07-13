@@ -2,7 +2,6 @@
 """Tests for shared router service helpers."""
 
 import pytest
-
 from app.services import router_services as rs
 
 

@@ -6,8 +6,8 @@ handling for the corresponding runtime component.
 """
 
 
-import pytest
-from app.bandits import compute_reward, _dynamic_epsilon
+from app.bandits import _dynamic_epsilon, compute_reward
+
 
 def test_compute_reward_logic():
     """Testa se a função de recompensa respeita os limites [0, 1]."""
@@ -26,12 +26,12 @@ def test_dynamic_epsilon():
     # Poucos dados -> Epsilon maior
     stats_empty = {}
     eps_high = _dynamic_epsilon(stats_empty)
-    
+
     # Muitos dados -> Epsilon padrão (menor)
     stats_full = {
         "m1": {"count": 100, "var": 0.01},
         "m2": {"count": 100, "var": 0.01}
     }
     eps_low = _dynamic_epsilon(stats_full)
-    
+
     assert eps_high > eps_low
