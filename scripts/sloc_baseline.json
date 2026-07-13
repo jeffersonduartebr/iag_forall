@@ -7,7 +7,7 @@
   "app/app/openrouter_explorer.py": 855,
   "app/app/providers_async.py": 1560,
   "app/app/reliability.py": 510,
-  "app/app/roadmap_features.py": 1046,
+  "app/app/roadmap_features.py": 805,
   "app/app/router_core.py": 534,
   "app/app/services/query_runtime.py": 714,
   "app/app/services/router_execution.py": 554,

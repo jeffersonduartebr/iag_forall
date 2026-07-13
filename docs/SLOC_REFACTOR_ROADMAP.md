@@ -20,7 +20,7 @@ baixando o teto do arquivo após a redução.
 | Arquivo | SLOC | Estratégia de divisão sugerida |
 |---|---:|---|
 | `app/app/providers_async.py` | 1532 | Pacote `providers/`: `base` (BaseProvider, LLMResponse, factory), `openai`, `anthropic`, `gemini`, `ollama`, `http` (client/retry/circuit breaker/timeout). Reexportar `call_model`, `ProviderFactory`, `LLMResponse` de `providers_async` para não quebrar imports. |
-| `app/app/roadmap_features.py` | 1046 | Submódulos de governança: `governance/budgets.py`, `governance/policies.py`, `governance/rbac.py`, `governance/audit.py`, `governance/reviews.py`. |
+| `app/app/roadmap_features.py` | 805 | ✅ Diretório de especialistas extraído para `roadmap_experts.py` (1046→805, baseline ratcheteado). Próximo: submódulos de governança `governance/budgets.py`, `governance/policies.py`, `governance/rbac.py`, `governance/audit.py`, `governance/reviews.py`. |
 | `app/app/observability.py` | 917 | Separar `metrics_defs` (definições Prometheus) de `logging_setup` (structlog/render) e `helpers`. |
 | `app/app/settings_dynamic.py` | 858 | Extrair grupos de properties (providers, routing, cache/RAG, resiliência) em mixins/módulos por domínio. |
 | `app/app/openrouter_explorer.py` | 856 | Separar seleção/pool, promoção automática, e persistência (stats Redis/DB). |
