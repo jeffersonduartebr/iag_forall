@@ -34,6 +34,7 @@ from ..services.governance_runtime import (
 )
 from ..services.hot_path_runtime import check_input_guardrails_async
 from ..services.query_complexity import apply_complexity_runtime_adjustments, detect_query_complexity
+from ..services.tool_observability import record_tool_turn
 from ..settings_dynamic import settings
 from ..tasks import task_process_feedback
 
@@ -708,6 +709,22 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
             )
         except Exception as exc:
             logger.error(f"[main] Falha ao despachar tarefa Celery: {exc}")
+    else:
+        # Turno de tool: emite métricas e alimenta o bandit com um reward de
+        # boa-formação (item #2), já que os juízes foram pulados acima.
+        try:
+            _msgs = getattr(req, "messages", None)
+            record_tool_turn(
+                chosen_model=chosen_model,
+                tool_calls=result.get("tool_calls") or [],
+                modality=result["modality"],
+                latency_s=result.get("latency_s", 0.0),
+                cost_val=result.get("estimated_cost_usd", result.get("cost_per_1k", 0.0)),
+                query=req.query,
+                conversation_depth=len(_msgs) if isinstance(_msgs, (list, tuple)) else 0,
+            )
+        except Exception as exc:
+            logger.warning(f"[main] Falha ao registrar turno de tool: {exc}")
 
     try:
         record_tenant_usage(
