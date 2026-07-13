@@ -215,12 +215,12 @@ def task_execute_eval_run(
                 benchmark_id = catalog_item.get("id")
                 workload_hints = None
                 if theme or benchmark_id:
-                    workload_hints = WorkloadHints(  # type: ignore[call-arg]  # pydantic: campos opcionais têm default
+                    workload_hints = WorkloadHints(
                         theme=str(theme) if theme else None,
                         benchmark_id=str(benchmark_id) if benchmark_id else None,
                     )
 
-                req = QueryRequest(  # type: ignore[call-arg]  # pydantic: campos opcionais têm default
+                req = QueryRequest(
                     query=prompt_text,
                     modality=req_modality,
                     images=images,

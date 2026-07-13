@@ -124,7 +124,7 @@ def create_eval(
 @router.post("/admin/evals/runs/{run_id}/execute", tags=["Eval"])
 def execute_eval(
     run_id: str,
-    payload: EvalRunExecuteRequest = Body(default=EvalRunExecuteRequest()),  # type: ignore[call-arg]  # pydantic: campos opcionais têm default
+    payload: EvalRunExecuteRequest = Body(default=EvalRunExecuteRequest()),
     x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     x_user_roles: Optional[str] = Header(None),

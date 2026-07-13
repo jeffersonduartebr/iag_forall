@@ -75,7 +75,7 @@ def _messages_to_query(payload: ChatCompletionRequest) -> QueryRequest:
     # `messages` são a fonte da verdade. Garante um valor não-vazio (schema exige).
     query_text = last_user_text or "\n\n".join(user_parts) or "(tool follow-up)"
 
-    return QueryRequest(  # type: ignore[call-arg]  # pydantic: campos opcionais têm default
+    return QueryRequest(
         query=query_text,
         modality="text",
         system_prompt="\n\n".join(system_parts) if system_parts else None,

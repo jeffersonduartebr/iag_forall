@@ -339,8 +339,8 @@ async def preview_system_answer(
 
     hints = None
     if payload.theme or payload.benchmark_id:
-        hints = WorkloadHints(theme=payload.theme, benchmark_id=payload.benchmark_id)  # type: ignore[call-arg]  # pydantic: campos opcionais têm default
-    req = QueryRequest(  # type: ignore[call-arg]  # pydantic: campos opcionais têm default
+        hints = WorkloadHints(theme=payload.theme, benchmark_id=payload.benchmark_id)
+    req = QueryRequest(
         query=payload.query,
         workload_hints=hints,
         use_cache=False,

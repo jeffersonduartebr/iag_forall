@@ -17,7 +17,7 @@ Suporta:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Annotated, Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -86,9 +86,9 @@ class QualitySource(str, Enum):
 
 class WorkloadHints(BaseModel):
     """Optional client hints; complexity is always detected at runtime."""
-    theme: Optional[str] = Field(None, max_length=128, description="Benchmark or domain theme for telemetry.")
-    benchmark_id: Optional[str] = Field(None, max_length=128, description="Catalog entry id when known.")
-    expected_tokens: Optional[int] = Field(None, ge=32, le=32000, description="Desired response length floor.")
+    theme: Annotated[Optional[str], Field(max_length=128, description="Benchmark or domain theme for telemetry.")] = None
+    benchmark_id: Annotated[Optional[str], Field(max_length=128, description="Catalog entry id when known.")] = None
+    expected_tokens: Annotated[Optional[int], Field(ge=32, le=32000, description="Desired response length floor.")] = None
 
 
 class QueryRequest(BaseModel):
@@ -103,118 +103,41 @@ class QueryRequest(BaseModel):
     )
 
     # Controle de Modalidade
-    modality: str = Field(
-        "text",
-        description="Modalidade desejada: text, vision, multimodal."
-    )
+    modality: Annotated[str, Field(description="Modalidade desejada: text, vision, multimodal.")] = "text"
 
     # Imagens (Suporte a lista ou item único para retrocompatibilidade)
-    images: Optional[List[str]] = Field(
-        None,
-        max_length=10,
-        description="Lista de imagens em Base64 (máximo 10)."
-    )
-    image_b64: Optional[str] = Field(
-        None,
-        max_length=10_000_000,  # ~7.5MB base64
-        description="Imagem única em Base64 (Legacy)."
-    )
+    images: Annotated[Optional[List[str]], Field(max_length=10, description="Lista de imagens em Base64 (máximo 10).")] = None
+    image_b64: Annotated[Optional[str], Field(max_length=10_000_000, description="Imagem única em Base64 (Legacy).")] = None  # ~7.5MB base64
 
     # Configurações de RAG
-    enable_rag_for_answer: bool = Field(
-        False,
-        description="Ativar RAG para gerar a resposta."
-    )
-    enable_rag_for_image: bool = Field(
-        False,
-        description="Ativar RAG usando a imagem como query."
-    )
-    rag_modality: str = Field(
-        "text",
-        description="Modalidade de busca no RAG: text, vision, multimodal."
-    )
+    enable_rag_for_answer: Annotated[bool, Field(description="Ativar RAG para gerar a resposta.")] = False
+    enable_rag_for_image: Annotated[bool, Field(description="Ativar RAG usando a imagem como query.")] = False
+    rag_modality: Annotated[str, Field(description="Modalidade de busca no RAG: text, vision, multimodal.")] = "text"
 
     # Parâmetros de Geração (LLM)
-    max_tokens: int = Field(
-        512,
-        ge=1,
-        le=32000,
-        description="Limite de tokens na resposta (1-32000)."
-    )
-    temperature: float = Field(
-        0.5,
-        ge=0.0,
-        le=2.0,
-        description="Criatividade do modelo (0.0 a 2.0)."
-    )
-    system_prompt: Optional[str] = Field(
-        None,
-        max_length=50000,
-        description="Instrução de sistema (System Message)."
-    )
+    max_tokens: Annotated[int, Field(ge=1, le=32000, description="Limite de tokens na resposta (1-32000).")] = 512
+    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Criatividade do modelo (0.0 a 2.0).")] = 0.5
+    system_prompt: Annotated[Optional[str], Field(max_length=50000, description="Instrução de sistema (System Message).")] = None
 
     # Controle de Cache
-    use_cache: bool = Field(
-        True,
-        description="Se False, força o processamento ignorando o cache semântico."
-    )
+    use_cache: Annotated[bool, Field(description="Se False, força o processamento ignorando o cache semântico.")] = True
 
     # Request timeout (optional override)
-    timeout_seconds: Optional[int] = Field(
-        None,
-        ge=5,
-        le=600,
-        description="Timeout da requisição em segundos (5-600)."
-    )
+    timeout_seconds: Annotated[Optional[int], Field(ge=5, le=600, description="Timeout da requisição em segundos (5-600).")] = None
 
     # Roadmap MVP: governança e experimentação
-    tenant_id: Optional[str] = Field(
-        None,
-        max_length=128,
-        description="Identificador do tenant para quota, auditoria e segmentação.",
-    )
-    stream: bool = Field(
-        False,
-        description="Quando true, permite uso de endpoint de streaming SSE.",
-    )
-    policy_version: Optional[str] = Field(
-        None,
-        max_length=128,
-        description="Versão de política de roteamento solicitada.",
-    )
-    experiment_id: Optional[str] = Field(
-        None,
-        max_length=128,
-        description="ID de experimento A/B para atribuição de variante.",
-    )
-    user_key: Optional[str] = Field(
-        None,
-        max_length=256,
-        description="Chave estável de usuário para assignment consistente em experimento.",
-    )
-    webhook_url: Optional[str] = Field(
-        None,
-        max_length=2048,
-        description="URL para notificação HTTP quando job assíncrono (202) for concluído.",
-    )
-    workload_hints: Optional[WorkloadHints] = Field(
-        None,
-        description="Optional domain hints; routing complexity is inferred at runtime.",
-    )
+    tenant_id: Annotated[Optional[str], Field(max_length=128, description="Identificador do tenant para quota, auditoria e segmentação.")] = None
+    stream: Annotated[bool, Field(description="Quando true, permite uso de endpoint de streaming SSE.")] = False
+    policy_version: Annotated[Optional[str], Field(max_length=128, description="Versão de política de roteamento solicitada.")] = None
+    experiment_id: Annotated[Optional[str], Field(max_length=128, description="ID de experimento A/B para atribuição de variante.")] = None
+    user_key: Annotated[Optional[str], Field(max_length=256, description="Chave estável de usuário para assignment consistente em experimento.")] = None
+    webhook_url: Annotated[Optional[str], Field(max_length=2048, description="URL para notificação HTTP quando job assíncrono (202) for concluído.")] = None
+    workload_hints: Annotated[Optional[WorkloadHints], Field(description="Optional domain hints; routing complexity is inferred at runtime.")] = None
 
     # --- Tool / function calling (formato OpenAI, pass-through) ---
-    tools: Optional[List[Dict[str, Any]]] = Field(
-        None,
-        description="Lista de tools no formato OpenAI: [{type:function, function:{name,description,parameters}}].",
-    )
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = Field(
-        None,
-        description="Controle de tools: 'auto' | 'none' | 'required' | {type:function, function:{name}}.",
-    )
-    messages: Optional[List[Dict[str, Any]]] = Field(
-        None,
-        description="Histórico multi-turn (formato OpenAI) para follow-up com resultados de tools (role:tool).",
-    )
+    tools: Annotated[Optional[List[Dict[str, Any]]], Field(description="Lista de tools no formato OpenAI: [{type:function, function:{name,description,parameters}}].")] = None
+    tool_choice: Annotated[Optional[Union[str, Dict[str, Any]]], Field(description="Controle de tools: 'auto' | 'none' | 'required' | {type:function, function:{name}}.")] = None
+    messages: Annotated[Optional[List[Dict[str, Any]]], Field(description="Histórico multi-turn (formato OpenAI) para follow-up com resultados de tools (role:tool).")] = None
 
     @field_validator("query")
     @classmethod
@@ -590,5 +513,5 @@ class EvalRunExecuteRequest(BaseModel):
     """Represent runtime overrides when enqueueing an eval run."""
     modality: str = "text"
     use_cache: bool = False
-    max_tokens: int = Field(512, ge=1, le=32000)
-    temperature: float = Field(0.5, ge=0.0, le=2.0)
+    max_tokens: Annotated[int, Field(ge=1, le=32000)] = 512
+    temperature: Annotated[float, Field(ge=0.0, le=2.0)] = 0.5
