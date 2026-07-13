@@ -5,7 +5,7 @@
   "app/app/nsga_weights_updater.py": 779,
   "app/app/observability.py": 917,
   "app/app/openrouter_explorer.py": 855,
-  "app/app/providers_async.py": 1534,
+  "app/app/providers_async.py": 1543,
   "app/app/reliability.py": 510,
   "app/app/roadmap_features.py": 1046,
   "app/app/router_core.py": 532,

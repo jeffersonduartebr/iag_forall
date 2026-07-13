@@ -1435,7 +1435,12 @@ class GeminiProvider(BaseProvider):
             text_out, tool_calls, finish_reason = ptools.from_gemini_response(resp)
 
             p_tok = count_tokens(prompt, model_name)
-            c_tok = count_tokens(text_out, model_name)
+            # Gemini conta tokens no cliente; num turno de tool o texto é vazio, então
+            # contabiliza também os tool_calls serializados para não subestimar custo.
+            completion_text = text_out
+            if tool_calls:
+                completion_text = f"{text_out}{json.dumps(tool_calls, ensure_ascii=False)}"
+            c_tok = count_tokens(completion_text, model_name)
             cost = get_model_cost(model_name, p_tok, c_tok)
 
             latency = time.time() - start
@@ -1700,6 +1705,15 @@ async def call_model(
             messages=messages,
             system_prompt=system_prompt,
         )
+
+        # Turno de tool sem texto: se o provider não contabilizou os tokens de
+        # completion, estima a partir dos tool_calls para o custo não zerar.
+        if result.tool_calls and not result.completion_tokens:
+            try:
+                result.completion_tokens = count_tokens(json.dumps(result.tool_calls, ensure_ascii=False), real_name)
+                result.cost = get_model_cost(model, result.prompt_tokens, result.completion_tokens)
+            except Exception:
+                pass
 
         meta = _build_response_meta(result)
         clear_provider_unavailable(model)

@@ -233,6 +233,28 @@ async def test_ollama_provider_uses_generate_endpoint_without_tools(monkeypatch)
     assert out.text == "4" and out.tool_calls is None
 
 
+@pytest.mark.asyncio
+async def test_call_model_estimates_tokens_for_tool_turn_without_usage(monkeypatch):
+    # roadmap #4: se o provider não contabiliza tokens de tool_calls, call_model estima.
+    tcs = [{"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city":"Natal"}'}}]
+
+    class _Provider:
+        async def generate(self, **kwargs):
+            return pa.LLMResponse(
+                text="", latency=0.1, load_time=0.0, cost=0.0, prompt_tokens=5,
+                completion_tokens=0, model_used=kwargs["model"], raw_payload="{}",
+                reasoning=None, tool_calls=tcs, finish_reason="tool_calls",
+            )
+
+    monkeypatch.setattr(pa, "is_provider_temporarily_unavailable", lambda _m: False)
+    monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda _m: _Provider())
+    monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.001 * c)
+
+    _text, meta = await pa.call_model("openai/gpt-4o", "clima em Natal?", tools=TOOLS)
+    assert meta["completion_tokens"] > 0  # estimado a partir dos tool_calls
+    assert meta["tool_calls"] == tcs
+
+
 # --------------------------------------------------------------------------
 # End-to-end: process_query_request tramita tools e expõe tool_calls
 # --------------------------------------------------------------------------
