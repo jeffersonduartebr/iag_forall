@@ -130,6 +130,9 @@ Roteia uma consulta para o melhor modelo disponível.
 - `experiment_id` (string): experimento A/B para assignment de variante.
 - `user_key` (string): chave estável para assignment consistente.
 - `stream` (bool): usado com endpoint de streaming.
+- `tools` (array): tools/function calling no formato OpenAI (ver seção Tool Calling).
+- `tool_choice` (`"auto"|"none"|"required"` ou `{type:function, function:{name}}`).
+- `messages` (array): histórico multi-turn (formato OpenAI) para follow-up com resultados de tools.
 
 ### Resposta (estrutura)
 `POST /query` pode responder de duas formas:
@@ -145,6 +148,8 @@ Roteia uma consulta para o melhor modelo disponível.
 - `verification_status`
 - `review_status`
 - `provenance`: grounding, citações, snippets e `knowledge_version`
+- `tool_calls` (opcional): tools solicitadas pelo modelo (formato OpenAI); presente quando `finish_reason="tool_calls"`
+- `finish_reason`: `"stop" | "tool_calls" | "length" | ...`
 - `diagnostics` (opcional): decisão de rota, candidatos e metadados internos
 
 2. `202 Accepted` com `QueuedQueryAcceptedResponse`
@@ -161,10 +166,49 @@ Roteia uma consulta para o melhor modelo disponível.
 
 ### Erros comuns
 - `400`: payload inválida
+- `422`: há `tools` na requisição mas nenhum modelo com suporte a function calling está configurado
 - `429`: rate limit ou provider rate-limit
 - `502`: falha de provider
 - `503`: circuit breaker aberto/backpressure
 - `504`: timeout
+
+## Tool / Function Calling
+O roteador funciona como **gateway pass-through**: aceita `tools` no formato OpenAI,
+repassa ao modelo escolhido (traduzindo para o formato nativo de cada provedor) e
+devolve os `tool_calls`. **O cliente executa as tools** e reenvia os resultados. O
+mesmo formato vale para `POST /query` e `POST /v1/chat/completions`, em qualquer
+provedor (Ollama, OpenAI, Anthropic, Gemini, OpenRouter).
+
+Formato canônico (OpenAI):
+- Entrada: `tools=[{"type":"function","function":{"name","description","parameters":<JSON schema>}}]`,
+  `tool_choice = "auto" | "none" | "required" | {"type":"function","function":{"name":...}}`
+- Saída: `tool_calls=[{"id","type":"function","function":{"name","arguments":"<json str>"}}]` + `finish_reason="tool_calls"`
+
+Ciclo completo (round-trip):
+1. Cliente envia a pergunta + `tools`.
+2. Roteador responde com `tool_calls` e `finish_reason="tool_calls"` (`answer` vazio).
+3. Cliente executa as tools e reenvia o histórico em `messages` (incluindo o
+   `assistant` com `tool_calls` e uma mensagem `role:"tool"` por resultado).
+4. Roteador devolve a resposta final em texto.
+
+Regras e limites:
+- **Roteamento estrito**: com `tools`, só entram modelos com suporte a function
+  calling. Configure-os em `CANDIDATE_TOOL_MODELS_LIST` (ou o roteador infere a
+  capacidade — via registry e `supported_parameters` do OpenRouter). Sem nenhum
+  candidato capaz → `422`.
+- Turnos multi-turn (`messages` com histórico de tools) **ignoram cache e RAG** e
+  não passam pelos juízes de qualidade (a resposta é vazia/estruturada).
+- No `POST /v1/chat/completions`, `tools`/`tool_choice` e mensagens `role:"tool"`
+  são mapeados automaticamente.
+
+```bash
+# 1) primeira chamada: espera finish_reason=tool_calls
+curl -s -X POST http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model":"ollama/qwen2.5",
+  "messages":[{"role":"user","content":"Qual o clima em Natal?"}],
+  "tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]
+}' | jq '.choices[0]'
+```
 
 ## `GET /health`
 Health check completo dos componentes.
