@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import logging
 import traceback
-from enum import Enum
-from typing import Optional, Dict, Any, Type
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, Optional
 
 from .correlation import get_correlation_id
 from .observability import logger as structlog_logger

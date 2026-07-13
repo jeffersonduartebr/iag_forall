@@ -15,10 +15,10 @@ Or programmatically:
 """
 
 import asyncio
+import logging
 import os
 import time
-import logging
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 

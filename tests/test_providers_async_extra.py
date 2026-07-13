@@ -8,11 +8,11 @@ handling for the corresponding runtime component.
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pybreaker
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app import providers_async as pa
 

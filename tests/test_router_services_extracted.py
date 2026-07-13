@@ -6,7 +6,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from app.services.router_execution import route_and_answer_internal_impl
 from app.services.router_feedback import process_background_feedback_impl
 
@@ -41,6 +40,15 @@ def _deps_for_execution():
     async def _to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
+    async def _async_weights():
+        return {"w_quality": 1, "w_latency": 1, "w_cost": 1}
+
+    async def _select_async(models, query, modality):
+        return "openai/gpt-4o"
+
+    async def _async_false():
+        return False
+
     return {
         "asyncio": SimpleNamespace(create_task=lambda coro: coro.close() if coro else None, to_thread=_to_thread),
         "settings": settings,
@@ -60,9 +68,12 @@ def _deps_for_execution():
         "get_uncertainty_score": lambda query, modality: 0.2,
         "BLOCKED_PREFIXES": ("nomic-embed", "text-embedding", "bge-", "e5-"),
         "_is_error_budget_exceeded": lambda: False,
-        "get_dynamic_strategy_weights": lambda modality: {"w_quality": 1, "w_latency": 1, "w_cost": 1},
-        "choose_top2_models": lambda **kwargs: kwargs["candidates"][:2],
+        "get_dynamic_strategy_weights": lambda *args, **kwargs: {"w_quality": 1, "w_latency": 1, "w_cost": 1},
+        "get_dynamic_strategy_weights_async": lambda modality: _async_weights(),
+        "choose_top2_models": lambda candidates, weights, query_text, modality="text", uncertainty_score=0.0, min_quality=0.0: candidates[:2],
         "select_model": lambda models, query, modality: "openai/gpt-4o",
+        "select_model_async": _select_async,
+        "_is_error_budget_exceeded_async": _async_false,
         "is_ollama_model_verified": lambda name: False,
         "_ensure_ollama_model": lambda name: None,
         "build_augmented_prompt": None,
@@ -155,7 +166,11 @@ async def test_router_execution_skips_ollama_ensure_when_model_is_verified():
     """Verified Ollama models should not trigger background `/api/tags` checks."""
     deps = _deps_for_execution()
     deps["check_cache"] = lambda *a, **k: None
+    async def _select_ollama(models, query, modality):
+        return "ollama/phi4:latest"
+
     deps["select_model"] = lambda models, query, modality: "ollama/phi4:latest"
+    deps["select_model_async"] = _select_ollama
     deps["is_ollama_model_verified"] = lambda name: True
     ensure_calls = []
     deps["_ensure_ollama_model"] = lambda name: ensure_calls.append(name)
@@ -611,7 +626,11 @@ async def test_router_execution_skips_rag_for_simple_low_uq_query():
         get=lambda key, default=None: {"RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1"}.get(key, default),
     )
     deps["get_uncertainty_score"] = lambda query, modality: 0.1
+    async def _select_ollama(models, query, modality):
+        return "ollama/phi4:latest"
+
     deps["select_model"] = lambda models, query, modality: "ollama/phi4:latest"
+    deps["select_model_async"] = _select_ollama
     rag_called = {"value": False}
 
     async def _rag(*args, **kwargs):
@@ -655,7 +674,11 @@ async def test_router_execution_keeps_rag_for_high_uq_query():
         get=lambda key, default=None: {"RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1"}.get(key, default),
     )
     deps["get_uncertainty_score"] = lambda query, modality: 0.8
+    async def _select_ollama(models, query, modality):
+        return "ollama/phi4:latest"
+
     deps["select_model"] = lambda models, query, modality: "ollama/phi4:latest"
+    deps["select_model_async"] = _select_ollama
     rag_called = {"value": False}
 
     async def _rag(*args, **kwargs):

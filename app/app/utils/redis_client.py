@@ -10,13 +10,14 @@ Provides a thread-safe Redis client with:
 - Graceful degradation when Redis is unavailable
 """
 
-import os
-import redis
 import logging
+import os
 import time
-from typing import Optional
 from contextlib import contextmanager
 from threading import Lock
+from typing import Any, Optional
+
+import redis
 
 logger = logging.getLogger(__name__)
 
@@ -164,9 +165,66 @@ def get_redis_async_safe() -> Optional[redis.Redis]:
     """
     Get Redis client without blocking (for use in async contexts).
     Returns None immediately if not connected.
+
+    Deprecated name: prefer ``get_redis_sync_nonblocking()``.
     """
-    # Never block event-loop paths. Perform at most one immediate attempt.
+    return get_redis_sync_nonblocking()
+
+
+def get_redis_sync_nonblocking() -> Optional[redis.Redis]:
+    """Non-blocking sync Redis client for legacy code paths."""
     return ensure_redis_connected(max_wait_s=0.0, min_retry_interval_s=1.0)
+
+
+# ==============================================================================
+# Async Redis Client (hot path)
+# ==============================================================================
+
+_async_redis_client = None
+_async_redis_lock = Lock()
+
+
+async def get_redis_async():
+    """Return a shared ``redis.asyncio`` client for async request handlers."""
+    global _async_redis_client
+    if _async_redis_client is not None:
+        try:
+            await _async_redis_client.ping()
+            return _async_redis_client
+        except Exception:
+            _async_redis_client = None
+
+    with _async_redis_lock:
+        if _async_redis_client is not None:
+            return _async_redis_client
+        try:
+            import redis.asyncio as aioredis
+
+            _async_redis_client = aioredis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                db=REDIS_DB,
+                password=REDIS_PASSWORD,
+                decode_responses=False,
+                socket_timeout=REDIS_SOCKET_TIMEOUT,
+                socket_connect_timeout=REDIS_SOCKET_CONNECT_TIMEOUT,
+            )
+            await _async_redis_client.ping()
+            return _async_redis_client
+        except Exception as exc:
+            logger.warning("[redis_client] Async Redis unavailable: %s", exc)
+            return None
+
+
+async def close_redis_async() -> None:
+    """Close the async Redis client."""
+    global _async_redis_client
+    if _async_redis_client is not None:
+        try:
+            await _async_redis_client.close()
+        except Exception:
+            pass
+        _async_redis_client = None
 
 
 # ==============================================================================
@@ -180,7 +238,7 @@ def check_redis_health() -> dict:
     Returns:
         Dict with health status, latency, and pool info
     """
-    result = {
+    result: dict[str, Any] = {
         "healthy": False,
         "latency_ms": None,
         "pool_size": REDIS_MAX_CONNECTIONS,
@@ -201,7 +259,7 @@ def check_redis_health() -> dict:
         # Get pool stats if available
         if _redis_pool is not None:
             try:
-                result["connections_in_use"] = len(_redis_pool._in_use_connections)
+                result["connections_in_use"] = len(_redis_pool._in_use_connections)  # type: ignore[attr-defined]  # private runtime attr
             except AttributeError:
                 pass  # Pool implementation may vary
 

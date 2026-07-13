@@ -22,7 +22,8 @@ class _MetricLabel:
 
 def test_safe_setting_helpers_and_window_clamping():
     """Coercion helpers should parse values and fall back safely."""
-    getter = lambda key, default=None: {"I": "7", "F": "1.5", "B": "true", "ERROR_BUDGET_WINDOW_S": "5", "ERROR_BUDGET_THRESHOLD": "4.0", "ERROR_BUDGET_MIN_REQUESTS": "0"}.get(key, default)
+    def getter(key, default=None):
+        return {"I": "7", "F": "1.5", "B": "true", "ERROR_BUDGET_WINDOW_S": "5", "ERROR_BUDGET_THRESHOLD": "4.0", "ERROR_BUDGET_MIN_REQUESTS": "0"}.get(key, default)
     assert rr.safe_setting_int(getter, "I", 2) == 7
     assert rr.safe_setting_int(lambda *_: (_ for _ in ()).throw(ValueError()), "I", 2) == 2
     assert rr.safe_setting_float(getter, "F", 2.0) == 1.5
@@ -71,12 +72,13 @@ def test_record_request_outcome_and_exceeded(monkeypatch):
 
     monkeypatch.setattr(rr, "get_router_redis", lambda: _Redis())
     monkeypatch.setattr(rr.time, "time", lambda: 100.0)
-    getter = lambda key, default=None: {
-        "ERROR_BUDGET_ENABLED": "1",
-        "ERROR_BUDGET_WINDOW_S": "30",
-        "ERROR_BUDGET_THRESHOLD": "0.5",
-        "ERROR_BUDGET_MIN_REQUESTS": "2",
-    }.get(key, default)
+    def getter(key, default=None):
+        return {
+            "ERROR_BUDGET_ENABLED": "1",
+            "ERROR_BUDGET_WINDOW_S": "30",
+            "ERROR_BUDGET_THRESHOLD": "0.5",
+            "ERROR_BUDGET_MIN_REQUESTS": "2",
+        }.get(key, default)
 
     rr.record_request_outcome(settings_getter=getter, success=False)
     rr.record_request_outcome(settings_getter=getter, success=True)
@@ -88,7 +90,8 @@ def test_error_budget_handles_disabled_and_exceptions(monkeypatch):
     failure_metric = _MetricLabel()
     monkeypatch.setattr(rr, "DEPENDENCY_FAILURES", SimpleNamespace(labels=lambda dependency: failure_metric))
     monkeypatch.setattr(rr, "get_router_redis", lambda: None)
-    disabled = lambda key, default=None: {"ERROR_BUDGET_ENABLED": "0"}.get(key, default)
+    def disabled(key, default=None):
+        return {"ERROR_BUDGET_ENABLED": "0"}.get(key, default)
     assert rr.is_error_budget_exceeded(settings_getter=disabled) is False
 
     class _BrokenRedis:
@@ -96,6 +99,7 @@ def test_error_budget_handles_disabled_and_exceptions(monkeypatch):
             raise RuntimeError("redis down")
 
     monkeypatch.setattr(rr, "get_router_redis", lambda: _BrokenRedis())
-    enabled = lambda key, default=None: {"ERROR_BUDGET_ENABLED": "1"}.get(key, default)
+    def enabled(key, default=None):
+        return {"ERROR_BUDGET_ENABLED": "1"}.get(key, default)
     assert rr.is_error_budget_exceeded(settings_getter=enabled) is False
     assert failure_metric.inc_calls == 1

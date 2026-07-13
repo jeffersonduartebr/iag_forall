@@ -9,8 +9,7 @@ from fastapi import HTTPException
 
 def _set_admin_token(monkeypatch, value="secret-token"):
     """Configure admin token for route-level auth tests."""
-    from app.api import admin_routes
-    from app.api import deps
+    from app.api import admin_routes, deps
 
     monkeypatch.setattr(
         admin_routes.settings,
@@ -26,8 +25,7 @@ def _set_admin_token(monkeypatch, value="secret-token"):
 
 def _set_settings_map(monkeypatch, mapping):
     """Configure multiple dynamic settings for admin route tests."""
-    from app.api import admin_routes
-    from app.api import deps
+    from app.api import admin_routes, deps
 
     monkeypatch.setattr(admin_routes.settings, "get", lambda key, fallback=None: mapping.get(key, fallback))
     monkeypatch.setattr(deps.settings, "get", lambda key, fallback=None: mapping.get(key, fallback))
@@ -35,7 +33,7 @@ def _set_settings_map(monkeypatch, mapping):
 
 def test_safe_parse_json_variants():
     """safe_parse_json should preserve dicts and decode JSON strings."""
-    from app.main import safe_parse_json
+    from app.services.query_response_builder import safe_parse_json
 
     assert safe_parse_json('{"a":1}') == {"a": 1}
     assert safe_parse_json("not-json") == "not-json"
@@ -165,6 +163,7 @@ def test_feedback_endpoints(monkeypatch):
     result = SimpleNamespace(user_quality=8.0, blended_quality=7.2, model="m1", reward=0.73)
     monkeypatch.setattr(feedback_routes, "process_feedback", lambda req: result)
     monkeypatch.setattr(feedback_routes, "get_feedback_stats", lambda model=None, hours=24: {"hours": hours, "model": model})
+    monkeypatch.setattr(feedback_routes, "require_admin", lambda token: None)
 
     out = feedback_routes.submit_feedback(SimpleNamespace())
     assert out["status"] == "accepted"
@@ -175,7 +174,7 @@ def test_feedback_endpoints(monkeypatch):
         feedback_routes.submit_feedback(SimpleNamespace())
     assert exc.value.status_code == 400
 
-    stats = feedback_routes.feedback_stats(model="m1", hours=12)
+    stats = feedback_routes.feedback_stats(model="m1", hours=12, x_admin_token="abc")
     assert stats["hours"] == 12
 
 

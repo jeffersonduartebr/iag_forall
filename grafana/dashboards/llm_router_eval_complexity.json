@@ -1,0 +1,124 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus_llm_router"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "expr": "sum by (detected_complexity) (rate(query_complexity_detected_total[5m]))",
+          "legendFormat": "{{detected_complexity}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Complexidade detectada (rate 5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus_llm_router"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "expr": "sum by (workload_class) (rate(query_complexity_detected_total[5m]))",
+          "legendFormat": "{{workload_class}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Complexidade x workload_class",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus_llm_router"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {"expr": "sum(increase(eval_run_completed_total{status=\"completed\"}[24h]))", "refId": "A"}
+      ],
+      "title": "Eval runs concluídos 24h",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus_llm_router"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
+      "id": 4,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {"expr": "sum(increase(eval_run_completed_total{status=\"failed\"}[24h]))", "refId": "A"}
+      ],
+      "title": "Eval runs falhos 24h",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus_llm_router"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 5,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "expr": "sum by (benchmark_theme) (increase(router_query_cost_usd_total[1h]))",
+          "legendFormat": "{{benchmark_theme}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Custo USD por tema (1h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus_llm_router"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "id": 6,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "expr": "sum by (detected_complexity) (increase(router_query_cost_usd_total[1h]))",
+          "legendFormat": "{{detected_complexity}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Custo USD por complexidade detectada (1h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus_llm_router"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 7,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "expr": "sum by (workload_class) (increase(router_sync_deadline_exceeded_total[1h]))",
+          "legendFormat": "{{workload_class}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Deadlines excedidos por workload",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["llm-router", "eval", "complexity"],
+  "templating": {"list": []},
+  "time": {"from": "now-12h", "to": "now"},
+  "title": "LLM Router - Eval e Complexidade",
+  "uid": "llm-router-eval-complexity",
+  "version": 1
+}

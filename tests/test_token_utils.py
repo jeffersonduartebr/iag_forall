@@ -6,8 +6,7 @@ test_token_utils.py — Tests for Token Utilities
 Tests for the token counting functionality with LRU cache.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestCountTokens:
@@ -96,8 +95,8 @@ class TestEncoderCache:
     def test_clear_encoder_cache(self):
         """Test that cache can be cleared."""
         from app.utils.token_utils import (
-            count_tokens,
             clear_encoder_cache,
+            count_tokens,
             get_encoder_cache_info,
         )
 
@@ -114,8 +113,8 @@ class TestEncoderCache:
     def test_cache_hit_after_repeated_calls(self):
         """Test that repeated calls result in cache hits."""
         from app.utils.token_utils import (
-            count_tokens,
             clear_encoder_cache,
+            count_tokens,
             get_encoder_cache_info,
         )
 
@@ -134,8 +133,8 @@ class TestEncoderCache:
 
     def test_cache_respects_maxsize(self):
         """Test that cache respects the maximum size limit."""
-        from app.utils.token_utils import get_encoder_cache_info
         from app.config.constants import TOKEN_ENCODER_CACHE_SIZE
+        from app.utils.token_utils import get_encoder_cache_info
 
         info = get_encoder_cache_info()
 

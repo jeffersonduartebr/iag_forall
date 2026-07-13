@@ -3,12 +3,11 @@
 """Resolve runtime settings through a layered configuration strategy.
 
 This module is the operational settings facade used across the application.
-Values may come from multiple sources, in descending order of precedence:
+Values may come from multiple sources depending on setting type:
 
-1. Process environment variables
-2. Redis overrides
-3. MariaDB persisted settings
-4. Catalog defaults defined in ``config/settings_catalog.py``
+1. Secret/bootstrap keys (env only): ``ADMIN_TOKEN``, ``API_KEYS``, ``JWT_SECRET``, ``DB_PASS``, etc.
+2. Emergency overrides: ``FORCE_<KEY>`` environment variables.
+3. Runtime tunables (Redis -> MariaDB -> env -> catalog defaults).
 
 The implementation adds three behaviors on top of plain key lookup:
 
@@ -22,15 +21,17 @@ runtime can treat settings as a normal attribute-based configuration source.
 
 from __future__ import annotations
 
-import os
-import time
 import logging
+import os
 import threading
+import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
-from app.utils.redis_client import get_redis_async_safe, ensure_redis_connected
+
+from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
+
 from .config.settings_catalog import (
     SETTING_METADATA,
     SETTINGS_DEFAULTS,
@@ -38,7 +39,7 @@ from .config.settings_catalog import (
     is_runtime_mutable,
     known_setting_keys,
 )
-from .config.settings_sources import decode_redis_value, resolve_setting_value
+from .config.settings_sources import decode_redis_value, resolve_setting_value, resolve_setting_value_async
 from .config.settings_types import as_bool, as_float, as_int, as_list
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ def _get_settings_engine():
 
 
 # Legacy alias for backward compatibility
-engine = property(lambda self: _get_settings_engine())
+engine: Any = property(lambda self: _get_settings_engine())
 
 
 class _EngineProxy:
@@ -206,6 +207,19 @@ def _get_from_redis(key: str) -> Optional[str]:
     return None
 
 
+async def _get_from_redis_async(key: str) -> Optional[str]:
+    """Async Redis read for request handlers that already run on the event loop."""
+    try:
+        from app.utils.redis_client import get_redis_async
+
+        rds = await get_redis_async()
+        if not rds:
+            return None
+        return decode_redis_value(await rds.get(f"{REDIS_PREFIX}{key}"))
+    except Exception:
+        return None
+
+
 def _get_from_db(key: str) -> Optional[str]:
     """Read one persisted setting from MariaDB, returning ``None`` on failure."""
     try:
@@ -267,6 +281,19 @@ class DynamicSettings:
             env_get=os.getenv,
         )
 
+    async def get_async(self, key: str, fallback: Any = None) -> Any:
+        """Resolve one setting without blocking the event loop on Redis I/O."""
+        return await resolve_setting_value_async(
+            key=key,
+            fallback=fallback,
+            defaults=self.DEFAULTS,
+            cache_get=_lru.get,
+            cache_set=_lru.set,
+            redis_get_async=_get_from_redis_async,
+            db_get=_get_from_db,
+            env_get=os.getenv,
+        )
+
     def _get_str(self, key: str, default: str = "") -> str:
         """Get a setting coerced to string."""
         value = self.get(key, default)
@@ -317,8 +344,10 @@ class DynamicSettings:
                 pass
         logger.info(f"[settings] '{key}' atualizado por {actor} via {source}.")
 
-    def snapshot(self, only_known: bool = False) -> Dict[str, Any]:
+    def snapshot(self, only_known: bool = False, redact: bool = True) -> Dict[str, Any]:
         """Return a point-in-time view of known settings and selected env values."""
+        from .config.secrets_redaction import redact_secrets
+
         keys = known_setting_keys() if only_known else known_setting_keys() + [
             "DB_HOST", "DB_USER", "DB_NAME", "DB_PORT",
             "OLLAMA_HOST", "OLLAMA_BASE_URL",
@@ -329,7 +358,7 @@ class DynamicSettings:
                 out[k] = self.get(k)
             except Exception:
                 out[k] = None
-        return out
+        return redact_secrets(out) if redact else out
 
     def keys(self, domain: Optional[str] = None) -> List[str]:
         """Return known setting keys, optionally filtered by catalog domain."""
@@ -387,6 +416,18 @@ class DynamicSettings:
         return self._get_list("CANDIDATE_MULTIMODAL_MODELS_LIST")
 
     @property
+    def CANDIDATE_TOOL_MODELS_LIST(self) -> List[str]:
+        """Lista de modelos habilitados para tool/function calling (opt-in explícito).
+
+        Quando não vazia, restringe o roteamento de requisições com ``tools`` a
+        esses modelos. Quando vazia, o roteador infere a capacidade por modelo.
+
+        Returns:
+            Lista de nomes de modelos com suporte a tools.
+        """
+        return self._get_list("CANDIDATE_TOOL_MODELS_LIST")
+
+    @property
     def VLM_OLLAMA_MODELS(self) -> List[str]:
         """Executa a responsabilidade descrita por este método.
 
@@ -394,7 +435,7 @@ class DynamicSettings:
             Valor produzido pela execução.
         """
         return self._get_list("VLM_OLLAMA_MODELS")
-    
+
     @property
     def JUDGE_MODELS(self) -> List[str]:
         """Executa a responsabilidade descrita por este método.
@@ -456,7 +497,7 @@ class DynamicSettings:
     def QUERY_LOG_RETENTION_DAYS(self) -> int:
         """Obtém o valor da configuração `QUERY_LOG_RETENTION_DAYS`."""
         return self._get_int("QUERY_LOG_RETENTION_DAYS", 7)
-    
+
     # Banco / Infra
     @property
     def REDIS_HOST(self) -> str:
@@ -495,7 +536,7 @@ class DynamicSettings:
     def DB_NAME(self) -> str:
         """Obtém o valor da configuração `DB_NAME`."""
         return self.get("DB_NAME", DB_NAME_ENV)
-    
+
     @property
     def ADMIN_TOKEN(self) -> str:
         """Obtém o valor da configuração `ADMIN_TOKEN`."""
@@ -504,6 +545,11 @@ class DynamicSettings:
     def ADMIN_TOKEN_PREVIOUS(self) -> str:
         """Obtém o valor da configuração `ADMIN_TOKEN_PREVIOUS`."""
         return self.get("ADMIN_TOKEN_PREVIOUS", "")
+
+    @property
+    def REQUIRE_API_AUTH(self) -> bool:
+        """Whether public API endpoints require authentication."""
+        return self._get_bool("REQUIRE_API_AUTH", False)
 
     # Judges
     @property
@@ -828,10 +874,10 @@ def update_db_pool_metrics():
     """Update Prometheus metrics for DB pool (call periodically)."""
     try:
         from app.observability import (
-            DB_POOL_SIZE,
             DB_POOL_CHECKED_IN,
             DB_POOL_CHECKED_OUT,
             DB_POOL_OVERFLOW,
+            DB_POOL_SIZE,
         )
         stats = get_db_pool_stats()
         DB_POOL_SIZE.set(stats["size"])
@@ -896,6 +942,22 @@ def validate_critical_settings(settings_obj: Optional[Any] = None) -> List[str]:
     except Exception:
         errors.append("NSGA weights are invalid")
 
+    env = str(_read("ENV", "development") or "development").lower()
+    if env in {"production", "prod"}:
+        require_auth = str(_read("REQUIRE_API_AUTH", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        if not require_auth:
+            errors.append("REQUIRE_API_AUTH must be enabled in production")
+        api_keys = str(_read("API_KEYS", "") or "").strip()
+        jwt_secret = str(_read("JWT_SECRET", "") or "").strip()
+        if not api_keys and not jwt_secret:
+            errors.append("production requires API_KEYS or JWT_SECRET")
+        metrics_token = str(_read("METRICS_TOKEN", "") or "").strip()
+        if not metrics_token:
+            errors.append("METRICS_TOKEN must be set in production")
+        roadmap_ddl = str(_read("ROADMAP_AUTO_DDL", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        if roadmap_ddl:
+            errors.append("ROADMAP_AUTO_DDL must be disabled in production")
+
     return errors
 
 
@@ -932,7 +994,7 @@ def start_reload_listener() -> None:
                 # Conexão dedicada para o PubSub com timeout infinito
                 # Importa redis aqui para evitar dependência circular se fosse no topo
                 import redis
-                
+
                 listener = redis.Redis(
                     host=settings.REDIS_HOST,
                     port=settings.REDIS_PORT,
@@ -941,11 +1003,11 @@ def start_reload_listener() -> None:
                     socket_timeout=None, # <--- O SEGREDO
                     socket_keepalive=True
                 )
-                
+
                 pubsub = listener.pubsub()
                 pubsub.subscribe(REDIS_RELOAD_CHANNEL)
                 logger.info(f"[settings_dynamic] Listener hot-reload conectado: {REDIS_RELOAD_CHANNEL}")
-                
+
                 while not _reload_listener_stop.is_set():
                     msg = pubsub.get_message(timeout=1.0)
                     if msg and msg.get("type") == "message":
@@ -954,7 +1016,7 @@ def start_reload_listener() -> None:
                             key = key.decode()
                         logger.info(f"[settings_dynamic] Hot-reload: '{key}'.")
                         _invalidate_cache()
-            
+
             except Exception as e:
                 logger.error(f"[settings_dynamic] Erro no listener: {e}. Reconectando em 5s...")
                 _reload_listener_stop.wait(5)

@@ -22,19 +22,16 @@ Used by the Router to decide whether to trigger expensive LLM-as-a-Judge evaluat
 
 from __future__ import annotations
 
+import logging
 import os
 import pickle
-import logging
 import time
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 # River Imports (Online ML Library)
 try:
-    from river import linear_model
-    from river import optim
-    from river import preprocessing
-    from river import compose
+    from river import compose, linear_model, optim, preprocessing
     RIVER_AVAILABLE = True
 except ImportError:
     RIVER_AVAILABLE = False
@@ -73,7 +70,7 @@ The constructor keeps setup local to the object so callers can use it without ad
         self.save_path = str(self.state_dir / f"predictor_{safe_name}_logistic.pkl")
         self.validation_path = str(self.state_dir / f"predictor_{safe_name}_validation.pkl")
 
-        self.pipeline = None
+        self.pipeline: Optional[compose.Pipeline] = None
 
         # Phase 5: Validation tracking for calibration
         # Stores tuples of (predicted_prob, actual_error, timestamp)
@@ -265,7 +262,6 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         if len(self.prediction_log) < 100:
             return  # Not enough data
 
-        import math
 
         # Simple grid search for optimal temperature
         best_temp = 1.0

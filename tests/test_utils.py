@@ -7,8 +7,9 @@ handling for the corresponding runtime component.
 
 
 import pytest
-from app.utils.pricing import get_model_cost
 from app.settings_dynamic import settings
+from app.utils.pricing import get_model_cost
+
 
 def test_pricing_logic():
     # GPT-4o: Input $2.50/1M, Output $10.00/1M (Valores do seed)

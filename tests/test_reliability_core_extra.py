@@ -8,11 +8,10 @@ handling for the corresponding runtime component.
 
 from types import SimpleNamespace
 
-import pybreaker
 import pytest
+from app.error_handling import ErrorCategory
 
 from app import reliability as rel
-from app.error_handling import ErrorCategory
 
 
 def test_circuit_breaker_manager_config_status_reset(monkeypatch):

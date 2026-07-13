@@ -14,33 +14,34 @@ maintenance, context aggregation, and policy-combination helpers.
 """
 
 from __future__ import annotations
-import os
+
+import asyncio
 import json
-import math
-import time
-import random
 import logging
+import math
+import random  # noqa: F401  (usado via patch em app.bandits.random.random nos testes)
 import threading
-from typing import Dict, List, Tuple, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 
-from app.settings_dynamic import settings
 from app.db import get_engine
-from app.utils.redis_client import get_redis_async_safe, ensure_redis_connected
 from app.embeddings import embed_text
-from app.services import bandit_policy
-from app.services.bandit_centroids import (
-    normalize_centroid_vec,
-    nearest_centroid_from_array,
-)
 from app.observability import (
+    BANDIT_REWARD,
     BANDIT_SELECT,
     BANDIT_UPDATE,
-    BANDIT_REWARD,
 )
+from app.services import bandit_policy
+from app.services.bandit_centroids import (
+    nearest_centroid_from_array,
+    normalize_centroid_vec,
+)
+from app.settings_dynamic import settings
+from app.utils.redis_async_ops import redis_get_str, redis_hgetall_map
+from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -480,6 +481,54 @@ def _ctx_key(ctx: str) -> str:
     return f"{R_CTX_PREFIX}:{ctx}"
 
 
+def _get_ctx_stats_from_db(ctx: str) -> Dict[str, Dict[str, float]]:
+    """Load contextual bandit stats from MariaDB."""
+    stats: Dict[str, Dict[str, float]] = {}
+    try:
+        with _get_db_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT model, avg_reward, count, var, M2
+                    FROM bandit_context_stats
+                    WHERE context_label = :ctx
+                    """
+                ),
+                {"ctx": ctx},
+            ).fetchall()
+        for row in rows:
+            model = row[0]
+            stats[model] = _sanitize_model_stats(
+                {
+                    "mean": float(row[1] or 0.0),
+                    "count": int(row[2] or 0),
+                    "var": float(row[3] or 0.0),
+                    "M2": float(row[4] or 0.0),
+                    "alpha": 1.0 + float(row[1] or 0.0) * float(row[2] or 0.0),
+                    "beta": 1.0 + max(
+                        0.0,
+                        float(row[2] or 0.0) - float(row[1] or 0.0) * float(row[2] or 0.0),
+                    ),
+                }
+            )
+    except Exception as e:
+        logger.warning(f"[bandit] Falha DB ctx={ctx}: {e}")
+    return stats
+
+
+def _parse_ctx_stats_from_redis(raw_map: Dict[str, str]) -> Dict[str, Dict[str, float]]:
+    """Parse contextual stats stored in one Redis hash."""
+    stats: Dict[str, Dict[str, float]] = {}
+    for model, payload in raw_map.items():
+        try:
+            obj = json.loads(payload)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            stats[model] = _sanitize_model_stats(obj)
+    return stats
+
+
 def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
     """
     Lê stats de um contexto:
@@ -509,38 +558,17 @@ def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
 
     # Se vazio, tenta DB
     if not stats:
-        try:
-            with _get_db_engine().connect() as conn:
-                rows = conn.execute(
-                    text(
-                        """
-                        SELECT model, avg_reward, count, var, M2
-                        FROM bandit_context_stats
-                        WHERE context_label = :ctx
-                        """
-                    ),
-                    {"ctx": ctx},
-                ).fetchall()
-            for row in rows:
-                model = row[0]
-                stats[model] = _sanitize_model_stats(
-                    {
-                        "mean": float(row[1] or 0.0),
-                        "count": int(row[2] or 0),
-                        "var": float(row[3] or 0.0),
-                        "M2": float(row[4] or 0.0),
-                        "alpha": 1.0 + float(row[1] or 0.0) * float(row[2] or 0.0),
-                        "beta": 1.0 + max(
-                            0.0,
-                            float(row[2] or 0.0)
-                            - float(row[1] or 0.0) * float(row[2] or 0.0),
-                        ),
-                    }
-                )
-        except Exception as e:
-            logger.warning(f"[bandit] Falha DB ctx={ctx}: {e}")
+        stats = _get_ctx_stats_from_db(ctx)
 
     return stats
+
+
+async def _get_ctx_stats_async(ctx: str) -> Dict[str, Dict[str, float]]:
+    """Load contextual stats using async Redis with DB fallback in a worker thread."""
+    stats = _parse_ctx_stats_from_redis(await redis_hgetall_map(_ctx_key(ctx)))
+    if stats:
+        return stats
+    return await asyncio.to_thread(_get_ctx_stats_from_db, ctx)
 
 
 def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
@@ -566,6 +594,40 @@ def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
         pipe.execute()
     except Exception as e:
         logger.warning(f"[bandit] Falha ao salvar ctx={ctx} no Redis: {e}")
+
+
+def _batch_upsert_ctx_db(updates: list[tuple[str, str, Dict[str, float]]]) -> None:
+    """Persist multiple contextual statistics in one DB transaction."""
+    if not updates:
+        return
+    try:
+        with _get_db_engine().begin() as conn:
+            for ctx, model, s in updates:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO bandit_context_stats
+                          (context_label, model, avg_reward, count, var, M2)
+                        VALUES (:ctx, :model, :avg, :count, :var, :M2)
+                        ON DUPLICATE KEY UPDATE
+                          avg_reward = :avg,
+                          count = :count,
+                          var = :var,
+                          M2 = :M2,
+                          last_update = CURRENT_TIMESTAMP
+                        """
+                    ),
+                    {
+                        "ctx": ctx,
+                        "model": model,
+                        "avg": float(s.get("mean", 0.0)),
+                        "count": int(s.get("count", 0)),
+                        "var": float(s.get("var", 0.0)),
+                        "M2": float(s.get("M2", 0.0)),
+                    },
+                )
+    except Exception as e:
+        logger.warning(f"[bandit] Falha no batch upsert DB ({len(updates)} rows): {e}")
 
 
 def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
@@ -608,14 +670,26 @@ def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
 
 def _dynamic_epsilon(ctx_stats: Dict[str, Dict[str, float]]) -> float:
     """Compute the exploration rate for one context from current statistics."""
-    return bandit_policy.dynamic_epsilon(ctx_stats, DEFAULT_EPSILON)
+    try:
+        from app.services.frozen_policy import frozen_bandit_epsilon
+
+        eps = frozen_bandit_epsilon(DEFAULT_EPSILON)
+    except Exception:
+        eps = DEFAULT_EPSILON
+    return bandit_policy.dynamic_epsilon(ctx_stats, eps)
 
 
 def _choose_epsilon_greedy(
     models: List[str], ctx_stats: Dict[str, Dict[str, float]]
 ) -> str:
     """Choose a model using the epsilon-greedy policy implementation."""
-    return bandit_policy.choose_epsilon_greedy(models, ctx_stats, DEFAULT_EPSILON)
+    try:
+        from app.services.frozen_policy import frozen_bandit_epsilon
+
+        eps = frozen_bandit_epsilon(DEFAULT_EPSILON)
+    except Exception:
+        eps = DEFAULT_EPSILON
+    return bandit_policy.choose_epsilon_greedy(models, ctx_stats, eps)
 
 
 def _choose_ucb1(models: List[str], ctx_stats: Dict[str, Dict[str, float]]) -> str:
@@ -654,6 +728,62 @@ def _meta_choose_strategy() -> str:
 
     # fallback simples: usar UCB1 como default
     return "ucb1"
+
+
+async def _meta_choose_strategy_async() -> str:
+    """Resolve the meta-bandit strategy using async Redis."""
+    raw = await redis_get_str(R_META_STRATEGY)
+    if raw:
+        val = raw.strip().lower()
+        if val in META_STRATEGIES:
+            return val
+    return "ucb1"
+
+
+def _schedule_centroid_learning(query: str) -> None:
+    """Queue centroid online learning without blocking model selection."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(asyncio.to_thread(centroids_online_update, query))
+    except RuntimeError:
+        centroids_online_update(query)
+
+
+async def _auto_context_labels_async(query: str, modality: str = "text") -> List[str]:
+    """Build context labels using read-only centroid lookup and background learning."""
+    labels: List[str] = []
+    try:
+        nearest = await asyncio.to_thread(_nearest_centroid_label, query)
+        if nearest and nearest.startswith("semctx:"):
+            labels.append(f"cluster:{nearest.split(':', 1)[1]}")
+    except Exception:
+        pass
+    _schedule_centroid_learning(query)
+
+    mod = (modality or "text").strip().lower()
+    labels.append(f"mod:{mod}")
+    labels.append("global")
+
+    seen = set()
+    out: List[str] = []
+    for label in labels:
+        if label not in seen:
+            seen.add(label)
+            out.append(label)
+    return out
+
+
+async def _meta_combine_choices_async(
+    models: List[str],
+    ctx_stats: Dict[str, Dict[str, float]],
+) -> Tuple[str, Dict[str, str]]:
+    """Combine bandit policies using async strategy resolution."""
+    return bandit_policy.meta_combine_choices(
+        models=models,
+        ctx_stats=ctx_stats,
+        default_epsilon=DEFAULT_EPSILON,
+        preferred_strategy=await _meta_choose_strategy_async(),
+    )
 
 
 def _meta_combine_choices(
@@ -718,10 +848,39 @@ def select_model(
 
     return chosen
 
-# ============================================================
 
-# ============================================================
-# Atualização do bandit com recompensa observada
+async def select_model_async(
+    valid_models: List[str],
+    query: str,
+    modality: str = "text",
+) -> str:
+    """Async model selection using non-blocking Redis reads on the hot path."""
+    if not valid_models:
+        logger.warning("[bandit] Lista de modelos vazia; retornando default.")
+        return "ollama/gemma3:4b"
+
+    contexts = await _auto_context_labels_async(query, modality)
+    main_ctx = contexts[0] if contexts else "global"
+    ctx_stats = await _get_ctx_stats_async(main_ctx)
+    chosen, debug_choices = await _meta_combine_choices_async(valid_models, ctx_stats)
+
+    logger.info(
+        "[bandit] ctx=%s | models=%s | chosen=%s | eps=%s | ucb1=%s | ts=%s",
+        main_ctx,
+        valid_models,
+        chosen,
+        debug_choices["epsilon_greedy"],
+        debug_choices["ucb1"],
+        debug_choices["thompson"],
+    )
+
+    try:
+        BANDIT_SELECT.labels(model=chosen).inc()
+    except Exception:
+        pass
+
+    return chosen
+
 # ============================================================
 
 def bandit_update(
@@ -751,6 +910,7 @@ def bandit_update(
         pass
 
     contexts = _auto_context_labels(query, modality)
+    db_updates: list[tuple[str, str, Dict[str, float]]] = []
     for ctx in contexts:
         try:
             stats = _get_ctx_stats(ctx)
@@ -797,21 +957,24 @@ def bandit_update(
             }
             stats[model] = _sanitize_model_stats(stats[model])
 
-            # Redis + DB
+            # Redis + DB (batched)
             _set_ctx_stats(ctx, stats)
-            _upsert_ctx_db(ctx, model, stats[model])
+            db_updates.append((ctx, model, stats[model]))
 
         except Exception as e:
             logger.warning(
                 f"[bandit] Falha ao atualizar contexto ctx={ctx}, model={model}: {e}"
             )
 
+    if db_updates:
+        _batch_upsert_ctx_db(db_updates)
+
     try:
         BANDIT_UPDATE.labels(model=model).inc()
         BANDIT_REWARD.observe(float(r))
     except Exception:
         pass
-    
+
     # --- HOOK PARA GET_SNAPSHOT (USADO PELO UQ/ROUTER_STRATEGY) ---
     # O método sample_metrics_from_snapshot é chamado pelo router_strategy.
     # Ele espera que o snapshot (stats) esteja disponível.

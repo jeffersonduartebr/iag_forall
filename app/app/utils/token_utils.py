@@ -15,8 +15,8 @@ try:
     import tiktoken
     from tiktoken import Encoding
 except ImportError:
-    tiktoken = None
-    Encoding = None
+    tiktoken = None  # type: ignore[assignment]  # dependência opcional ausente
+    Encoding = None  # type: ignore[assignment,misc]  # dependência opcional ausente
 
 from app.config.constants import TOKEN_ENCODER_CACHE_SIZE
 

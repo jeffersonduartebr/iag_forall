@@ -25,6 +25,27 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     )
 
 
+def _patch_hot_path_async_deps(monkeypatch, router_core, *, weights=None, chosen="openai/gpt-4o", select_fn=None):
+    """Mirror sync router mocks for phase-3 async hot-path dependencies."""
+    resolved_weights = weights or {"w_quality": 1, "w_latency": 1, "w_cost": 1}
+
+    async def _weights_async(_modality):
+        return resolved_weights
+
+    async def _select_async(models, _query, _modality):
+        if select_fn is not None:
+            return select_fn(models, _query, _modality)
+        return chosen if chosen in models else models[0]
+
+    async def _budget_false():
+        return False
+
+    monkeypatch.setattr(router_core, "get_dynamic_strategy_weights", lambda _modality: resolved_weights)
+    monkeypatch.setattr(router_core, "get_dynamic_strategy_weights_async", _weights_async)
+    monkeypatch.setattr(router_core, "select_model_async", _select_async)
+    monkeypatch.setattr(router_core, "_is_error_budget_exceeded_async", _budget_false)
+
+
 @pytest.mark.asyncio
 async def test_internal_cache_hit(monkeypatch):
     """Testa internal cache hit."""
@@ -47,9 +68,8 @@ async def test_internal_full_flow_with_pricing_fallback(monkeypatch):
     monkeypatch.setattr(router_core, "settings", _mock_settings())
     monkeypatch.setattr(router_core, "check_cache", AsyncMock(return_value=None))
     monkeypatch.setattr(router_core, "get_uncertainty_score", lambda *_: 0.25)
-    monkeypatch.setattr(router_core, "get_dynamic_strategy_weights", lambda modality: {"w_quality": 1, "w_latency": 1, "w_cost": 1})
-    monkeypatch.setattr(router_core, "choose_top2_models", lambda **kwargs: ["openai/gpt-4o"])
-    monkeypatch.setattr(router_core, "select_model", lambda models, q, modality: "openai/gpt-4o")
+    _patch_hot_path_async_deps(monkeypatch, router_core)
+    monkeypatch.setattr(router_core, "choose_top2_models", lambda candidates, weights, query_text, modality="text", uncertainty_score=0.0, min_quality=0.0: ["openai/gpt-4o"])
 
     call_model = AsyncMock(
         return_value=(
@@ -85,9 +105,8 @@ async def test_internal_rag_fallback_when_augmented_prompt_fails(monkeypatch):
     monkeypatch.setattr(router_core, "settings", _mock_settings())
     monkeypatch.setattr(router_core, "check_cache", AsyncMock(return_value=None))
     monkeypatch.setattr(router_core, "get_uncertainty_score", lambda *_: 0.4)
-    monkeypatch.setattr(router_core, "get_dynamic_strategy_weights", lambda modality: {"w_quality": 1, "w_latency": 1, "w_cost": 1})
-    monkeypatch.setattr(router_core, "choose_top2_models", lambda **kwargs: ["openai/gpt-4o"])
-    monkeypatch.setattr(router_core, "select_model", lambda models, q, modality: "openai/gpt-4o")
+    _patch_hot_path_async_deps(monkeypatch, router_core)
+    monkeypatch.setattr(router_core, "choose_top2_models", lambda candidates, weights, query_text, modality="text", uncertainty_score=0.0, min_quality=0.0: ["openai/gpt-4o"])
     monkeypatch.setattr(router_core, "build_augmented_prompt", AsyncMock(side_effect=RuntimeError("rag down")))
 
     call_model = AsyncMock(return_value=("fallback answer", {"cost_per_1k": 0.0}))
@@ -112,9 +131,8 @@ async def test_internal_handles_non_dict_metadata(monkeypatch):
     monkeypatch.setattr(router_core, "settings", _mock_settings())
     monkeypatch.setattr(router_core, "check_cache", AsyncMock(return_value=None))
     monkeypatch.setattr(router_core, "get_uncertainty_score", lambda *_: 0.5)
-    monkeypatch.setattr(router_core, "get_dynamic_strategy_weights", lambda modality: {"w_quality": 1, "w_latency": 1, "w_cost": 1})
-    monkeypatch.setattr(router_core, "choose_top2_models", lambda **kwargs: ["openai/gpt-4o"])
-    monkeypatch.setattr(router_core, "select_model", lambda models, q, modality: "openai/gpt-4o")
+    _patch_hot_path_async_deps(monkeypatch, router_core)
+    monkeypatch.setattr(router_core, "choose_top2_models", lambda candidates, weights, query_text, modality="text", uncertainty_score=0.0, min_quality=0.0: ["openai/gpt-4o"])
     monkeypatch.setattr(router_core, "call_model", AsyncMock(return_value=("answer", "meta-string")))
 
     out = await router_core._route_and_answer_internal("q", use_cache=False)
@@ -133,9 +151,13 @@ async def test_internal_fallback_when_all_candidates_blocked(monkeypatch):
     monkeypatch.setattr(router_core, "settings", settings)
     monkeypatch.setattr(router_core, "check_cache", AsyncMock(return_value=None))
     monkeypatch.setattr(router_core, "get_uncertainty_score", lambda *_: 0.1)
-    monkeypatch.setattr(router_core, "get_dynamic_strategy_weights", lambda modality: {"w_quality": 1, "w_latency": 1, "w_cost": 1})
-    monkeypatch.setattr(router_core, "choose_top2_models", lambda **kwargs: ["ollama/phi4:latest"])
-    monkeypatch.setattr(router_core, "select_model", lambda models, q, modality: models[0])
+    _patch_hot_path_async_deps(
+        monkeypatch,
+        router_core,
+        chosen="ollama/phi4:latest",
+        select_fn=lambda models, _q, _modality: models[0],
+    )
+    monkeypatch.setattr(router_core, "choose_top2_models", lambda candidates, weights, query_text, modality="text", uncertainty_score=0.0, min_quality=0.0: ["ollama/phi4:latest"])
     monkeypatch.setattr(router_core, "_ensure_ollama_model", lambda name: None)
     monkeypatch.setattr(router_core, "call_model", AsyncMock(return_value=("ok", {"cost_per_1k": 0.0})))
 

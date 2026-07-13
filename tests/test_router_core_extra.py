@@ -135,7 +135,15 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 @pytest.mark.asyncio
 async def test_route_and_answer_dedup_and_timeout(monkeypatch):
     """Testa route and answer dedup and timeout."""
-    monkeypatch.setattr(rc, "_route_and_answer_internal", AsyncMock(return_value={"ok": True}))
+    # A rota interna foi extraída para services; o seam atual é build_internal_route_coro,
+    # que route_and_answer usa para montar o coro executado por route_and_answer_with_resilience.
+    def _ok_factory(**kwargs):
+        async def _run(runtime_hints):
+            return {"ok": True}
+
+        return _run
+
+    monkeypatch.setattr(rc, "build_internal_route_coro", _ok_factory)
     monkeypatch.setattr(rc, "settings", SimpleNamespace(get=lambda k, d=None: "1" if k == "REQUEST_DEDUP_ENABLED" else 1))
 
     class _Dedup:
@@ -160,14 +168,14 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     out2 = await rc.route_and_answer("q", deduplicate=True)
     assert out2["ok"] is True
 
-    async def _slow(*args, **kwargs):
-        """Execute the slow routine.
+    def _slow_factory(**kwargs):
+        async def _run(runtime_hints):
+            await rc.asyncio.sleep(0.05)
+            return {"ok": False}
 
-This helper encapsulates one focused step used by the surrounding workflow."""
-        await rc.asyncio.sleep(0.05)
-        return {"ok": False}
+        return _run
 
-    monkeypatch.setattr(rc, "_route_and_answer_internal", _slow)
+    monkeypatch.setattr(rc, "build_internal_route_coro", _slow_factory)
     with pytest.raises(rc.asyncio.TimeoutError):
         await rc.route_and_answer("q", timeout_seconds=0.001, deduplicate=False)
 

@@ -15,4 +15,5 @@ pytest
 pytest-asyncio
 pytest-cov
 httpx
+PyYAML>=6.0
 google-cloud-aiplatform

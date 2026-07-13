@@ -14,48 +14,44 @@ The rest of the application relies on this module to expose one consistent
 
 from __future__ import annotations
 
-import time
-import os
-import logging
 import asyncio
-import threading
 import base64
-import json
 import contextlib
-import traceback
+import json
+import logging
+import os
 import re
-import warnings
-import subprocess
 import resource
-from types import SimpleNamespace
+import subprocess
+import threading
+import time
+import traceback
+import warnings
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, Tuple, List
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 # Bibliotecas de Resiliência e HTTP Async
 import httpx
 import pybreaker
-import requests 
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-    retry_if_exception_type,
-    before_sleep_log
-)
+import requests
+from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 # SDKs Defensivos
 try:
-    from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError as OpenAIRateLimitError
+    from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
+    from openai import RateLimitError as OpenAIRateLimitError
 except ImportError:
-    AsyncOpenAI = None
+    AsyncOpenAI = None  # type: ignore[assignment,misc]  # SDK opcional ausente
 
 try:
-    from anthropic import AsyncAnthropic, RateLimitError as AnthropicRateLimitError, APIStatusError
+    from anthropic import APIStatusError, AsyncAnthropic
+    from anthropic import RateLimitError as AnthropicRateLimitError
 except ImportError:
-    AsyncAnthropic = None
+    AsyncAnthropic = None  # type: ignore[assignment,misc]  # SDK opcional ausente
 
 try:
-    from google import genai as google_genai
+    from google import genai as google_genai  # type: ignore[attr-defined]
 except ImportError:
     google_genai = None
 
@@ -65,36 +61,45 @@ try:
         import google.generativeai as genai
     from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 except ImportError:
-    genai = None
+    genai = None  # type: ignore[assignment]  # SDK opcional ausente
 
+from prometheus_client import generate_latest
+from prometheus_client.exposition import CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 
-# Utilitários de Precisão
-from app.utils.token_utils import count_tokens
-from app.utils.pricing import get_model_cost
+from app import provider_tools as ptools  # type: ignore[attr-defined]
 from app.model_registry import is_provider_configured
+from app.observability import (
+    GENERATION_TOKENS_PER_SECOND,
+    OLLAMA_DYNAMIC_CONCURRENCY_ADJUSTMENTS,
+    OLLAMA_DYNAMIC_CONCURRENCY_LIMIT,
+    OLLAMA_DYNAMIC_CONCURRENCY_MODE,
+    OLLAMA_DYNAMIC_CONCURRENCY_TELEMETRY_FAILURES,
+    OLLAMA_MODEL_LOAD_SECONDS,
+    OLLAMA_MODEL_LOADED,
+    OLLAMA_VRAM_TOTAL_BYTES,
+    OLLAMA_VRAM_USED_BYTES,
+    OLLAMA_VRAM_UTILIZATION_RATIO,
+    PROV_COST,
+    PROV_ERR,
+    PROV_LAT,
+    PROV_OK,
+    PROV_REQ,
+    PROVIDER_INFLIGHT_REQUESTS,
+    PROVIDER_QUEUE_WAIT,
+    PROVIDER_RATE_LIMIT_ERRORS,
+    PROVIDER_TIMEOUT_ERRORS,
+    registry,
+)
 
 # Observabilidade
 from app.observability import (
-    logger as structlog_logger, 
-    registry, 
-    PROV_REQ, PROV_ERR, PROV_OK, PROV_LAT, PROV_COST,
-    PROVIDER_TIMEOUT_ERRORS, PROVIDER_RATE_LIMIT_ERRORS,
-    PROVIDER_INFLIGHT_REQUESTS,
-    PROVIDER_QUEUE_WAIT,
-    OLLAMA_MODEL_LOAD_SECONDS,
-    OLLAMA_MODEL_LOADED,
-    OLLAMA_VRAM_USED_BYTES,
-    OLLAMA_VRAM_TOTAL_BYTES,
-    OLLAMA_VRAM_UTILIZATION_RATIO,
-    OLLAMA_DYNAMIC_CONCURRENCY_LIMIT,
-    OLLAMA_DYNAMIC_CONCURRENCY_ADJUSTMENTS,
-    OLLAMA_DYNAMIC_CONCURRENCY_TELEMETRY_FAILURES,
-    OLLAMA_DYNAMIC_CONCURRENCY_MODE,
-    GENERATION_TOKENS_PER_SECOND,
+    logger as structlog_logger,
 )
-from prometheus_client.exposition import CONTENT_TYPE_LATEST
-from prometheus_client import generate_latest
+from app.utils.pricing import get_model_cost
+
+# Utilitários de Precisão
+from app.utils.token_utils import count_tokens
 
 logger = logging.getLogger("providers_async")
 
@@ -165,6 +170,8 @@ def _build_response_meta(result: "LLMResponse") -> Dict[str, Any]:
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
         "reasoning": result.reasoning,
+        "tool_calls": result.tool_calls,
+        "finish_reason": result.finish_reason,
     }
 
 
@@ -172,16 +179,16 @@ def _build_response_meta(result: "LLMResponse") -> Dict[str, Any]:
 # 1. ESTRATÉGIA DE RETRY (RATE LIMITS)
 # ==============================================================================
 
-RETRYABLE_ERRORS = (
+RETRYABLE_ERRORS: tuple[type[BaseException], ...] = (
     httpx.ConnectTimeout,
     httpx.ReadTimeout,
     httpx.HTTPStatusError,
 )
 
-if AsyncOpenAI:
+if AsyncOpenAI is not None:
     RETRYABLE_ERRORS += (APITimeoutError, APIConnectionError, OpenAIRateLimitError)
 
-if AsyncAnthropic:
+if AsyncAnthropic is not None:
     RETRYABLE_ERRORS += (AnthropicRateLimitError, APIStatusError)
 
 if genai:
@@ -189,7 +196,7 @@ if genai:
 
 COMMON_RETRY_STRATEGY = retry(
     reraise=True,
-    stop=stop_after_attempt(5), 
+    stop=stop_after_attempt(5),
     wait=wait_random_exponential(multiplier=1, max=60),
     retry=retry_if_exception_type(RETRYABLE_ERRORS),
     before_sleep=before_sleep_log(logger, logging.WARNING)
@@ -305,7 +312,7 @@ async def close_http_client():
     """Close the shared HTTP client during process shutdown."""
     global _http_client
     if _http_client is not None and not _http_client.is_closed:
-        await _http_client.close()
+        await _http_client.aclose()
         _http_client = None
         reset_ollama_tags_cache()
         logger.info("[HTTP Pool] Closed global HTTP client")
@@ -370,6 +377,10 @@ def log_process_file_descriptor_limit(context: str) -> None:
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
+OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "").strip()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 
 if genai and GEMINI_API_KEY:
@@ -455,10 +466,10 @@ def _runtime_provider_settings() -> Dict[str, Any]:
         out["ollama_concurrency_limit"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_LIMIT", str(DEFAULT_OLLAMA_CONCURRENCY_LIMIT))))
         out["ollama_dynamic_concurrency_enabled"] = str(dynamic_settings.get("OLLAMA_DYNAMIC_CONCURRENCY_ENABLED", "0")).strip() in ("1", "true", "True")
         out["ollama_concurrency_min"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_MIN", str(DEFAULT_OLLAMA_CONCURRENCY_MIN))))
-        out["ollama_concurrency_max"] = max(out["ollama_concurrency_min"], int(dynamic_settings.get("OLLAMA_CONCURRENCY_MAX", str(out["ollama_concurrency_limit"]))))
+        out["ollama_concurrency_max"] = max(cast(int, out["ollama_concurrency_min"]), int(dynamic_settings.get("OLLAMA_CONCURRENCY_MAX", str(out["ollama_concurrency_limit"]))))
         out["ollama_vram_target_utilization"] = min(0.99, max(0.1, float(dynamic_settings.get("OLLAMA_VRAM_TARGET_UTILIZATION", str(DEFAULT_OLLAMA_VRAM_TARGET_UTILIZATION)))))
         out["ollama_vram_high_watermark"] = min(0.99, max(0.1, float(dynamic_settings.get("OLLAMA_VRAM_HIGH_WATERMARK", str(DEFAULT_OLLAMA_VRAM_HIGH_WATERMARK)))))
-        out["ollama_vram_low_watermark"] = min(out["ollama_vram_high_watermark"], max(0.0, float(dynamic_settings.get("OLLAMA_VRAM_LOW_WATERMARK", str(DEFAULT_OLLAMA_VRAM_LOW_WATERMARK)))))
+        out["ollama_vram_low_watermark"] = min(cast(float, out["ollama_vram_high_watermark"]), max(0.0, float(dynamic_settings.get("OLLAMA_VRAM_LOW_WATERMARK", str(DEFAULT_OLLAMA_VRAM_LOW_WATERMARK)))))
         out["ollama_vram_poll_interval_seconds"] = max(1, int(dynamic_settings.get("OLLAMA_VRAM_POLL_INTERVAL_SECONDS", str(DEFAULT_OLLAMA_VRAM_POLL_INTERVAL_SECONDS))))
         out["ollama_concurrency_step_up"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_STEP_UP", str(DEFAULT_OLLAMA_CONCURRENCY_STEP_UP))))
         out["ollama_concurrency_step_down"] = max(1, int(dynamic_settings.get("OLLAMA_CONCURRENCY_STEP_DOWN", str(DEFAULT_OLLAMA_CONCURRENCY_STEP_DOWN))))
@@ -517,7 +528,7 @@ def _runtime_provider_settings() -> Dict[str, Any]:
         out["background_throttle_queue_wait_p95_ms"] = max(1, int(dynamic_settings.get("BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS", str(DEFAULT_BACKGROUND_THROTTLE_QUEUE_WAIT_P95_MS))))
         out["adaptive_timeout_enabled"] = str(dynamic_settings.get("ADAPTIVE_TIMEOUT_ENABLED", "1")).strip() in ("1", "true", "True")
         out["base_timeout"] = max(1, int(dynamic_settings.get("MIN_TIMEOUT", str(DEFAULT_BASE_TIMEOUT))))
-        out["max_timeout"] = max(out["base_timeout"], int(dynamic_settings.get("MAX_TIMEOUT", str(DEFAULT_MAX_TIMEOUT))))
+        out["max_timeout"] = max(cast(int, out["base_timeout"]), int(dynamic_settings.get("MAX_TIMEOUT", str(DEFAULT_MAX_TIMEOUT))))
         out["timeout_multiplier"] = max(1.0, float(dynamic_settings.get("ADAPTIVE_TIMEOUT_MULTIPLIER", str(DEFAULT_TIMEOUT_MULTIPLIER))))
         out["reasoning_multiplier"] = max(1.0, float(dynamic_settings.get("ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER", str(DEFAULT_REASONING_MULTIPLIER))))
     except Exception:
@@ -785,6 +796,7 @@ def apply_ollama_performance_preferences(candidates: List[str], runtime_hints: D
     route_limit = max(2, int(cfg["ollama_route_candidate_limit"]))
     current_limit = max(1, int(_ollama_concurrency_controller.get_effective_limit()))
     workload_class = str((runtime_hints or {}).get("workload_class", "") or "").strip()
+    detected_complexity = str((runtime_hints or {}).get("detected_complexity", "") or "").strip()
     interactive_priority = str((runtime_hints or {}).get("interactive_priority", "") or "").strip()
 
     def _score(candidate: str) -> tuple[float, int]:
@@ -800,6 +812,8 @@ def apply_ollama_performance_preferences(candidates: List[str], runtime_hints: D
             penalty += 0.5
         if workload_class in {"simple_text", "knowledge_lookup"} and candidate not in interactive_warm_set:
             penalty += 2.5
+        if detected_complexity in {"high", "expert"} and candidate.startswith("ollama/"):
+            penalty += 5.0
         if interactive_priority == "high" and candidate in interactive_warm_set:
             penalty -= 1.5
         penalty += float(inflight) * 2.0
@@ -1043,6 +1057,8 @@ class LLMResponse(BaseModel):
     model_used: str
     raw_payload: Optional[str] = None
     reasoning: Optional[str] = None  # <--- NOVO CAMPO: Armazena o pensamento (CoT)
+    tool_calls: Optional[List[Dict[str, Any]]] = None  # Tool/function calls no formato canônico (OpenAI)
+    finish_reason: Optional[str] = None  # "stop" | "tool_calls" | "length" | ...
 
 # ==============================================================================
 # 5. ARQUITETURA BASE
@@ -1113,7 +1129,7 @@ class OpenAIProvider(BaseProvider):
     """Call OpenAI chat models through the async SDK and normalize the result."""
     def __init__(self):
         """Create the OpenAI client and configure cloud-provider concurrency."""
-        if not AsyncOpenAI: raise ImportError("OpenAI SDK not installed")
+        if AsyncOpenAI is None: raise ImportError("OpenAI SDK not installed")
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         super().__init__("openai", concurrency_limit=100)
 
@@ -1126,19 +1142,23 @@ class OpenAIProvider(BaseProvider):
         max_tokens = kwargs.get("max_tokens", 512)
         start = time.time()
 
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
+
         await self._acquire_slot(model)
         try:
-            content = [{"type": "text", "text": prompt}]
-            if image_b64:
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
-                })
-
             api_args = {
                 "model": model,
-                "messages": [{"role": "user", "content": content}],
+                "messages": ptools.build_provider_messages(
+                    prompt, kwargs.get("system_prompt"), kwargs.get("messages"), image_b64
+                ),
             }
+
+            # Tools/function calling (formato OpenAI é o canônico → pass-through).
+            if tools and not ptools.tools_disabled(tool_choice):
+                api_args["tools"] = tools
+                if tool_choice is not None:
+                    api_args["tool_choice"] = tool_choice
 
             if model.startswith("o1-") or "gpt-5" in model:
                 api_args["max_completion_tokens"] = max_tokens
@@ -1148,7 +1168,10 @@ class OpenAIProvider(BaseProvider):
 
             resp = await self.client.chat.completions.create(**api_args)
 
-            text_out = resp.choices[0].message.content or ""
+            choice = resp.choices[0]
+            text_out = choice.message.content or ""
+            tool_calls = ptools.serialize_openai_tool_calls(getattr(choice.message, "tool_calls", None))
+            finish_reason = ptools.openai_finish_reason(getattr(choice, "finish_reason", None), bool(tool_calls))
             usage = resp.usage
             p_tok = usage.prompt_tokens if usage else 0
             c_tok = usage.completion_tokens if usage else 0
@@ -1167,7 +1190,7 @@ class OpenAIProvider(BaseProvider):
                 text=text_out, latency=latency, load_time=0.0,
                 cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
                 model_used=model, raw_payload=raw_payload,
-                reasoning=None,
+                reasoning=None, tool_calls=tool_calls, finish_reason=finish_reason,
             )
         except Exception as e:
             self._record_metrics(model, time.time()-start, 0, False)
@@ -1177,6 +1200,51 @@ class OpenAIProvider(BaseProvider):
             self._release_slot(model)
 
 # ==============================================================================
+# 6b. PROVEDOR: OPENROUTER (OpenAI-compatible gateway)
+# ==============================================================================
+
+class OpenRouterProvider(OpenAIProvider):
+    """Call models via OpenRouter using the OpenAI-compatible chat API."""
+
+    def __init__(self):
+        if AsyncOpenAI is None:
+            raise ImportError("OpenAI SDK not installed")
+        self._api_key = ""
+        self._refresh_client()
+        BaseProvider.__init__(self, "openrouter", concurrency_limit=100)
+
+    def _refresh_client(self) -> None:
+        from app.openrouter_catalog import get_openrouter_api_key
+
+        api_key = get_openrouter_api_key()
+        default_headers: Dict[str, str] = {}
+        referer = (os.getenv("OPENROUTER_HTTP_REFERER", "") or OPENROUTER_HTTP_REFERER or "").strip()
+        title = (os.getenv("OPENROUTER_APP_NAME", "") or OPENROUTER_APP_NAME or "").strip()
+        if referer:
+            default_headers["HTTP-Referer"] = referer
+        if title:
+            default_headers["X-Title"] = title
+        base_url = (os.getenv("OPENROUTER_BASE_URL", "") or OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1").strip()
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=default_headers or None,
+        )
+        self._api_key = api_key
+
+    @COMMON_RETRY_STRATEGY
+    @cloud_breaker
+    async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
+        from app.openrouter_catalog import get_openrouter_api_key
+
+        current_key = get_openrouter_api_key()
+        if current_key != self._api_key:
+            self._refresh_client()
+        if not current_key:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        return await super().generate(prompt, image_b64=image_b64, **kwargs)
+
+# ==============================================================================
 # 7. PROVEDOR: ANTHROPIC
 # ==============================================================================
 
@@ -1184,7 +1252,7 @@ class AnthropicProvider(BaseProvider):
     """Call Anthropic models and normalize the response for router consumers."""
     def __init__(self):
         """Create the Anthropic client and configure cloud-provider concurrency."""
-        if not AsyncAnthropic: raise ImportError("Anthropic SDK not installed")
+        if AsyncAnthropic is None: raise ImportError("Anthropic SDK not installed")
         self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
         super().__init__("anthropic", concurrency_limit=50)
 
@@ -1195,23 +1263,36 @@ class AnthropicProvider(BaseProvider):
         model = kwargs.get("model", "claude-3-5-sonnet-latest")
         start = time.time()
 
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
+
         await self._acquire_slot(model)
         try:
-            content = [{"type": "text", "text": prompt}]
-            if image_b64:
-                content.append({
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}
-                })
-
-            resp = await self.client.messages.create(
-                model=model,
-                max_tokens=kwargs.get("max_tokens", 512),
-                temperature=kwargs.get("temperature", 0.5),
-                messages=[{"role": "user", "content": content}]
+            canonical_messages = ptools.build_provider_messages(
+                prompt, kwargs.get("system_prompt"), kwargs.get("messages"), image_b64
             )
+            system_text, anth_messages = ptools.to_anthropic_messages(canonical_messages)
 
-            text_out = resp.content[0].text
+            create_args: Dict[str, Any] = {
+                "model": model,
+                "max_tokens": kwargs.get("max_tokens", 512),
+                "temperature": kwargs.get("temperature", 0.5),
+                "messages": anth_messages,
+            }
+            if system_text:
+                create_args["system"] = system_text
+            if tools and not ptools.tools_disabled(tool_choice):
+                anth_tools = ptools.to_anthropic_tools(tools)
+                if anth_tools:
+                    create_args["tools"] = anth_tools
+                    anth_tool_choice = ptools.to_anthropic_tool_choice(tool_choice)
+                    if anth_tool_choice:
+                        create_args["tool_choice"] = anth_tool_choice
+
+            resp = await self.client.messages.create(**create_args)
+
+            # Itera blocos (text + tool_use) em vez de assumir content[0].text.
+            text_out, tool_calls, finish_reason = ptools.from_anthropic_response(resp)
             usage = resp.usage
             p_tok = usage.input_tokens
             c_tok = usage.output_tokens
@@ -1225,9 +1306,9 @@ class AnthropicProvider(BaseProvider):
                 text=text_out, latency=latency, load_time=0.0,
                 cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
                 model_used=model, raw_payload=str(resp),
-                reasoning=None
+                reasoning=None, tool_calls=tool_calls, finish_reason=finish_reason,
             )
-        except Exception as e:
+        except Exception:
             self._record_metrics(model, time.time()-start, 0, False)
             raise
         finally:
@@ -1249,45 +1330,63 @@ class GeminiProvider(BaseProvider):
             image_b64: Optional[str],
             temperature: float,
             max_tokens: int,
+            tools: Optional[list] = None,
+            tool_config: Optional[dict] = None,
+            contents: Optional[list] = None,
+            system_instruction: Optional[str] = None,
         ):
-            """Execute one Gemini generation call using the available SDK."""
+            """Execute one Gemini generation call using the available SDK.
+
+            Quando ``tools``/``contents`` são informados, retorna o objeto de
+            resposta bruto (para ``from_gemini_response`` extrair function calls);
+            caso contrário, preserva o comportamento antigo (``SimpleNamespace(text)``).
+            """
+            structured = bool(tools or contents)
             if google_genai is not None:
                 client = google_genai.Client(api_key=GEMINI_API_KEY or None)
-                parts = [{"text": prompt}]
-                if image_b64:
-                    parts.append(
-                        {
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": image_b64,
-                            }
-                        }
-                    )
+                if contents:
+                    req_contents = contents
+                else:
+                    req_contents = [{"text": prompt}]
+                    if image_b64:
+                        req_contents.append({"inline_data": {"mime_type": "image/jpeg", "data": image_b64}})
+                config: Dict[str, Any] = {"temperature": temperature, "max_output_tokens": max_tokens}
+                if system_instruction:
+                    config["system_instruction"] = system_instruction
+                if tools:
+                    config["tools"] = tools
+                if tool_config:
+                    config["tool_config"] = tool_config
                 resp = client.models.generate_content(
                     model=model_name,
-                    contents=parts,
-                    config={
-                        "temperature": temperature,
-                        "max_output_tokens": max_tokens,
-                    },
+                    contents=req_contents,
+                    config=config,
                 )
-                text_out = getattr(resp, "text", "") or ""
-                return SimpleNamespace(text=text_out)
+                if structured:
+                    return resp
+                return SimpleNamespace(text=getattr(resp, "text", "") or "")
 
             if genai is None:
                 raise ImportError("No Gemini SDK available")
 
-            gmodel = genai.GenerativeModel(model_name)
-            legacy_parts = [prompt]
-            if image_b64:
-                legacy_parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(image_b64)})
-            return gmodel.generate_content(
-                legacy_parts,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_tokens,
-                },
-            )
+            model_kwargs: Dict[str, Any] = {}
+            if system_instruction:
+                model_kwargs["system_instruction"] = system_instruction
+            if tools:
+                model_kwargs["tools"] = tools
+            gmodel = genai.GenerativeModel(model_name, **model_kwargs)
+            if contents:
+                gen_contents: Any = contents
+            else:
+                gen_contents = [prompt]
+                if image_b64:
+                    gen_contents.append({"mime_type": "image/jpeg", "data": base64.b64decode(image_b64)})
+            gen_kwargs: Dict[str, Any] = {
+                "generation_config": {"temperature": temperature, "max_output_tokens": max_tokens}
+            }
+            if tool_config:
+                gen_kwargs["tool_config"] = tool_config
+            return gmodel.generate_content(gen_contents, **gen_kwargs)
 
     def __init__(self):
         """Initialize the Gemini provider and its adapter."""
@@ -1300,7 +1399,21 @@ class GeminiProvider(BaseProvider):
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one Gemini request and normalize the response payload."""
         model_name = kwargs.get("model", "gemini-1.5-flash")
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
+        messages = kwargs.get("messages")
         start = time.time()
+
+        gem_tools = None
+        gem_tool_config = None
+        gem_contents = None
+        gem_system = None
+        if tools and not ptools.tools_disabled(tool_choice):
+            gem_tools = ptools.to_gemini_tools(tools)
+            gem_tool_config = ptools.to_gemini_tool_config(tool_choice)
+        if messages:
+            canonical = ptools.build_provider_messages(prompt, kwargs.get("system_prompt"), messages, image_b64)
+            gem_system, gem_contents = ptools.to_gemini_contents(canonical)
 
         await self._acquire_slot(model_name)
         try:
@@ -1312,10 +1425,14 @@ class GeminiProvider(BaseProvider):
                     image_b64=image_b64,
                     temperature=kwargs.get("temperature", 0.5),
                     max_tokens=kwargs.get("max_tokens", 512),
+                    tools=gem_tools,
+                    tool_config=gem_tool_config,
+                    contents=gem_contents,
+                    system_instruction=gem_system,
                 )
 
             resp = await asyncio.to_thread(_call)
-            text_out = resp.text or ""
+            text_out, tool_calls, finish_reason = ptools.from_gemini_response(resp)
 
             p_tok = count_tokens(prompt, model_name)
             c_tok = count_tokens(text_out, model_name)
@@ -1329,9 +1446,9 @@ class GeminiProvider(BaseProvider):
                 text=text_out, latency=latency, load_time=0.0,
                 cost=cost, prompt_tokens=p_tok, completion_tokens=c_tok,
                 model_used=model_name, raw_payload=str(resp),
-                reasoning=None
+                reasoning=None, tool_calls=tool_calls, finish_reason=finish_reason,
             )
-        except Exception as e:
+        except Exception:
             self._record_metrics(model_name, time.time()-start, 0, False)
             raise
         finally:
@@ -1370,39 +1487,30 @@ class OllamaProvider(BaseProvider):
         start = time.time()
         self._refresh_concurrency_limit()
 
-        # --- LÓGICA DE INJEÇÃO DE THINKING ---
-        # Se for um modelo de raciocínio, forçamos a tag <think> no prompt
-        # para garantir que o modelo saiba o que fazer, caso o template padrão não tenha.
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
+        messages = kwargs.get("messages")
+        # Migração condicional: só usa /api/chat (messages + tools) quando há tools
+        # ou histórico multi-turn; caso contrário mantém /api/generate + reasoning.
+        use_chat = bool(tools) or bool(messages)
+
+        # --- LÓGICA DE INJEÇÃO DE THINKING (apenas /api/generate) ---
         is_reasoning_model = any(k in model.lower() for k in REASONING_MODEL_KEYWORDS)
         final_prompt = prompt
-        
-        if is_reasoning_model:
-            # Adiciona instrução de sistema implícita se não houver
-            if "<think>" not in prompt:
-                final_prompt = (
-                    "You are a reasoning model. "
-                    "Please output your thought process within <think> tags before your final answer.\n\n"
-                    f"{prompt}"
-                )
+        if is_reasoning_model and not use_chat and "<think>" not in prompt:
+            final_prompt = (
+                "You are a reasoning model. "
+                "Please output your thought process within <think> tags before your final answer.\n\n"
+                f"{prompt}"
+            )
 
         await self._acquire_slot(model)
         try:
-            payload = {
-                "model": model,
-                "prompt": final_prompt,
-                "stream": False,
-                # Avoid empty final answers on models that support a separate
-                # thinking channel (for example qwen3.5) unless we explicitly
-                # want reasoning output.
-                "think": is_reasoning_model,
-                "options": {
-                    "temperature": kwargs.get("temperature", 0.5),
-                    "num_predict": kwargs.get("max_tokens", 512),
-                    "num_ctx": 4096
-                }
+            options = {
+                "temperature": kwargs.get("temperature", 0.5),
+                "num_predict": kwargs.get("max_tokens", 512),
+                "num_ctx": 4096,
             }
-            if image_b64:
-                payload["images"] = [image_b64]
 
             # Quick Win #6: Adaptive timeout based on model type
             explicit_timeout = kwargs.get("timeout_seconds")
@@ -1411,28 +1519,57 @@ class OllamaProvider(BaseProvider):
                 if explicit_timeout is not None
                 else _get_adaptive_timeout(model, workload_class=kwargs.get("workload_class"))
             )
-
             client = await get_http_client()
-            resp = await client.post(
-                f"{self.host}/api/generate",
-                json=payload,
-                timeout=timeout
-            )
-            resp.raise_for_status()
-            data = resp.json()
 
-            raw_text = data.get("response", "").strip()
-            raw_thinking = data.get("thinking", "").strip()
+            tool_calls = None
+            finish_reason = "stop"
 
-            reasoning = None
-            text_out = raw_text
+            if use_chat:
+                canonical_messages = ptools.build_provider_messages(
+                    prompt, kwargs.get("system_prompt"), messages, image_b64
+                )
+                chat_payload: Dict[str, Any] = {
+                    "model": model,
+                    "messages": ptools.to_ollama_messages(canonical_messages),
+                    "stream": False,
+                    "options": options,
+                }
+                if tools and not ptools.tools_disabled(tool_choice):
+                    chat_payload["tools"] = tools
+                resp = await client.post(f"{self.host}/api/chat", json=chat_payload, timeout=timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                text_out, tool_calls, finish_reason = ptools.from_ollama_chat(data)
+                reasoning = None
+            else:
+                payload = {
+                    "model": model,
+                    "prompt": final_prompt,
+                    "stream": False,
+                    # Avoid empty final answers on models that support a separate
+                    # thinking channel (for example qwen3.5) unless we explicitly
+                    # want reasoning output.
+                    "think": is_reasoning_model,
+                    "options": options,
+                }
+                if image_b64:
+                    payload["images"] = [image_b64]
+                resp = await client.post(f"{self.host}/api/generate", json=payload, timeout=timeout)
+                resp.raise_for_status()
+                data = resp.json()
 
-            think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
-            if think_match:
-                reasoning = think_match.group(1).strip()
-                text_out = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-            elif raw_thinking:
-                reasoning = raw_thinking
+                raw_text = data.get("response", "").strip()
+                raw_thinking = data.get("thinking", "").strip()
+
+                reasoning = None
+                text_out = raw_text
+
+                think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
+                if think_match:
+                    reasoning = think_match.group(1).strip()
+                    text_out = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+                elif raw_thinking:
+                    reasoning = raw_thinking
 
             load_ns = data.get("load_duration", 0)
             load_sec = float(load_ns) / 1_000_000_000.0
@@ -1465,6 +1602,8 @@ class OllamaProvider(BaseProvider):
                 model_used=model,
                 raw_payload=json.dumps(data),
                 reasoning=reasoning,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
             )
         except Exception as e:
             self._record_metrics(model, time.time()-start, 0, False)
@@ -1493,7 +1632,7 @@ class OllamaProvider(BaseProvider):
 
 class ProviderFactory:
     """Create or reuse provider instances based on the model prefix."""
-    _instances = {}
+    _instances: dict[str, BaseProvider] = {}
 
     @classmethod
     def get_provider(cls, model_name: str) -> BaseProvider:
@@ -1504,11 +1643,12 @@ class ProviderFactory:
 
         if prefix not in cls._instances:
             if prefix == "openai": cls._instances[prefix] = OpenAIProvider()
+            elif prefix == "openrouter": cls._instances[prefix] = OpenRouterProvider()
             elif prefix == "anthropic": cls._instances[prefix] = AnthropicProvider()
             elif prefix == "gemini": cls._instances[prefix] = GeminiProvider()
             elif prefix == "ollama": cls._instances[prefix] = OllamaProvider()
             else: raise ValueError(f"Namespace desconhecido: {prefix}")
-        
+
         return cls._instances[prefix]
 
 # ==============================================================================
@@ -1524,6 +1664,10 @@ async def call_model(
     max_tokens: int = 512,
     timeout_seconds: float | None = None,
     workload_class: str | None = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Any] = None,
+    messages: Optional[List[Dict[str, Any]]] = None,
+    system_prompt: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Run one model call through the normalized provider pipeline.
 
@@ -1551,6 +1695,10 @@ async def call_model(
             max_tokens=max_tokens,
             timeout_seconds=timeout_seconds,
             workload_class=workload_class,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+            system_prompt=system_prompt,
         )
 
         meta = _build_response_meta(result)
@@ -1594,12 +1742,12 @@ async def _ensure_ollama_model_async(model_name: str) -> bool:
             return True
 
         existing = [m.get("name") for m in await fetch_ollama_tags(force_refresh=False)]
-        if any(model_name in m for m in existing):
+        if any(model_name in (m or "") for m in existing):
             _mark_ollama_models_verified([model_name], 600)
             return True
 
         existing = [m.get("name") for m in await fetch_ollama_tags(force_refresh=True)]
-        if any(model_name in m for m in existing):
+        if any(model_name in (m or "") for m in existing):
             _mark_ollama_models_verified([model_name], 600)
             return True
 
@@ -1634,7 +1782,6 @@ def _ensure_ollama_model(model_name: str) -> bool:
     Returns:
         True if model is available or was successfully pulled, False otherwise.
     """
-    import requests
 
     # Defensive: ensure we have an event loop in this thread (Python 3.10+ compatibility)
     # When running in ThreadPoolExecutor, there's no event loop by default.
@@ -1711,4 +1858,6 @@ def reset_provider_runtime_state() -> None:
     _ollama_concurrency_controller._stable_low_windows = 0
     _ollama_runtime_state.clear()
     _provider_unavailable_until.clear()
+    with _ollama_verified_models_lock:
+        _ollama_verified_models.clear()
     reset_ollama_tags_cache()

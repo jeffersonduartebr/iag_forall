@@ -77,5 +77,7 @@ def build_query_response(result: Dict[str, Any], correlation_id: str | None) -> 
             evidence_snippets=[EvidenceSnippet(**item) for item in (result.get("evidence_snippets") or [])],
             knowledge_version=result.get("knowledge_version"),
         ),
+        tool_calls=result.get("tool_calls"),
+        finish_reason=result.get("finish_reason"),
         diagnostics=diagnostics,
     )

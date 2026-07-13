@@ -6,8 +6,6 @@ handling for the corresponding runtime component.
 """
 
 
-import asyncio
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -243,7 +241,6 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 async def test_add_query_reset_and_health(monkeypatch):
     """Testa add query reset and health."""
     inserts = []
-    queries = []
     sparse_added = []
     committed = {"n": 0}
 

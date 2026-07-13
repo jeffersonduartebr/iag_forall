@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
+from ..api.auth import AuthContext, require_api_auth
+from ..api.deps import require_admin
 from ..observability import logger
 from ..user_feedback import UserFeedbackRequest, get_feedback_stats, process_feedback
 
@@ -14,7 +16,10 @@ router = APIRouter()
 
 
 @router.post("/feedback", tags=["Feedback"])
-def submit_feedback(request: UserFeedbackRequest):
+def submit_feedback(
+    request: UserFeedbackRequest,
+    _auth: AuthContext = Depends(require_api_auth),
+):
     """
     Submit user feedback for a model response.
 
@@ -40,6 +45,11 @@ def submit_feedback(request: UserFeedbackRequest):
 
 
 @router.get("/feedback/stats", tags=["Feedback"])
-def feedback_stats(model: Optional[str] = None, hours: int = 24):
-    """Get feedback statistics."""
+def feedback_stats(
+    model: Optional[str] = None,
+    hours: int = 24,
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Get feedback statistics (admin only)."""
+    require_admin(x_admin_token)
     return get_feedback_stats(model=model, hours=hours)

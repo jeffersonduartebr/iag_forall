@@ -14,9 +14,9 @@ All modules should import from here instead of creating their own engines.
 
 from __future__ import annotations
 
-import os
 import logging
-from typing import Optional
+import os
+from typing import Any, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -98,8 +98,8 @@ def get_engine() -> Engine:
             poolclass=QueuePool,
             pool_pre_ping=True,
             pool_recycle=300,  # 5 minutes - prevents stale connections in cloud environments
-            pool_size=20,      # Per-process baseline to avoid DB exhaustion with multiple workers
-            max_overflow=10,   # Supports burst without overcommitting mariadb max_connections
+            pool_size=10,      # Per-process baseline (2 workers x 15 = 30 max connections)
+            max_overflow=5,    # Supports burst without overcommitting mariadb max_connections
             pool_timeout=60,   # Wait up to 60s for a connection
             echo=False,        # Set to True for SQL debugging
         )
@@ -109,7 +109,7 @@ def get_engine() -> Engine:
             conn.execute(text("SELECT 1"))
 
         logger.info(
-            f"[db] Engine created: pool_size=20, max_overflow=10, "
+            f"[db] Engine created: pool_size=10, max_overflow=5, "
             f"pool_recycle=300s, host={_get_db_config()['host']}"
         )
 
@@ -165,10 +165,10 @@ def get_pool_stats() -> dict:
     try:
         pool = _engine.pool
         return {
-            "size": pool.size(),
-            "checked_in": pool.checkedin(),
-            "checked_out": pool.checkedout(),
-            "overflow": pool.overflow(),
+            "size": pool.size(),  # type: ignore[attr-defined]  # QueuePool runtime attrs
+            "checked_in": pool.checkedin(),  # type: ignore[attr-defined]  # QueuePool runtime attrs
+            "checked_out": pool.checkedout(),  # type: ignore[attr-defined]  # QueuePool runtime attrs
+            "overflow": pool.overflow(),  # type: ignore[attr-defined]  # QueuePool runtime attrs
             "invalid": getattr(pool, 'invalidatedcount', lambda: 0)(),
             "status": "healthy",
         }
@@ -197,7 +197,7 @@ def check_db_health() -> dict:
     """
     import time
 
-    result = {
+    result: dict[str, Any] = {
         "healthy": False,
         "latency_ms": None,
         "pool_stats": None,

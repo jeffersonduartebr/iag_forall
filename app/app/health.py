@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import os
 import threading
-from typing import Dict, Any, Optional
+import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +128,24 @@ async def check_database_health() -> ComponentHealth:
 async def check_vectorstore_health() -> ComponentHealth:
     """Check ChromaDB connectivity."""
     try:
-        import chromadb
-        chroma_path = os.getenv("CHROMA_PERSIST_PATH", "/data/chroma")
-
         start = time.time()
+        chroma_host = (os.getenv("CHROMA_HOST") or "").strip()
+        if chroma_host:
+            from .vectorstore import get_chroma_client
+
+            client = get_chroma_client()
+            collections = client.list_collections()
+            latency_ms = (time.time() - start) * 1000
+            return ComponentHealth(
+                name="chromadb",
+                healthy=True,
+                latency_ms=latency_ms,
+                details={"collections": len(collections), "mode": "remote", "host": chroma_host},
+            )
+
+        import chromadb
+        chroma_path = os.getenv("CHROMA_PERSIST_PATH", os.getenv("CHROMA_PATH", "/data/chroma"))
+
         client = chromadb.PersistentClient(path=chroma_path)
         collections = client.list_collections()
         latency_ms = (time.time() - start) * 1000
@@ -140,7 +154,7 @@ async def check_vectorstore_health() -> ComponentHealth:
             name="chromadb",
             healthy=True,
             latency_ms=latency_ms,
-            details={"collections": len(collections)},
+            details={"collections": len(collections), "mode": "local"},
         )
     except Exception as e:
         return ComponentHealth(name="chromadb", healthy=False, error=str(e))
@@ -222,7 +236,7 @@ async def get_full_health_check(force_refresh: bool = False) -> Dict[str, Any]:
     # Process results
     components = []
     for check in checks:
-        if isinstance(check, Exception):
+        if isinstance(check, BaseException):
             components.append(ComponentHealth(
                 name="unknown",
                 healthy=False,
@@ -272,19 +286,28 @@ async def get_liveness_check() -> Dict[str, Any]:
 
 async def get_readiness_check() -> Dict[str, Any]:
     """Return a lightweight readiness verdict derived from deep health status."""
-    # Check critical dependencies only
+    from .settings_dynamic import settings
+
     redis_health = await check_redis_health()
     db_health = await check_database_health()
 
     readiness_mode = os.getenv("READINESS_MODE", "strict").strip().lower()
+    env = str(settings.get("ENV", "development") or "development").lower()
+    redis_required = env == "production" and str(
+        settings.get("REDIS_REQUIRED_IN_PRODUCTION", "1")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
     if readiness_mode == "degraded":
         ready = redis_health.healthy or db_health.healthy
+    elif redis_required:
+        ready = redis_health.healthy and db_health.healthy
     else:
         ready = redis_health.healthy and db_health.healthy
 
     return {
         "status": "ready" if ready else "not_ready",
         "mode": readiness_mode,
+        "redis_required": redis_required,
         "timestamp": time.time(),
         "redis": redis_health.healthy,
         "database": db_health.healthy,

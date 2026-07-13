@@ -4,10 +4,10 @@
 
 from __future__ import annotations
 
+from .bandits import reset_bandits_runtime_state
 from .providers_async import reset_provider_runtime_state
 from .reliability import reset_reliability_runtime_state
 from .router_core import reset_router_runtime_state
-from .bandits import reset_bandits_runtime_state
 from .vectorstore import reset_vectorstore_runtime_state
 
 

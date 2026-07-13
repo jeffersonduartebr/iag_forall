@@ -7,11 +7,12 @@ Implementa um índice esparso local usando o algoritmo BM25 (Okapi).
 Funciona em paralelo ao ChromaDB para permitir Busca Híbrida.
 """
 
+import logging
 import os
 import pickle
-import logging
 import re
 from typing import List, Tuple
+
 from rank_bm25 import BM25Okapi
 
 from .settings_dynamic import settings
@@ -48,7 +49,7 @@ The constructor keeps setup local to the object so callers can use it without ad
         """Adiciona um documento ao índice em memória."""
         if not text or not text.strip():
             return
-        
+
         # Evita duplicatas de ID (atualização simplificada: remove e adiciona)
         if doc_id in self.doc_ids:
             idx = self.doc_ids.index(doc_id)
@@ -88,13 +89,13 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             tokenized_query = self._tokenize(query)
             # O rank_bm25 retorna scores para todos os documentos
             scores = self.bm25.get_scores(tokenized_query)
-            
+
             # Emparelha scores com IDs
             scored_results = []
             for idx, score in enumerate(scores):
                 if score > 0: # Filtra irrelevantes
                     scored_results.append((self.doc_ids[idx], float(score)))
-            
+
             # Ordena e corta
             scored_results.sort(key=lambda x: x[1], reverse=True)
             return scored_results[:top_k]

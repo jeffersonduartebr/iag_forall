@@ -49,8 +49,8 @@ def test_tune_weights_from_judge_feedback_ignores_proxy_rows(monkeypatch):
     )
     monkeypatch.setattr(
         nsga,
-        "engine",
-        SimpleNamespace(connect=lambda: _Ctx(_Conn([(10, 8), (200,)]))),
+        "_db_engine",
+        lambda: SimpleNamespace(connect=lambda: _Ctx(_Conn([(10, 8), (200,)]))),
     )
 
     rate_values = []
@@ -86,8 +86,8 @@ def test_tune_weights_from_judge_feedback_updates_weight_from_judged_rows(monkey
     )
     monkeypatch.setattr(
         nsga,
-        "engine",
-        SimpleNamespace(connect=lambda: _Ctx(_Conn([(40, 20), (5,)]))),
+        "_db_engine",
+        lambda: SimpleNamespace(connect=lambda: _Ctx(_Conn([(40, 20), (5,)]))),
     )
     monkeypatch.setattr(nsga.JUDGE_FEEDBACK_ERROR_RATE, "set", lambda _value: None)
     monkeypatch.setattr(nsga.JUDGE_FEEDBACK_PROXY_TOTAL, "inc", lambda value=1: None)

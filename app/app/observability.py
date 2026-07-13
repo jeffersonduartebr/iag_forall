@@ -11,23 +11,23 @@ Agora inclui TODAS as métricas do sistema (API, Router, Providers, Bandit).
 
 from __future__ import annotations
 
-import os
-import sys
 import json
 import logging
-import structlog
+import os
+import sys
 from datetime import datetime
 from typing import Optional
+
+import structlog
 from prometheus_client import (
-    Counter,
-    Histogram,
-    Gauge,
     CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
     generate_latest,
     multiprocess,
 )
 from prometheus_client.exposition import CONTENT_TYPE_LATEST
-
 
 # ============================================================
 # ⚙️ Preparação do diretório multiprocess
@@ -65,7 +65,7 @@ def _build_registry() -> CollectorRegistry:
         if _prom_dir:
             multiprocess.MultiProcessCollector(reg)
         else:
-            pass 
+            pass
     except Exception as e:
         print(f"[observability] Falha ao inicializar MultiProcessCollector: {e}")
         reg = CollectorRegistry()
@@ -195,6 +195,24 @@ ROUTER_ENQUEUED_DUE_TO_DEADLINE = Counter(
     ["workload_class"],
     registry=registry,
 )
+QUERY_COMPLEXITY_DETECTED = Counter(
+    "query_complexity_detected_total",
+    "Runtime-detected query complexity tiers",
+    ["detected_complexity", "workload_class"],
+    registry=registry,
+)
+EVAL_RUN_COMPLETED = Counter(
+    "eval_run_completed_total",
+    "Evaluation runs completed by status",
+    ["status"],
+    registry=registry,
+)
+ROUTER_QUERY_COST_USD = Counter(
+    "router_query_cost_usd_total",
+    "Accumulated estimated query cost in USD",
+    ["benchmark_theme", "detected_complexity"],
+    registry=registry,
+)
 ROUTER_FALLBACK_SKIPPED = Counter(
     "router_fallback_skipped_total",
     "Fallback attempts skipped because the remaining synchronous budget was insufficient",
@@ -265,6 +283,18 @@ BANDIT_UPDATE = Counter(
     "bandit_update_total",
     "Atualizações de bandit por modelo",
     ["model"],
+    registry=registry,
+)
+OPENROUTER_EXPLORATION_PICKS = Counter(
+    "openrouter_exploration_picks_total",
+    "OpenRouter catalog exploration picks",
+    ["model"],
+    registry=registry,
+)
+OPENROUTER_EXPLORATION_OUTCOMES = Counter(
+    "openrouter_exploration_outcomes_total",
+    "OpenRouter exploration outcomes recorded",
+    ["model", "promotable"],
     registry=registry,
 )
 BANDIT_REWARD = Histogram(

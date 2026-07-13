@@ -85,6 +85,24 @@ async def test_normal_pressure_does_not_limit_interactive_queries(monkeypatch):
         },
     )
     monkeypatch.setattr(rl, "get_backpressure", lambda: SimpleNamespace(get_stats=lambda: {"utilization": 0.0}))
+    monkeypatch.setattr(
+        rl,
+        "_adaptive_limiter_config",
+        lambda: {
+            "enabled": True,
+            "window_seconds": 15,
+            "hysteresis_windows": 1,
+            "elevated_utilization": 0.8,
+            "congested_utilization": 1.0,
+            "elevated_queue_wait_ms": 500,
+            "congested_queue_wait_ms": 1000,
+            "sync_queue_wait_ms": 250,
+            "interactive_per_slot_elevated": 12,
+            "interactive_per_slot_congested": 6,
+            "admin_per_slot_elevated": 3,
+            "admin_per_slot_congested": 1,
+        },
+    )
 
     middleware = rl.RateLimitMiddleware(app=lambda scope, receive, send: None)
 

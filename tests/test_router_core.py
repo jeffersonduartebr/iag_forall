@@ -10,9 +10,25 @@ Tests the core routing logic including:
 - Error handling
 """
 
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
-import asyncio
+
+
+@contextmanager
+def patch_async_hot_path(select_return="ollama/phi4:latest", weights=None):
+    """Patch phase-3 async router dependencies used by route_and_answer."""
+    resolved_weights = weights or {"w_quality": 1.0, "w_latency": 0.5, "w_cost": 50.0}
+    with patch("app.router_core.select_model_async", new_callable=AsyncMock) as mock_select_async, patch(
+        "app.router_core.get_dynamic_strategy_weights_async", new_callable=AsyncMock
+    ) as mock_weights_async, patch(
+        "app.router_core._is_error_budget_exceeded_async", new_callable=AsyncMock
+    ) as mock_budget_async:
+        mock_select_async.return_value = select_return
+        mock_weights_async.return_value = resolved_weights
+        mock_budget_async.return_value = False
+        yield mock_select_async, mock_weights_async, mock_budget_async
 
 
 class TestRouteAndAnswer:
@@ -36,7 +52,8 @@ class TestRouteAndAnswer:
             from app.router_core import route_and_answer
             result = await route_and_answer(
                 query="What is Python?",
-                use_cache=True
+                use_cache=True,
+                deduplicate=False,
             )
 
             assert result["model"] == "semantic_cache"
@@ -57,7 +74,7 @@ class TestRouteAndAnswer:
             "load_time": 0.5
         })
 
-        with patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
+        with patch_async_hot_path(), patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
              patch("app.router_core.call_model", new_callable=AsyncMock) as mock_call, \
              patch("app.router_core.choose_top2_models") as mock_choose, \
              patch("app.router_core.select_model") as mock_select, \
@@ -73,7 +90,8 @@ class TestRouteAndAnswer:
             from app.router_core import route_and_answer
             result = await route_and_answer(
                 query="What is Python?",
-                use_cache=True
+                use_cache=True,
+                deduplicate=False,
             )
 
             assert result["model"] == "ollama/phi4:latest"
@@ -93,7 +111,7 @@ class TestRouteAndAnswer:
             "load_time": 0.0
         })
 
-        with patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
+        with patch_async_hot_path(), patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
              patch("app.router_core.call_model", new_callable=AsyncMock) as mock_call, \
              patch("app.router_core.choose_top2_models") as mock_choose, \
              patch("app.router_core.select_model") as mock_select, \
@@ -108,7 +126,8 @@ class TestRouteAndAnswer:
             from app.router_core import route_and_answer
             result = await route_and_answer(
                 query="What is Python?",
-                use_cache=False
+                use_cache=False,
+                deduplicate=False,
             )
 
             mock_cache.assert_not_called()
@@ -128,7 +147,7 @@ class TestRouteAndAnswer:
             "image_output_b64": None
         })
 
-        with patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
+        with patch_async_hot_path(select_return="ollama/llava:latest"), patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
              patch("app.router_core.call_model", new_callable=AsyncMock) as mock_call, \
              patch("app.router_core.choose_top2_models") as mock_choose, \
              patch("app.router_core.select_model") as mock_select, \
@@ -145,7 +164,8 @@ class TestRouteAndAnswer:
             result = await route_and_answer(
                 query="Describe this image",
                 modality="text",
-                image_b64="base64encodedimage"
+                image_b64="base64encodedimage",
+                deduplicate=False,
             )
 
             assert result["modality"] == "vision"
@@ -153,7 +173,7 @@ class TestRouteAndAnswer:
     @pytest.mark.asyncio
     async def test_model_error_returns_error_message(self):
         """When model call fails, route should propagate the exception."""
-        with patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
+        with patch_async_hot_path(), patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
              patch("app.router_core.call_model", new_callable=AsyncMock) as mock_call, \
              patch("app.router_core.choose_top2_models") as mock_choose, \
              patch("app.router_core.select_model") as mock_select, \
@@ -168,7 +188,7 @@ class TestRouteAndAnswer:
 
             from app.router_core import route_and_answer
             with pytest.raises(Exception, match="Connection timeout"):
-                await route_and_answer(query="Test query")
+                await route_and_answer(query="Test query", deduplicate=False)
 
 
 class TestDynamicWeights:
@@ -208,7 +228,7 @@ class TestRAGIntegration:
             "load_time": 0.0
         })
 
-        with patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
+        with patch_async_hot_path(), patch("app.router_core.check_cache", new_callable=AsyncMock) as mock_cache, \
              patch("app.router_core.call_model", new_callable=AsyncMock) as mock_call, \
              patch("app.router_core.choose_top2_models") as mock_choose, \
              patch("app.router_core.select_model") as mock_select, \
@@ -237,6 +257,7 @@ class TestRAGIntegration:
             result = await route_and_answer(
                 query="What is NSGA-II?",
                 use_rag=True,
+                deduplicate=False,
                 runtime_hints={"retrieval_mode": "full_retrieval", "needs_retrieval": True},
             )
 

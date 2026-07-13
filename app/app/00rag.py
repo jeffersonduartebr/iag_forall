@@ -8,8 +8,9 @@ current runtime architecture and operational documentation.
 
 # app/rag.py
 import logging
-from .settings import settings
+
 from .embeddings import get_embedding
+from .settings import settings
 from .vectorstore import get_chroma_client
 
 logger = logging.getLogger(__name__)

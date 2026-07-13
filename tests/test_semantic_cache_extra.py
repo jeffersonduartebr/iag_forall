@@ -6,8 +6,8 @@ handling for the corresponding runtime component.
 """
 
 
-from types import SimpleNamespace
 import threading
+from types import SimpleNamespace
 
 import pytest
 

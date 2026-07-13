@@ -20,20 +20,20 @@ Execução:
 
 from __future__ import annotations
 
+import logging
+import math
 import os
 import sys
 import time
-import math
-import logging
-from typing import Dict, Any
+from datetime import datetime
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
 import redis
-from datetime import datetime
-from prometheus_client import start_http_server, Gauge
+from prometheus_client import Gauge, start_http_server
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from sqlalchemy.exc import OperationalError
 
 # -----------------------------------------------------------------------------
 # 🔧 Settings dinâmicos (Redis → DB → .env)
@@ -43,7 +43,7 @@ try:
 except ImportError:
     # Fallback de path se chamado de outro diretório
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from app.settings_dynamic import settings  # type: ignore
+    from app.settings_dynamic import settings
 
 # -----------------------------------------------------------------------------
 # 📝 Logging

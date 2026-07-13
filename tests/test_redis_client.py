@@ -10,9 +10,9 @@ Tests for the redis_client.py utility module covering:
 - Pipeline operations
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-import time
 
 
 class TestRedisClientConfiguration:
@@ -139,7 +139,7 @@ class TestRedisPipeline:
         mock_get_redis.return_value = None
 
         with pytest.raises(RuntimeError, match="Redis not available"):
-            with redis_pipeline() as pipe:
+            with redis_pipeline():
                 pass
 
 
@@ -168,7 +168,7 @@ class TestRedisPoolCreation:
     @patch('app.utils.redis_client.redis.ConnectionPool')
     def test_create_pool_with_correct_parameters(self, mock_pool_cls):
         """Test _create_pool creates pool with correct parameters."""
-        from app.utils.redis_client import _create_pool, REDIS_HOST, REDIS_PORT
+        from app.utils.redis_client import REDIS_HOST, REDIS_PORT, _create_pool
 
         mock_pool = MagicMock()
         mock_pool_cls.return_value = mock_pool

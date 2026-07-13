@@ -16,16 +16,15 @@ Blends user feedback with original quality using configurable weight.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
-from .settings_dynamic import settings
-from .observability import USER_FEEDBACK_RECEIVED, USER_FEEDBACK_QUALITY_AVG
 from .bandits import bandit_update, compute_reward
+from .observability import USER_FEEDBACK_QUALITY_AVG, USER_FEEDBACK_RECEIVED
+from .settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
 
@@ -191,38 +190,12 @@ def _persist_feedback(
 ) -> None:
     """Persist feedback to database."""
     try:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
 
-        db_url = (
-            f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}"
-            f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-        )
-        engine = create_engine(db_url, pool_pre_ping=True)
+        from .db import get_engine
 
-        # Ensure table exists
-        with engine.begin() as conn:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS user_feedback (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    query_id VARCHAR(64),
-                    query_text TEXT,
-                    model VARCHAR(255) NOT NULL,
-                    modality VARCHAR(32),
-                    feedback_type VARCHAR(32) NOT NULL,
-                    rating INT,
-                    user_quality FLOAT NOT NULL,
-                    original_quality FLOAT,
-                    blended_quality FLOAT NOT NULL,
-                    reward FLOAT,
-                    comment TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_model (model),
-                    INDEX idx_feedback_type (feedback_type),
-                    INDEX idx_created_at (created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """))
+        engine = get_engine()
 
-        # Insert feedback
         with engine.begin() as conn:
             conn.execute(
                 text("""
@@ -235,7 +208,7 @@ def _persist_feedback(
                 """),
                 {
                     "query_id": request.query_id,
-                    "query_text": request.query[:2000],  # Truncate if too long
+                    "query_text": request.query[:2000],
                     "model": request.model,
                     "modality": request.modality,
                     "feedback_type": request.feedback_type.value,
@@ -264,13 +237,11 @@ def get_feedback_stats(model: Optional[str] = None, hours: int = 24) -> Dict[str
         Dict with feedback statistics
     """
     try:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
 
-        db_url = (
-            f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}"
-            f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-        )
-        engine = create_engine(db_url, pool_pre_ping=True)
+        from .db import get_engine
+
+        engine = get_engine()
 
         with engine.connect() as conn:
             if model:

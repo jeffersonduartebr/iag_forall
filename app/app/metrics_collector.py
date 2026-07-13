@@ -12,11 +12,12 @@ Esta versão:
   ✓ Guarda tokens_in, tokens_out, embedding_dim, vision_usage
 """
 
-import os
 import threading
-from typing import Dict, Optional, Any
+from typing import Dict, Optional
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
+from app.db import get_engine
 
 # Thread-safety para EMA in-memory
 _LOCK = threading.Lock()
@@ -29,11 +30,12 @@ _LOCK = threading.Lock()
 # }
 _MODEL_METRICS: Dict[tuple, Dict[str, float]] = {}
 
-DB_URL = os.getenv(
-    "DATABASE_URL",
-    "mysql+pymysql://root:rootpass@mariadb:3306/routerdb",
-)
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+_table_ready = False
+
+
+def _engine():
+    """Return the shared application database engine."""
+    return get_engine()
 
 
 # ============================================================
@@ -41,9 +43,10 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 # ============================================================
 
 def _ensure_model_metrics_table() -> None:
-    """
-    Versão nova (multimodal).
-    """
+    """Create model_metrics table once at startup."""
+    global _table_ready
+    if _table_ready:
+        return
     ddl = """
     CREATE TABLE IF NOT EXISTS model_metrics (
       id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -70,8 +73,9 @@ def _ensure_model_metrics_table() -> None:
       INDEX idx_ts (timestamp)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     """
-    with engine.begin() as conn:
+    with _engine().begin() as conn:
         conn.execute(text(ddl))
+    _table_ready = True
 
 
 # ============================================================
@@ -106,7 +110,7 @@ def _persist_sample(
             (quality / 10.0) * 0.75 + speed_term * 0.25
         ))
 
-        with engine.begin() as conn:
+        with _engine().begin() as conn:
             conn.execute(
                 text("""
                 INSERT INTO model_metrics
@@ -135,9 +139,9 @@ def _persist_sample(
                 }
             )
 
-    except Exception:
-        # Em produção: logar erro
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("[metrics_collector] persist failed: %s", exc)
 
 
 # ============================================================
@@ -199,7 +203,7 @@ def update_model_metrics(
 # SNAPSHOT API (para router_strategy)
 # ============================================================
 
-def get_snapshot() -> Dict[str, Dict[str, float]]:
+def get_snapshot() -> Dict[tuple, Dict[str, float]]:
     """Return snapshot.
 
 This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""

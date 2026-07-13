@@ -249,7 +249,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
             return _C()
 
-    monkeypatch.setattr(judges, "engine", _Engine())
+    monkeypatch.setattr(judges, "_get_judge_engine", lambda: _Engine())
     monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_CALIBRATION_ENABLED=False))
     judges.record_judge_calibration("j1", "q", 8.0)
     judges.update_calibration_cache_status("q")
@@ -281,7 +281,7 @@ def test_judge_stats_persistence_and_calibration_failures(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(judges, "engine", SimpleNamespace(begin=lambda: _BrokenCtx(), connect=lambda: _BrokenCtx()))
+    monkeypatch.setattr(judges, "_get_judge_engine", lambda: SimpleNamespace(begin=lambda: _BrokenCtx(), connect=lambda: _BrokenCtx()))
     assert judges._load_judge_stats(10) == {}
     judges._ensure_judge_calibration_table()
     judges._persist_judge_metrics("j1", 0.8, 1.0, 0.01, 1.0, 0.9)

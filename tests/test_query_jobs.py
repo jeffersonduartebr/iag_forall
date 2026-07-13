@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from fastapi import HTTPException
 
@@ -95,6 +93,11 @@ class FakeRedis:
         prefix = pattern.rstrip("*")
         return [key for key in self.data.keys() if str(key).startswith(prefix)]
 
+    def scan(self, cursor=0, match=None, count=100):
+        prefix = (match or "").rstrip("*")
+        keys = [key for key in self.data.keys() if str(key).startswith(prefix)]
+        return 0, keys
+
 
 def _request():
     from app.schemas import QueryRequest
@@ -132,6 +135,13 @@ def test_get_query_job_status_and_result(monkeypatch):
     import app.query_jobs as qj
     from app.schemas import QueryJobStatus, QueryResponse
 
+    monkeypatch.setenv("REQUIRE_API_AUTH", "0")
+    try:
+        from app.settings_dynamic import _lru
+        _lru.clear()
+    except Exception:
+        pass
+
     fake_redis = FakeRedis()
     monkeypatch.setattr(qj, "_get_job_store", lambda: fake_redis)
     fake_redis.setex(
@@ -163,6 +173,13 @@ def test_get_query_job_result_raises_when_not_ready(monkeypatch):
     """Queued jobs should return HTTP 409 until completion."""
     import app.query_jobs as qj
     from app.schemas import QueryJobStatus
+
+    monkeypatch.setenv("REQUIRE_API_AUTH", "0")
+    try:
+        from app.settings_dynamic import _lru
+        _lru.clear()
+    except Exception:
+        pass
 
     fake_redis = FakeRedis()
     monkeypatch.setattr(qj, "_get_job_store", lambda: fake_redis)

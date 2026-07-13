@@ -7,16 +7,28 @@ small because the higher-level orchestration lives in ``judges/judge.py`` while
 this file focuses on prompt construction and synchronous/asynchronous execution.
 """
 
-import asyncio, json
-from typing import Dict, Any
-from ..settings import settings
-from ..rag import retrieve_context
+import asyncio
+import json
+from typing import Any, Dict
+
 from litellm import completion
+
+from ..rag import retrieve_context
+from ..settings import settings
 
 RUBRIC_BASE = """
 You are a strict evaluator. Score the ASSISTANT answer for the USER question from 0 to 10.
 Consider: (1) factual correctness, (2) task completion, (3) clarity & structure, (4) harmful content avoidance.
 Return ONLY a JSON object: {"score": <0-10>, "rationale": "<short reason>"}.
+"""
+
+PEDAGOGICAL_RUBRIC_EXTENSION = """
+For education-oriented queries, also consider:
+(5) scaffolding — does the answer guide the learner step by step?
+(6) audience fit — is the language appropriate for the implied student level?
+(7) misconception handling — does it anticipate and correct likely misunderstandings?
+When pedagogical mode is active, include optional fields:
+{"pedagogical": {"scaffolding": <0-10>, "audience_fit": <0-10>, "misconception_handling": <0-10>}}
 """
 
 def _build_prompt(user_q: str, assistant_a: str, use_rag: bool) -> str:
@@ -35,7 +47,14 @@ def _build_prompt(user_q: str, assistant_a: str, use_rag: bool) -> str:
         rag = retrieve_context(user_q)
         if rag:
             ctx = f"CONTEXT (may be useful, optional):\n---\n{rag}\n---\n"
-    return f"""{RUBRIC_BASE}
+    rubric = RUBRIC_BASE
+    try:
+        pedagogical = str(settings.get("JUDGE_PEDAGOGICAL_MODE", "0")).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        pedagogical = False
+    if pedagogical:
+        rubric = f"{RUBRIC_BASE}\n{PEDAGOGICAL_RUBRIC_EXTENSION}"
+    return f"""{rubric}
 {ctx}
 USER QUESTION:
 {user_q}

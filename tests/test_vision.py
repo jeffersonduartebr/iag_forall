@@ -6,12 +6,13 @@ handling for the corresponding runtime component.
 """
 
 
-import requests
 import base64
-import os
 import glob
-import time
 import io
+import os
+import time
+
+import requests
 from PIL import Image
 
 # ==============================================================================
@@ -45,12 +46,12 @@ def encode_image_optimized(image_path):
             if max(width, height) > MAX_IMAGE_SIZE:
                 img.thumbnail((MAX_IMAGE_SIZE, MAX_IMAGE_SIZE))
                 # print(f"   📉 Redimensionado de {width}x{height} para {img.size}")
-            
+
             # 3. Converter para Base64
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=70) # JPEG leve
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
-            
+
     except Exception as e:
         print(f"❌ Erro ao processar imagem {image_path}: {e}")
         return None
@@ -60,7 +61,7 @@ def send_request(image_path):
     filename = os.path.basename(image_path)
     print(f"\n{'='*60}")
     print(f"🖼️  Processando: {filename}")
-    
+
     b64_string = encode_image_optimized(image_path)
     if not b64_string: return
 
@@ -73,7 +74,7 @@ def send_request(image_path):
         "temperature": 0.1,     # Baixa temperatura para descrições factuais
         "use_cache": False,      # Força processamento novo para teste
         # DESLIGA O RAG EXPLICITAMENTE
-        "enable_rag_for_answer": False, 
+        "enable_rag_for_answer": False,
         "enable_rag_for_image": False
     }
 
@@ -87,7 +88,7 @@ def send_request(image_path):
             data = response.json()
             print(f"✅ SUCESSO em {latency:.2f}s")
             print(f"🤖 Modelo Escolhido: {data.get('model', 'N/A')}")
-            
+
             # Se o router usar UQ, mostra a incerteza (se disponível no metadata)
             route_meta = data.get("route", {})
             if "uncertainty" in route_meta.get("objectives", {}):
@@ -111,10 +112,10 @@ def main():
 This helper encapsulates one focused step used by the surrounding workflow."""
     patterns = ['*.jpg', '*.jpeg', '*.png', '*.webp', '*.JPG', '*.PNG']
     files = []
-    
+
     for p in patterns:
         files.extend(glob.glob(os.path.join(IMAGE_DIR, p)))
-    
+
     # Remove duplicatas e ordena
     files = sorted(list(set(files)))
 
@@ -132,10 +133,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 if __name__ == "__main__":
     # Verifica dependência
     try:
-        import PIL
+        import PIL  # noqa: F401  (checagem de disponibilidade)
     except ImportError:
         print("⚠️ Biblioteca Pillow não instalada. Rodando: pip install pillow")
         os.system("pip install pillow")
-        import PIL
-        
+
     main()

@@ -20,15 +20,15 @@ Chamado pelo nsga_meta_optimizer ou manualmente via:
 """
 
 from __future__ import annotations
-import os
+
 import json
 import logging
-import numpy as np
-from typing import Dict, Any, Optional, List
+import os
+from typing import Any, Dict, Optional
 
+import redis
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-import redis
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [update_nsga] %(message)s")
 logger = logging.getLogger("update_nsga")
@@ -49,6 +49,7 @@ REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB   = int(os.getenv("REDIS_DB", "0"))
 
+rds: Optional["redis.Redis[str]"]
 try:
     rds = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
     rds.ping()

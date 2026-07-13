@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -31,6 +31,8 @@ from app.observability import (
 )
 from app.providers_async import get_ollama_admission_snapshot
 from app.settings_dynamic import settings
+from app.utils.redis_async_ops import redis_pipeline_execute
+from app.utils.redis_client import get_redis_async
 
 logger = logging.getLogger(__name__)
 
@@ -116,13 +118,13 @@ class RateLimitStore:
         except Exception:
             pass
 
-    def _should_use_redis(self) -> bool:
-        """Probe Redis lazily and fall back to local state on failure."""
+    async def _should_use_redis_async(self) -> bool:
+        """Probe async Redis lazily and fall back to local state on failure."""
         now = time.time()
         should_probe = self._use_redis is None or (self._use_redis is False and now >= self._next_redis_probe_at)
         if should_probe:
-            rds = _get_redis()
-            self._use_redis = rds is not None
+            client = await get_redis_async()
+            self._use_redis = client is not None
             if self._use_redis:
                 self._next_redis_probe_at = 0.0
                 logger.info("[adaptive_limiter] Using Redis backend")
@@ -135,27 +137,26 @@ class RateLimitStore:
         """Return whether one identity bucket has exhausted its quota."""
         if max_requests <= 0:
             return True
-        if self._should_use_redis():
+        if await self._should_use_redis_async():
             return await self._is_rate_limited_redis(scope_key, max_requests, window_seconds)
         return await self._is_rate_limited_memory(scope_key, max_requests, window_seconds)
 
     async def _is_rate_limited_redis(self, scope_key: str, max_requests: int, window_seconds: int) -> bool:
         """Use Redis sorted sets to enforce a distributed sliding window."""
-        rds = _get_redis()
-        if rds is None:
-            self._use_redis = False
-            self._next_redis_probe_at = time.time() + self._redis_reprobe_interval_s
-            return await self._is_rate_limited_memory(scope_key, max_requests, window_seconds)
-        try:
-            key = f"{self.REDIS_PREFIX}{scope_key}"
-            now = time.time()
-            cutoff = now - window_seconds
-            pipe = rds.pipeline()
+        key = f"{self.REDIS_PREFIX}{scope_key}"
+        now = time.time()
+        cutoff = now - window_seconds
+
+        def _build(pipe):
             pipe.zremrangebyscore(key, 0, cutoff)
             pipe.zcard(key)
             pipe.zadd(key, {str(now): now})
             pipe.expire(key, self.REDIS_TTL)
-            results = pipe.execute()
+
+        try:
+            results = await redis_pipeline_execute(_build)
+            if results is None:
+                raise RuntimeError("redis pipeline unavailable")
             count = int(results[1])
             self._publish_bucket_metrics()
             return count >= max_requests
@@ -411,13 +412,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return self._client_ip(request), "ip"
 
     def _client_ip(self, request: Request) -> str:
-        """Resolve the client IP, honoring the first X-Forwarded-For value."""
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            first = forwarded_for.split(",")[0].strip()
-            if first:
-                return first
-        return request.client.host if request.client else "unknown"
+        """Resolve the client IP, honoring X-Forwarded-For only behind trusted proxies."""
+        trusted_raw = (settings.get("TRUSTED_PROXY_IPS", "") or "").strip()
+        trusted = {ip.strip() for ip in trusted_raw.split(",") if ip.strip()}
+        direct_ip = request.client.host if request.client else "unknown"
+        if trusted and direct_ip in trusted:
+            forwarded_for = request.headers.get("X-Forwarded-For")
+            if forwarded_for:
+                first = forwarded_for.split(",")[0].strip()
+                if first:
+                    return first
+        return direct_ip
 
     def _candidate_pressure_state(self, snapshot: Dict[str, float | int | str], cfg: Dict[str, float | int | bool]) -> str:
         """Classify the current runtime pressure before hysteresis is applied."""

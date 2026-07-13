@@ -47,45 +47,10 @@ async def test_component_health_checks_success_paths(monkeypatch):
         "app.utils.redis_client.check_redis_health",
         lambda: {"healthy": True, "latency_ms": 1.2, "pool_size": 4},
     )
-
-    class _DBConn:
-        """Represent `_DBConn` within this module.
-
-The class groups the state and behavior required for DBConn."""
-        def execute(self, _):
-            """Execute the execute routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return None
-
-    class _DBCtx:
-        """Represent `_DBCtx` within this module.
-
-The class groups the state and behavior required for DBCtx."""
-        def __enter__(self):
-            """Execute the enter routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return _DBConn()
-
-        def __exit__(self, exc_type, exc, tb):
-            """Execute the exit routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return False
-
-    class _Engine:
-        """Represent `_Engine` within this module.
-
-The class groups the state and behavior required for Engine."""
-        def connect(self):
-            """Execute the connect routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return _DBCtx()
-
-    fake_sqlalchemy = SimpleNamespace(create_engine=lambda *a, **k: _Engine(), text=lambda q: q)
-    monkeypatch.setitem(sys.modules, "sqlalchemy", fake_sqlalchemy)
+    monkeypatch.setattr(
+        "app.db.check_db_health",
+        lambda: {"healthy": True, "latency_ms": 1.0, "pool_stats": {"status": "ok"}},
+    )
 
     fake_chromadb = SimpleNamespace(
         PersistentClient=lambda path: SimpleNamespace(list_collections=lambda: ["c1", "c2"])

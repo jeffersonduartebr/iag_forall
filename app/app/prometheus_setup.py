@@ -25,8 +25,8 @@ contains stale files from a previous process.
 # ----------------------------------------------------------
 
 import os
-import shutil
-from prometheus_client import CollectorRegistry, multiprocess, generate_latest, CONTENT_TYPE_LATEST
+
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest, multiprocess
 
 PROM_DIR = os.getenv("PROMETHEUS_MULTIPROC_DIR", "/tmp/prometheus_multiproc_dir")
 
@@ -42,14 +42,15 @@ def setup_prometheus():
     # Cria o diretório se não existir
     os.makedirs(PROM_DIR, exist_ok=True)
 
-    # Remove arquivos antigos (evita UnicodeDecodeError)
-    for f in os.listdir(PROM_DIR):
-        try:
-            path = os.path.join(PROM_DIR, f)
-            if os.path.isfile(path):
-                os.remove(path)
-        except Exception as e:
-            print(f"[prometheus_setup] Falha ao limpar {f}: {e}")
+    # Optionally remove stale multiprocess files (disabled by default).
+    if os.getenv("PROMETHEUS_WIPE_ON_STARTUP", "0").strip() in ("1", "true", "yes"):
+        for f in os.listdir(PROM_DIR):
+            try:
+                path = os.path.join(PROM_DIR, f)
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception as e:
+                print(f"[prometheus_setup] Falha ao limpar {f}: {e}")
 
     print(f"[prometheus_setup] Diretório de métricas pronto: {PROM_DIR}")
 

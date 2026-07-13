@@ -20,14 +20,14 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Tuple
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+from .observability import AB_EXPERIMENT_ASSIGNMENTS
 from .settings_dynamic import settings
 from .utils.redis_client import get_redis
-from .observability import AB_EXPERIMENT_ASSIGNMENTS
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,7 @@ class ABTestManager:
 
     _instance: Optional["ABTestManager"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "ABTestManager":
         """Return the instance created for this class.
@@ -372,7 +373,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         metrics = ["quality", "latency", "cost"]
 
         for variant in exp.variants:
-            variant_results = {}
+            variant_results: Dict[str, Dict[str, Any]] = {}
 
             for metric in metrics:
                 try:

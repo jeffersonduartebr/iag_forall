@@ -42,7 +42,7 @@ This helper centralizes retrieval logic so callers do not have to duplicate look
         except Exception as e:
             logger.error(f"[ReRanker] Erro ao carregar modelo: {e}")
             _RERANKER_INSTANCE = None
-            
+
     return _RERANKER_INSTANCE
 
 def rerank_documents(query: str, documents: List[str], top_k: int = 3) -> List[str]:
@@ -57,7 +57,7 @@ def rerank_documents(query: str, documents: List[str], top_k: int = 3) -> List[s
         return documents[:top_k]
 
     model = get_reranker_model()
-    
+
     # Fallback se o modelo não carregar
     if not model:
         return documents[:top_k]
@@ -67,19 +67,19 @@ def rerank_documents(query: str, documents: List[str], top_k: int = 3) -> List[s
         # Prepara pares (Query, Doc)
         # O Cross-Encoder espera uma lista de pares [Query, Contexto]
         pairs = [[query, doc] for doc in documents]
-        
+
         # Prediz scores (logits)
         scores = model.predict(pairs)
-        
+
         # Combina docs com scores e ordena
         scored_docs = list(zip(documents, scores))
         # Ordena decrescente pelo score
         scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
+
         duration = (time.time() - start) * 1000
         top_score = scored_docs[0][1] if scored_docs else 0.0
         logger.info(f"[ReRanker] Reordenado {len(documents)} docs em {duration:.2f}ms. Top score: {top_score:.4f}")
-        
+
         # Retorna apenas os textos dos top_k
         return [doc for doc, score in scored_docs[:top_k]]
 

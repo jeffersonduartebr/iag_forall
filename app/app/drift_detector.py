@@ -20,13 +20,13 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from .observability import QUERY_DRIFT_DETECTED, QUERY_DRIFT_SCORE
 from .settings_dynamic import settings
 from .utils.redis_client import get_redis
-from .observability import QUERY_DRIFT_SCORE, QUERY_DRIFT_DETECTED
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,7 @@ class QueryDriftDetector:
 
     _instance: Optional["QueryDriftDetector"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "QueryDriftDetector":
         """Return the instance created for this class.

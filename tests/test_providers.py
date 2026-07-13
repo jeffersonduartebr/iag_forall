@@ -6,9 +6,9 @@ handling for the corresponding runtime component.
 """
 
 
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from app.providers_async import call_model, heuristic_quality_estimate, _estimate_tokens
+from app.providers_async import _estimate_tokens, heuristic_quality_estimate
 
 
 def test_heuristic_quality_estimate():

@@ -1,0 +1,49 @@
+# Dev profile — cloud-only (OpenRouter), low resource footprint.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Or:    ./scripts/compose-dev.sh up -d --build
+
+services:
+  mariadb:
+    command: >
+      --max_connections=100
+      --innodb_buffer_pool_size=${MARIADB_BUFFER_POOL:-512M}
+      --innodb_log_file_size=128M
+      --innodb_flush_log_at_trx_commit=2
+
+  redis:
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+
+  api:
+    mem_limit: 1g
+    environment:
+      - READINESS_MODE=degraded
+      - META_OPT_ENABLED=0
+      - OPENROUTER_EXPLORATION_ENABLED=1
+      - OPENROUTER_EXPLORATION_AUTO_PROMOTE_ENABLED=1
+      - OPENROUTER_EXPLORATION_MODE=balanced
+      - OPENROUTER_EXPLORATION_RATE=0.10
+      - CANDIDATE_MODELS_LIST=${CANDIDATE_MODELS_LIST:-["openrouter/openai/gpt-4o-mini","openrouter/anthropic/claude-3.5-haiku"]}
+      - EMERGENCY_FALLBACK_MODELS=["openrouter/openai/gpt-4o-mini"]
+      - EMBED_PROVIDER=sentence-transformers
+      - PROMETHEUS_URL=
+      - LOKI_URL=
+    command: >
+      bash -c "
+        echo '🧩 Dev (cloud-only) — aguardando dependências...';
+        sleep 2;
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --limit-concurrency 50 --limit-max-requests 2000
+      "
+    networks:
+      - ai_net
+
+  admin_ui:
+    mem_limit: 256m

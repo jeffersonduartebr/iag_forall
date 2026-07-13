@@ -26,26 +26,26 @@ Funções públicas:
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from app.embeddings import embed_text, embed_image, embed_multimodal
-from app.vectorstore import (
-    add_document as vs_add_document,
-    query_embedding as vs_query_embedding,
-    health_async as vector_health_async,
-)
+from app.embeddings import embed_image, embed_multimodal, embed_text
 
 # delega tudo de cache ao módulo semantic_cache
-from app.semantic_cache import (
-    check_cache as cache_lookup,
-    store_cache as cache_store,
-)
-
 from app.settings_dynamic import settings
-
+from app.vectorstore import (
+    add_document as vs_add_document,
+)
+from app.vectorstore import (
+    health_async as vector_health_async,
+)
+from app.vectorstore import (
+    query_embedding as vs_query_embedding,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)

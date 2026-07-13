@@ -4,8 +4,9 @@
 Tests for cascade failure detection.
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestCascadeDetector:
@@ -83,7 +84,7 @@ class TestCascadeDetector:
             "total_models": 10,
             "failed_model_ratio": 0.9,
         }):
-            with patch("app.reliability.logger") as mock_logger:
+            with patch("app.reliability.logger"):
                 status = cascade_detector.check_and_log_warnings()
                 assert len(status.get("warnings", [])) > 0
 
@@ -100,7 +101,7 @@ class TestGetCascadeDetector:
     def test_returns_singleton(self):
         """Test that get_cascade_detector returns singleton instance."""
         with patch("app.reliability.get_circuit_breaker_manager"):
-            from app.reliability import get_cascade_detector, CascadeDetector
+            from app.reliability import CascadeDetector, get_cascade_detector
             CascadeDetector._instance = None
 
             detector1 = get_cascade_detector()

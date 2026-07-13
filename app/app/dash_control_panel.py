@@ -7,11 +7,11 @@ current runtime architecture and operational documentation.
 
 
 import os
-import redis
+
 import dash
 import pandas as pd
-import sqlalchemy
-from dash import dcc, html, dash_table
+import redis
+from dash import dash_table, dcc, html
 from dash.dependencies import Input, Output, State
 from sqlalchemy import create_engine, text
 
@@ -91,14 +91,14 @@ def save_dynamic_settings(data):
              key_name = "MAX_TOKENS_DEFAULT"
         else:
             key_name = k # ex: 'top_p'
-            
+
         settings.set(key_name, v, actor="dash_panel", source="ui")
 
 
 def fetch_query_history(limit=30):
     """CORRIGIDO: Lê da tabela 'query_log' e colunas corretas."""
     query = """
-        SELECT id, query_text, chosen_model as selected_model, 
+        SELECT id, query_text, chosen_model as selected_model,
                quality as score, created_at
         FROM query_log
         ORDER BY created_at DESC

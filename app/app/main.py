@@ -19,95 +19,103 @@ runtime bootstrap, and cross-cutting concerns.
 # 🚨 FIX: Desativar Telemetria do ChromaDB ANTES de qualquer import
 # ==============================================================================
 import os
+
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 os.environ["SCARF_NO_ANALYTICS"] = "true"
 
-import json
-import time
 import asyncio
+import concurrent.futures
+import json
 import logging
 import resource
-import concurrent.futures
+import time
 from contextlib import asynccontextmanager
-from typing import Any
 
-from fastapi import FastAPI, Response, Request, APIRouter
-from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, FastAPI, Header, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
-from .api import admin_router, eval_router, feedback_router, governance_router, ops_router
-from .api.deps import require_admin as _require_admin
-from .prometheus_setup import setup_prometheus
-from .correlation import (
-    set_correlation_id,
-    get_correlation_id,
-    clear_correlation_id,
-    CORRELATION_ID_HEADER,
+from .api import (
+    admin_auth_router,
+    admin_dashboard_router,
+    admin_models_router,
+    admin_router,
+    eval_router,
+    expert_router,
+    feedback_router,
+    governance_router,
+    ops_router,
 )
-from .metrics_collector import _ensure_model_metrics_table
-from .settings_dynamic import settings, start_reload_listener, stop_reload_listener
-from .settings_dynamic import validate_critical_settings
-from .schemas import (
-    CandidateResult,
-    ConfidenceBand,
-    EvidenceSnippet,
-    QueryJobStatusResponse,
-    QueryRequest,
-    QueryResponse,
-    QueuedQueryAcceptedResponse,
-    ResponseDiagnostics,
-    ResponseCitation,
-    ResponseProvenance,
-    ReviewStatus,
-    RouteDecision,
-    VerificationStatus,
-)
+from .api.auth import AuthContext, optional_api_auth, require_api_auth
+
+# Re-export para testes que fazem patch de `main._require_admin`.
+from .api.deps import require_admin as _require_admin  # noqa: F401
+from .api.openai_compat_routes import router as openai_compat_router
 from .config.constants import GZIP_MIN_SIZE
+from .correlation import (
+    CORRELATION_ID_HEADER,
+    clear_correlation_id,
+    get_correlation_id,
+    set_correlation_id,
+)
+from .db import close_engine
+from .metrics_collector import _ensure_model_metrics_table
+from .middleware.backpressure import BackpressureMiddleware
 from .middleware.rate_limit import (
     RateLimitMiddleware,
+)
+from .middleware.rate_limit import (
     periodic_cleanup as rate_limit_cleanup,
 )
-from .middleware.backpressure import BackpressureMiddleware
+from .middleware.tenant_rate_limit import TenantRateLimitMiddleware
 from .observability import (
-    setup_logging,
-    logger,
-    render_metrics_response,
-    API_REQUESTS,
-    API_LATENCY,
-    ROUTER_CHOSEN,
-    CANDIDATE_COST,
-    CANDIDATE_LAT,
-    TOTAL_COST_USD,
-    COST_BY_PROVIDER,
-    TOKENS_INPUT_TOTAL,
-    TOKENS_OUTPUT_TOTAL,
     ROUTER_ENQUEUED_DUE_TO_DEADLINE,
     ROUTER_ENQUEUED_DUE_TO_QUEUE_WAIT,
+    logger,
+    render_metrics_response,
+    setup_logging,
 )
-from .router_core import start_background_services, stop_background_services
+from .prometheus_setup import setup_prometheus
 from .providers_async import (
     close_http_client,
     fetch_ollama_tags,
+    get_configured_ollama_warm_models,
     get_http_client,
     get_ollama_admission_snapshot,
     log_process_file_descriptor_limit,
     start_provider_runtime_services,
     stop_provider_runtime_services,
-    get_configured_ollama_warm_models,
     warm_ollama_model_runtime,
 )
-from .utils.redis_client import get_redis, close_redis
-from .db import close_engine
-from .query_jobs import enqueue_query_job, get_query_job_result, get_query_job_status
+from .query_jobs import (  # noqa: F401  (enqueue_query_job re-export p/ query_http/tests)
+    enqueue_query_job,
+    get_query_job_result,
+    get_query_job_status,
+)
+from .router_core import route_and_answer, start_background_services, stop_background_services
 from .routers import rag_router
-from .vectorstore import init_vectorstore, add_document as vs_add_document
-from .services.query_response_builder import build_query_response
-from .services.query_runtime import apply_query_runtime_profile, process_query_request, record_query_side_effects
+from .schemas import (
+    QueryJobStatusResponse,
+    QueryRequest,
+    QueryResponse,
+    QueuedQueryAcceptedResponse,
+)
 from .services.governance_runtime import ensure_runtime_support_tables
-from .router_core import route_and_answer
+from .services.query_http import execute_query, execute_query_stream
+from .services.query_response_builder import build_query_response  # noqa: F401  (re-export p/ query_http/tests)
+from .services.query_runtime import (  # noqa: F401  (re-export p/ query_http/tests)
+    apply_query_runtime_profile,
+    process_query_request,
+    record_query_side_effects,
+)
+from .services.tenant_context import bind_tenant_to_request
+from .settings_dynamic import settings, start_reload_listener, stop_reload_listener, validate_critical_settings
+from .utils.redis_client import close_redis, get_redis
+from .vectorstore import add_document as vs_add_document
+from .vectorstore import init_vectorstore
 
 # Configuração de Logging
 setup_logging()
@@ -137,19 +145,22 @@ async def lifespan(_app: FastAPI):
         await shutdown_event()
 
 
+_IS_PRODUCTION = os.getenv("ENV", "development").lower() in ("production", "prod")
+
 app = FastAPI(
     title="LLM/VLM Router (Hybrid Bandit + RAG + Celery Feedback)",
     version="3.2.0",
     description="API de Roteamento Inteligente Multimodal com Persistência Robusta.",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None if _IS_PRODUCTION else "/docs",
+    redoc_url=None if _IS_PRODUCTION else "/redoc",
+    openapi_url=None if _IS_PRODUCTION else "/openapi.json",
     lifespan=lifespan,
 )
 
 
 def _normalize_request_modality(req: QueryRequest) -> tuple[str, str | None]:
     """Return the effective modality and first image payload for one request."""
-    image_input = req.image_b64 or ((req.images or [None])[0] if getattr(req, "images", None) else None)
+    image_input = req.image_b64 or (req.images[0] if req.images else None)
     modality = str(getattr(req, "modality", "text") or "text").lower()
     if image_input and modality == "text":
         modality = "vision"
@@ -208,11 +219,28 @@ def _should_proactively_defer_query(req: QueryRequest, request: Request | None) 
     request.state.query_job_workload_class = workload_class
     return True, reason, pressure_state, workload_class
 
+app.include_router(admin_auth_router)
+app.include_router(admin_dashboard_router)
+app.include_router(admin_models_router)
 app.include_router(admin_router)
 app.include_router(governance_router)
 app.include_router(eval_router)
+app.include_router(expert_router)
 app.include_router(feedback_router)
 app.include_router(ops_router)
+app.include_router(openai_compat_router)
+
+_cors_origins = os.getenv(
+    "ADMIN_UI_CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:8082,http://127.0.0.1:8082",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Create versioned router
 v1_router = APIRouter(prefix="/v1", tags=["v1"])
@@ -251,8 +279,9 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
 # Add middleware in order (last added = first executed)
 app.add_middleware(CorrelationIdMiddleware)
-app.add_middleware(BackpressureMiddleware)  # Global concurrency limit
-app.add_middleware(RateLimitMiddleware)  # Uses Redis-based rate limiting
+app.add_middleware(TenantRateLimitMiddleware)
+app.add_middleware(BackpressureMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_SIZE)
 
 
@@ -353,13 +382,12 @@ app.include_router(rag_router.router)
 
 
 @app.get("/metrics")
-def metrics():
-    """Return the Prometheus exposition payload for the current process.
-
-    The route keeps the HTTP-facing layer intentionally thin. Metric rendering
-    is delegated to the observability module so this endpoint only translates
-    the serialized payload into a regular FastAPI `Response`.
-    """
+def metrics(x_metrics_token: str | None = Header(None, alias="X-Metrics-Token")):
+    """Return the Prometheus exposition payload for the current process."""
+    metrics_token = (settings.get("METRICS_TOKEN", "") or "").strip()
+    if metrics_token:
+        if not x_metrics_token or x_metrics_token != metrics_token:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     data, ctype = render_metrics_response()
     return Response(content=data, media_type=ctype)
 
@@ -386,6 +414,13 @@ async def startup_event():
         logger.info("[startup] RLIMIT_NOFILE soft=%s hard=%s", soft, hard)
     except Exception as e:
         logger.warning(f"[startup] Failed to read RLIMIT_NOFILE: {e}")
+
+    try:
+        from .otel_setup import setup_opentelemetry
+
+        setup_opentelemetry(app)
+    except Exception as e:
+        logger.warning(f"[startup] OpenTelemetry setup skipped: {e}")
 
     try:
         ensure_runtime_support_tables()
@@ -419,7 +454,7 @@ async def startup_event():
             logger.info("[warmup] Iniciando serviços...")
             r = get_redis()
             if r is None: logger.warning("[warmup] Redis indisponível.")
-            
+
             try:
                 _ensure_model_metrics_table()
             except Exception as e:
@@ -508,116 +543,36 @@ async def shutdown_event():
     logger.info("[shutdown] Shutdown completo.")
 
 
-async def route_query(req: QueryRequest, request: Request | None = None):
-    """Handle the primary synchronous query endpoint.
-
-    The route delegates most orchestration to `process_query_request`, then
-    records request-level metrics, updates cost and token counters, triggers
-    side effects such as persistence and feedback scheduling, and finally maps
-    the service result into the public `QueryResponse` schema.
-    """
-    start = time.time()
-    API_REQUESTS.inc()
-
-    should_defer, _, _, _ = _should_proactively_defer_query(req, request)
-    if should_defer and request is not None and getattr(request.state, "defer_to_query_job", False):
-        queued = enqueue_query_job(
-            req=req,
-            correlation_id=get_correlation_id(),
-            reason=str(getattr(request.state, "query_job_reason", "overloaded")),
-            pressure_state=str(getattr(request.state, "query_job_pressure_state", "elevated")),
-            route_path=request.url.path,
-            identity_key=request.client.host if getattr(request, "client", None) else None,
-        )
-        return JSONResponse(status_code=202, content=jsonable_encoder(queued))
-
-    processed = await process_query_request(req)
-    result = processed["result"]
-    image_input = processed["image_input"]
-
-    duration = time.time() - start
-    API_LATENCY.observe(duration)
-
-    chosen_model = result["model"]
-    estimated_cost_usd = result.get("estimated_cost_usd", result.get("cost_per_1k", 0.0))
-    ROUTER_CHOSEN.labels(model=chosen_model).inc()
-    CANDIDATE_COST.observe(estimated_cost_usd)
-    CANDIDATE_LAT.observe(result["latency_s"])
-
-    # Track detailed cost metrics
-    cost_usd = estimated_cost_usd
-    TOTAL_COST_USD.inc(cost_usd)
-
-    # Extract provider from model name
-    provider = chosen_model.split("/")[0] if "/" in chosen_model else "unknown"
-    COST_BY_PROVIDER.labels(provider=provider).inc(cost_usd)
-
-    # Track token usage
-    metadata = result.get("metadata", {})
-    prompt_tokens = metadata.get("prompt_tokens", 0)
-    completion_tokens = metadata.get("completion_tokens", 0)
-    TOKENS_INPUT_TOTAL.labels(model=chosen_model).inc(prompt_tokens)
-    TOKENS_OUTPUT_TOTAL.labels(model=chosen_model).inc(completion_tokens)
-
-    correlation_id = get_correlation_id()
-    metadata = result.get("metadata", {})
-    metadata["correlation_id"] = correlation_id
-
-    record_query_side_effects(req, result, image_input)
-    return build_query_response(result, correlation_id)
+async def route_query(req: QueryRequest, request: Request | None = None, auth: AuthContext | None = None):
+    """Handle the primary synchronous query endpoint."""
+    return await execute_query(req, request, auth)
 
 
-async def route_query_stream(req: QueryRequest, request: Request | None = None):
-    """Expose a simple Server-Sent Events wrapper around the standard query flow.
-
-    The current implementation does not stream provider tokens directly. It
-    first resolves the full answer through the same runtime service used by the
-    synchronous endpoint, then emits metadata, whitespace-delimited token
-    chunks, and a terminal completion event to consumers expecting an SSE
-    contract.
-    """
-    should_defer, _, _, _ = _should_proactively_defer_query(req, request)
-    if should_defer and request is not None and getattr(request.state, "defer_to_query_job", False):
-        queued = enqueue_query_job(
-            req=req,
-            correlation_id=get_correlation_id(),
-            reason=str(getattr(request.state, "query_job_reason", "overloaded")),
-            pressure_state=str(getattr(request.state, "query_job_pressure_state", "elevated")),
-            route_path=request.url.path,
-            identity_key=request.client.host if getattr(request, "client", None) else None,
-        )
-        return JSONResponse(status_code=202, content=jsonable_encoder(queued))
-
-    processed = await process_query_request(req)
-    result = processed["result"]
-    answer = result.get("answer", "")
-    payload = {
-        "model": result.get("model"),
-        "modality": result.get("modality"),
-        "metadata": result.get("metadata", {}),
-    }
-
-    async def _event_gen():
-        """Yield the SSE event sequence for the already-computed answer payload."""
-        yield "event: meta\\ndata: " + json.dumps(payload, ensure_ascii=False) + "\\n\\n"
-        for token in answer.split():
-            yield "event: token\\ndata: " + json.dumps({"text": token + " "}, ensure_ascii=False) + "\\n\\n"
-            await asyncio.sleep(0)
-        yield "event: done\\ndata: " + json.dumps({"status": "completed"}, ensure_ascii=False) + "\\n\\n"
-
-    return StreamingResponse(_event_gen(), media_type="text/event-stream")
+async def route_query_stream(req: QueryRequest, request: Request | None = None, auth: AuthContext | None = None):
+    """Expose Server-Sent Events around the query flow."""
+    return await execute_query_stream(req, request, auth)
 
 
 @app.post("/query", response_model=QueryResponse | QueuedQueryAcceptedResponse)
-async def http_route_query(req: QueryRequest, request: Request):
+async def http_route_query(
+    req: QueryRequest,
+    request: Request,
+    auth: AuthContext = Depends(require_api_auth),
+):
     """Bind the primary query helper to the public HTTP route."""
-    return await route_query(req, request)
+    req = bind_tenant_to_request(req, auth)
+    return await route_query(req, request, auth)
 
 
 @app.post("/query/stream", tags=["Query"])
-async def http_route_query_stream(req: QueryRequest, request: Request):
+async def http_route_query_stream(
+    req: QueryRequest,
+    request: Request,
+    auth: AuthContext = Depends(require_api_auth),
+):
     """Bind the streaming query helper to the public HTTP route."""
-    return await route_query_stream(req, request)
+    req = bind_tenant_to_request(req, auth)
+    return await route_query_stream(req, request, auth)
 
 
 # ==============================================================================
@@ -625,18 +580,24 @@ async def http_route_query_stream(req: QueryRequest, request: Request):
 # ==============================================================================
 
 @app.get("/query/jobs/{job_id}", response_model=QueryJobStatusResponse, tags=["Query"])
-async def query_job_status(job_id: str):
+async def query_job_status(
+    job_id: str,
+    auth: AuthContext = Depends(optional_api_auth),
+):
     """Return the current status of one queued query job."""
-    return get_query_job_status(job_id)
+    return get_query_job_status(job_id, auth=auth)
 
 
 @app.get("/query/jobs/{job_id}/result", response_model=QueryResponse, tags=["Query"])
-async def query_job_result(job_id: str):
+async def query_job_result(
+    job_id: str,
+    auth: AuthContext = Depends(optional_api_auth),
+):
     """Return the completed result of one queued query job."""
-    return get_query_job_result(job_id)
+    return get_query_job_result(job_id, auth=auth)
 
 
-async def v1_route_query(req: QueryRequest, request: Request | None = None):
+async def v1_route_query(req: QueryRequest, request: Request | None = None, auth: AuthContext | None = None):
     """Provide the versioned alias for the primary query endpoint.
 
     Version one currently preserves the exact behavior of `/query`; the wrapper
@@ -647,9 +608,14 @@ async def v1_route_query(req: QueryRequest, request: Request | None = None):
 
 
 @v1_router.post("/query", response_model=QueryResponse | QueuedQueryAcceptedResponse)
-async def v1_http_route_query(req: QueryRequest, request: Request):
+async def v1_http_route_query(
+    req: QueryRequest,
+    request: Request,
+    auth: AuthContext = Depends(require_api_auth),
+):
     """Bind the versioned query helper to the public HTTP route."""
-    return await v1_route_query(req, request)
+    req = bind_tenant_to_request(req, auth)
+    return await v1_route_query(req, request, auth)
 
 
 @v1_router.get("/health")
@@ -661,15 +627,21 @@ async def v1_health():
 
 
 @v1_router.get("/query/jobs/{job_id}", response_model=QueryJobStatusResponse)
-async def v1_query_job_status(job_id: str):
+async def v1_query_job_status(
+    job_id: str,
+    auth: AuthContext = Depends(optional_api_auth),
+):
     """Provide the versioned alias for queued-query status lookups."""
-    return get_query_job_status(job_id)
+    return get_query_job_status(job_id, auth=auth)
 
 
 @v1_router.get("/query/jobs/{job_id}/result", response_model=QueryResponse)
-async def v1_query_job_result(job_id: str):
+async def v1_query_job_result(
+    job_id: str,
+    auth: AuthContext = Depends(optional_api_auth),
+):
     """Provide the versioned alias for queued-query result lookups."""
-    return get_query_job_result(job_id)
+    return get_query_job_result(job_id, auth=auth)
 
 
 # Include versioned router

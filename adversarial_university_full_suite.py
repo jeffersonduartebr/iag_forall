@@ -21,32 +21,27 @@ import statsmodels.api as sm
 from statsmodels.formula.api import ols
 
 # Módulos da Aplicação
-from app.app.router_core import route_and_answer
 from app.app.providers_async import call_model
 from app.app.judges import judge_answer
+from app.app.benchmark_catalog import append_catalog_entry, list_theme_ids
+from app.app.schemas import QueryRequest, WorkloadHints
+from app.app.services.query_runtime import process_query_request
 
 # ==============================================================================
 # ⚙️ CONFIGURAÇÃO
 # ==============================================================================
 PROVOCADOR_MODEL = "openai/gpt-5.2"
-CONCURRENCY_LIMIT = 3 
+CONCURRENCY_LIMIT = 3
 OUTPUT_DIR = "thesis_results/adversarial_suite"
-CSV_FILE = f"{OUTPUT_DIR}/raw_data_900.csv"
+GENERATED_ATTACKS_FILE = f"{OUTPUT_DIR}/generated_attacks.jsonl"
+PERSIST_TO_CATALOG = os.environ.get("PERSIST_ADVERSARIAL_TO_CATALOG", "0").strip() in {"1", "true", "yes"}
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-TOPICOS = [
-    "Cálculo Diferencial", "Física Quântica", "Álgebra Linear", "Termodinâmica", 
-    "Estrutura de Dados", "IA e Ética", "Arquitetura de Computadores",
-    "Equações Diferenciais", "Mecânica dos Fluidos", "Engenharia de Software",
-    "Direito Constitucional", "Filosofia da Ciência", "História do Brasil",
-    "Sociologia", "Geopolítica", "Epistemologia", "Direito Administrativo", 
-    "Relações Internacionais", "Ética", "História da Arte",
-    "Genética", "Neurociência", "Farmacologia", "Microbiologia", 
-    "Bioquímica", "Imunologia", "Saúde Pública", "Anatomia", 
-    "Fisiologia", "Psicologia Clínica"
-]
+_SPECIAL_THEMES = frozenset({"adversarial", "multimodal", "programacao_desafios", "transversais", "foco_meta"})
+TOPICOS = [theme_id for theme_id in list_theme_ids() if theme_id not in _SPECIAL_THEMES]
 
 N_ATAQUES_POR_TOPICO = 30
+CSV_FILE = f"{OUTPUT_DIR}/raw_data_{len(TOPICOS) * N_ATAQUES_POR_TOPICO}.csv"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("adversarial_suite")
@@ -66,23 +61,60 @@ async def process_duel(topico, rodada, semaphore):
     async with semaphore:
         pergunta, estrategia = await gerar_ataque(topico, rodada)
         try:
-            res_tutor = await route_and_answer(query=pergunta, use_rag=True)
-            veredito = await judge_answer(query=pergunta, answer=res_tutor['answer'])
-            score = veredito[0]['score'] if veredito else 0
+            req = QueryRequest(
+                query=pergunta,
+                enable_rag_for_answer=True,
+                workload_hints=WorkloadHints(theme=str(topico)),
+            )
+            wrapped = await process_query_request(req)
+            res_tutor = wrapped.get("result", wrapped)
+            veredito = await judge_answer(query=pergunta, answer=res_tutor["answer"])
+            score = veredito[0]["score"] if veredito else 0
+            detected_complexity = (res_tutor.get("metadata") or {}).get("detected_complexity")
+            _persist_generated_attack(topico, estrategia, pergunta, score)
             return {
-                "topico": topico, "estrategia": estrategia, "pergunta": pergunta,
-                "modelo": res_tutor['model'], "uq": res_tutor['route']['objectives'].get('uncertainty', 0),
-                "score": score, "sucesso_ataque": 1 if score < 7 else 0, "latencia": res_tutor['latency_s']
+                "topico": topico,
+                "estrategia": estrategia,
+                "pergunta": pergunta,
+                "modelo": res_tutor["model"],
+                "uq": res_tutor["route"]["objectives"].get("uncertainty", 0),
+                "detected_complexity": detected_complexity,
+                "score": score,
+                "sucesso_ataque": 1 if score < 7 else 0,
+                "latencia": res_tutor["latency_s"],
             }
         except Exception as e:
             logger.error(f"Erro no duelo: {e}")
             return None
 
+
+def _persist_generated_attack(topico: str, estrategia: str, pergunta: str, score: float) -> None:
+    """Persist generated attacks for reproducibility (optional catalog append)."""
+    import json
+
+    entry = {
+        "theme": "adversarial",
+        "query": pergunta,
+        "attack_strategy": estrategia,
+        "tags": [str(topico), estrategia.replace(" ", "-")],
+        "reference": f"Auditor score reference; observed score={score}",
+        "criticality": "high",
+        "source_topic": topico,
+    }
+    with open(GENERATED_ATTACKS_FILE, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    if PERSIST_TO_CATALOG:
+        entry["id"] = f"adversarial_gen_{int(time.time())}_{topico}"
+        entry["difficulty"] = "complex"
+        entry["lang"] = "mixed"
+        append_catalog_entry("adversarial", entry)
+
 async def run_experiment():
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     tasks = [process_duel(t, r, semaphore) for t in TOPICOS for r in range(N_ATAQUES_POR_TOPICO)]
     results = []
-    for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Executando 900 Duelos"):
+    total = len(tasks)
+    for coro in tqdm(asyncio.as_completed(tasks), total=total, desc=f"Executando {total} Duelos"):
         res = await coro
         if res: results.append(res)
     df = pd.DataFrame(results)

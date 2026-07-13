@@ -8,10 +8,12 @@ can aggregate.
 """
 
 import asyncio
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from ..settings import settings
 from . import heuristic
 from . import llm as llm_judge
+
 
 async def judge_answer(query: str, answer: str, use_rag: bool = True) -> List[Dict[str, Any]]:
     """Evaluate an answer with the judge configuration active at runtime.

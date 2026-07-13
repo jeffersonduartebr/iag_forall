@@ -128,7 +128,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             best_model = m
             best_votes = v
 
-    if best_votes >= 2:
+    if best_votes >= 2 and best_model is not None:
         chosen = best_model
     else:
         if preferred_strategy == "epsilon_greedy":

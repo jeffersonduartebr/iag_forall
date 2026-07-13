@@ -20,6 +20,18 @@ def _stabilize_settings_get(monkeypatch):
     monkeypatch.setattr(settings_dynamic.settings, "get", lambda _key, fallback=None: fallback)
 
 
+async def _async_none():
+    return None
+
+
+async def _async_budget_allowed(_tenant):
+    return type("B", (), {"allowed": True})()
+
+
+async def _async_guardrails_allowed(_query):
+    return type("D", (), {"allowed": True, "reasons": []})()
+
+
 def _make_request():
     from app.schemas import QueryRequest
 
@@ -46,8 +58,9 @@ async def test_process_query_request_maps_provider_timeout_to_504(monkeypatch):
         raise ProviderCallError(model="openai/gpt-4o", message="timeout", category="provider_timeout")
 
     monkeypatch.setattr(qr, "route_and_answer", _raise_timeout)
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: type("D", (), {"allowed": True, "reasons": []})())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: type("B", (), {"allowed": True})())
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _async_guardrails_allowed)
+    monkeypatch.setattr(qr, "check_tenant_budget", _async_budget_allowed)
+    monkeypatch.setattr(qr, "get_active_policy", _async_none)
 
     with pytest.raises(HTTPException) as exc:
         await qr.process_query_request(_make_request())
@@ -65,8 +78,9 @@ async def test_process_query_request_maps_provider_rate_limit_to_429(monkeypatch
         raise ProviderCallError(model="openai/gpt-4o", message="rate limited", category="provider_rate_limit")
 
     monkeypatch.setattr(qr, "route_and_answer", _raise_rate_limit)
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: type("D", (), {"allowed": True, "reasons": []})())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: type("B", (), {"allowed": True})())
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _async_guardrails_allowed)
+    monkeypatch.setattr(qr, "check_tenant_budget", _async_budget_allowed)
+    monkeypatch.setattr(qr, "get_active_policy", _async_none)
 
     with pytest.raises(HTTPException) as exc:
         await qr.process_query_request(_make_request())
@@ -84,8 +98,9 @@ async def test_process_query_request_maps_provider_unavailable_to_502(monkeypatc
         raise ProviderCallError(model="openai/gpt-4o", message="down", category="provider_unavailable")
 
     monkeypatch.setattr(qr, "route_and_answer", _raise_unavailable)
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: type("D", (), {"allowed": True, "reasons": []})())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: type("B", (), {"allowed": True})())
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _async_guardrails_allowed)
+    monkeypatch.setattr(qr, "check_tenant_budget", _async_budget_allowed)
+    monkeypatch.setattr(qr, "get_active_policy", _async_none)
 
     with pytest.raises(HTTPException) as exc:
         await qr.process_query_request(_make_request())
@@ -103,8 +118,9 @@ async def test_process_query_request_maps_circuit_open_to_503(monkeypatch):
         raise ProviderCircuitOpenError(model="openai/gpt-4o", message="open")
 
     monkeypatch.setattr(qr, "route_and_answer", _raise_circuit)
-    monkeypatch.setattr(qr, "check_input_guardrails", lambda _q: type("D", (), {"allowed": True, "reasons": []})())
-    monkeypatch.setattr(qr, "check_tenant_budget", lambda _tenant: type("B", (), {"allowed": True})())
+    monkeypatch.setattr(qr, "check_input_guardrails_async", _async_guardrails_allowed)
+    monkeypatch.setattr(qr, "check_tenant_budget", _async_budget_allowed)
+    monkeypatch.setattr(qr, "get_active_policy", _async_none)
 
     with pytest.raises(HTTPException) as exc:
         await qr.process_query_request(_make_request())
@@ -145,8 +161,9 @@ async def test_route_query_uses_main_wiring(monkeypatch):
 async def test_route_query_enqueues_async_job_when_request_marked(monkeypatch):
     """main.route_query should return HTTP 202 with the accepted job payload when middleware defers execution."""
     _stabilize_settings_get(monkeypatch)
-    from app import main
     from app.schemas import QueuedQueryAcceptedResponse
+
+    from app import main
 
     monkeypatch.setattr(
         main,
@@ -168,8 +185,9 @@ async def test_route_query_enqueues_async_job_when_request_marked(monkeypatch):
 async def test_route_query_proactively_enqueues_simple_query_under_pressure(monkeypatch):
     """High-priority simple queries should be deferred early when Ollama is already near capacity."""
     _stabilize_settings_get(monkeypatch)
-    from app import main
     from app.schemas import QueuedQueryAcceptedResponse
+
+    from app import main
 
     monkeypatch.setattr(
         main,
@@ -213,8 +231,9 @@ async def test_route_query_proactively_enqueues_simple_query_under_pressure(monk
 async def test_route_query_proactively_enqueues_simple_query_with_two_slot_reserve(monkeypatch):
     """Short interactive workloads should defer earlier to preserve two sync slots under pressure."""
     _stabilize_settings_get(monkeypatch)
-    from app import main
     from app.schemas import QueuedQueryAcceptedResponse
+
+    from app import main
 
     monkeypatch.setattr(
         main,

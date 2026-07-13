@@ -1,0 +1,542 @@
+version: 1
+target_count: 150
+catalog_dir: data/benchmark_queries
+
+themes:
+  - id: historia
+    title: História
+    default_lang: pt
+    file: historia.jsonl
+    subtopics:
+      - antiguidade
+      - idade-media
+      - modernidade
+      - guerras-mundiais
+      - colonialismo
+      - revolucoes
+      - historiografia
+      - america-latina
+      - africa
+      - asia-historica
+
+  - id: programacao
+    title: Programação
+    default_lang: pt
+    file: programacao.jsonl
+    subtopics:
+      - python
+      - algoritmos
+      - estruturas-dados
+      - bancos-dados
+      - apis
+      - devops
+      - testes
+      - arquitetura
+      - seguranca
+      - concorrencia
+
+  - id: programacao_desafios
+    title: Desafios de Programação (Alto Nível)
+    default_lang: mixed
+    target_count: 40
+    file: programacao_desafios.jsonl
+    subtopics:
+      - system-design
+      - concorrencia-distribuida
+      - seguranca-avancada
+      - corretude-formal
+      - performance-escala
+      - refatoracao-arquitetural
+      - dados-distribuidos
+      - observabilidade-sre
+      - apis-criticas
+      - debugging-profundo
+
+  - id: adversarial
+    title: Red Teaming Adversarial
+    default_lang: mixed
+    target_count: 60
+    file: adversarial.jsonl
+    subtopics:
+      - premissa-falsa
+      - contradicao
+      - cenario-impossivel
+      - ambiguidade
+      - falacia
+      - antiético
+
+  - id: multimodal
+    title: Multimodal (Visão + Texto)
+    default_lang: mixed
+    target_count: 30
+    file: multimodal.jsonl
+    subtopics:
+      - descricao
+      - contexto
+      - seguranca-visual
+      - comparacao
+      - hipoteses
+
+  - id: fisica
+    title: Física
+    default_lang: pt
+    file: fisica.jsonl
+    subtopics:
+      - mecanica
+      - termodinamica
+      - eletromagnetismo
+      - optica
+      - quantica
+      - relatividade
+      - astrofisica
+      - particulas
+      - ondas
+      - fisica-aplicada
+
+  - id: quimica
+    title: Química
+    default_lang: pt
+    file: quimica.jsonl
+    subtopics:
+      - atomistica
+      - ligacoes
+      - organica
+      - inorganica
+      - fisico-quimica
+      - eletroquimica
+      - bioquimica
+      - ambiental
+      - industrial
+      - analitica
+
+  - id: matematica
+    title: Matemática
+    default_lang: mixed
+    file: matematica.jsonl
+    subtopics:
+      - algebra
+      - calculo
+      - geometria
+      - probabilidade
+      - estatistica
+      - logica
+      - matematica-discreta
+      - analise
+      - linear
+      - aplicada
+
+  - id: agro_iot
+    title: Agronegócio e IoT
+    default_lang: pt
+    file: agro_iot.jsonl
+    subtopics:
+      - sensores
+      - irrigacao
+      - drones
+      - solo
+      - pragas
+      - clima
+      - precisao
+      - sustentabilidade
+      - cadeia-fria
+      - conectividade
+
+  - id: geografia
+    title: Geografia
+    default_lang: pt
+    file: geografia.jsonl
+    subtopics:
+      - clima
+      - hidrografia
+      - urbanizacao
+      - geopolitica
+      - demografia
+      - meio-ambiente
+      - cartografia
+      - economia-espacial
+      - desastres
+      - globalizacao
+
+  - id: redes
+    title: Redes e Infraestrutura
+    default_lang: pt
+    file: redes.jsonl
+    subtopics:
+      - tcp-ip
+      - routing
+      - seguranca
+      - dns
+      - cloud
+      - vpn
+      - observabilidade
+      - wireless
+      - datacenter
+      - protocolos
+
+  - id: ia
+    title: Inteligência Artificial
+    default_lang: pt
+    file: ia.jsonl
+    subtopics:
+      - machine-learning
+      - deep-learning
+      - nlp
+      - visao
+      - llms
+      - rag
+      - etica-ia
+      - mlops
+      - reinforcement
+      - avaliacao
+
+  - id: economia
+    title: Economia e Finanças
+    default_lang: pt
+    file: economia.jsonl
+    subtopics:
+      - macroeconomia
+      - microeconomia
+      - mercados
+      - politica-monetaria
+      - comercio
+      - financas
+      - desenvolvimento
+      - desigualdade
+      - inflacao
+      - fiscal
+
+  - id: biologia
+    title: Biologia e Saúde
+    default_lang: pt
+    file: biologia.jsonl
+    subtopics:
+      - celula
+      - genetica
+      - ecologia
+      - evolucao
+      - fisiologia
+      - microbiologia
+      - botanica
+      - zoologia
+      - saude-publica
+      - biotecnologia
+
+  - id: literatura
+    title: Literatura e Gramática
+    default_lang: pt
+    file: literatura.jsonl
+    subtopics:
+      - gramatica
+      - narrativa
+      - poesia
+      - modernismo
+      - pos-modernismo
+      - literatura-brasileira
+      - literatura-mundial
+      - generos
+      - estilistica
+      - critica-literaria
+
+  - id: filosofia
+    title: Filosofia e Sociologia
+    default_lang: pt
+    file: filosofia.jsonl
+    subtopics:
+      - etica
+      - politica-filosofica
+      - epistemologia
+      - existencialismo
+      - sociologia-classica
+      - desigualdade
+      - cultura
+      - direitos
+      - metodo
+      - contemporanea
+
+  - id: arte
+    title: Arte e Música
+    default_lang: pt
+    file: arte.jsonl
+    subtopics:
+      - pintura
+      - escultura
+      - musica-classica
+      - musica-popular
+      - barroco
+      - modernismo-arte
+      - performance
+      - estetica
+      - museus
+      - cultura-visual
+
+  - id: direito
+    title: Direito e Política
+    default_lang: pt
+    file: direito.jsonl
+    subtopics:
+      - constitucional
+      - penal
+      - civil
+      - administrativo
+      - internacional
+      - eleitoral
+      - direitos-humanos
+      - politicas-publicas
+      - democracia
+      - regulacao
+
+  - id: cinema
+    title: Cinema e Cultura Pop
+    default_lang: pt
+    file: cinema.jsonl
+    subtopics:
+      - narrativa-filmica
+      - diretores
+      - generos
+      - animacao
+      - documentario
+      - cultura-pop
+      - games
+      - series
+      - critica
+      - industria
+
+  - id: culinaria
+    title: Culinária e Gastronomia
+    default_lang: pt
+    file: culinaria.jsonl
+    subtopics:
+      - tecnicas
+      - fermentacao
+      - confeitaria
+      - gastronomia-molecular
+      - bebidas
+      - cultura-alimentar
+      - nutricao
+      - seguranca-alimentar
+      - cozinha-brasileira
+      - restaurantes
+
+  - id: astronomia
+    title: Astronomia e Exploração Espacial
+    default_lang: pt
+    file: astronomia.jsonl
+    subtopics:
+      - sistema-solar
+      - estrelas
+      - galaxias
+      - cosmologia
+      - exoplanetas
+      - missoes-espaciais
+      - astrobiologia
+      - telescopios
+      - buracos-negros
+      - exploracao
+
+  - id: transversais
+    title: Questões Transversais
+    default_lang: mixed
+    file: transversais.jsonl
+    subtopics:
+      - etica-tecnologia
+      - clima-sociedade
+      - saude-politica
+      - educacao-ia
+      - economia-ambiente
+      - direito-tecnologia
+      - cultura-ciencia
+      - energia-futuro
+      - cidades
+      - desigualdade-global
+
+  - id: foco_meta
+    title: Questões Transversais Foco Meta
+    default_lang: mixed
+    file: foco_meta.jsonl
+    subtopics:
+      - agi-governanca
+      - clima-jogos
+      - consciencia
+      - metricas-progresso
+      - direitos-universais
+      - pos-verdade
+      - cidades-2050
+      - capitalismo-vigilancia
+      - espaco-humanidade
+      - futuro-trabalho
+
+  - id: brasil_historia
+    title: História do Brasil
+    default_lang: mixed
+    file: brasil_historia.jsonl
+    subtopics:
+      - colonia
+      - imperio
+      - republica-velha
+      - vargas
+      - ditadura
+      - redemocratizacao
+      - movimentos-sociais
+      - escravidao
+      - fronteiras
+      - memoria
+
+  - id: brasil_geografia
+    title: Geografia do Brasil
+    default_lang: mixed
+    file: brasil_geografia.jsonl
+    subtopics:
+      - amazonia
+      - semiarido
+      - urbanizacao
+      - energia
+      - hidrografia
+      - agronegocio
+      - fronteira
+      - clima
+      - geopolitica
+      - infraestrutura
+
+  - id: brasil_economia
+    title: Economia Brasileira
+    default_lang: mixed
+    file: brasil_economia.jsonl
+    subtopics:
+      - inflacao
+      - fiscal
+      - industria
+      - agronegocio
+      - cambio
+      - emprego
+      - desigualdade
+      - comercio-exterior
+      - bancos
+      - reformas
+
+  - id: brasil_politica
+    title: Política Brasileira
+    default_lang: mixed
+    file: brasil_politica.jsonl
+    subtopics:
+      - presidencialismo
+      - congresso
+      - stf
+      - eleicoes
+      - corrupcao
+      - federalismo
+      - forcas-armadas
+      - midia
+      - partidos
+      - politica-externa
+
+  - id: brasil_cultura
+    title: Cultura Brasileira
+    default_lang: mixed
+    file: brasil_cultura.jsonl
+    subtopics:
+      - musica
+      - literatura
+      - religiao
+      - esporte
+      - cinema
+      - raca
+      - carnaval
+      - educacao
+      - saude
+      - identidade
+
+  - id: america_norte
+    title: América do Norte
+    default_lang: en
+    file: america_norte.jsonl
+    subtopics:
+      - colonizacao
+      - independencia
+      - guerra-civil
+      - expansao
+      - imigracao
+      - economia
+      - politica-contemporanea
+      - relacoes-internacionais
+      - meio-ambiente
+      - direitos-civis
+
+  - id: europa
+    title: Europa
+    default_lang: en
+    file: europa.jsonl
+    subtopics:
+      - idade-media
+      - renascimento
+      - revolucoes
+      - guerras-mundiais
+      - guerra-fria
+      - uniao-europeia
+      - geopolitica
+      - migracao
+      - economia-europeia
+      - democracia
+
+  - id: matematica_avancada
+    title: Matemática Avançada
+    default_lang: en
+    file: matematica_avancada.jsonl
+    subtopics:
+      - analise-real
+      - algebra-abstrata
+      - topologia
+      - teoria-numeros
+      - geometria-diferencial
+      - probabilidade-avancada
+      - logica-matematica
+      - teoria-categorias
+      - otimizacao
+      - conjecturas
+
+  - id: asia
+    title: Ásia
+    default_lang: en
+    file: asia.jsonl
+    subtopics:
+      - china
+      - india
+      - japao
+      - oriente-medio
+      - sudeste-asiatico
+      - coreia
+      - colonialismo
+      - economia-asiatica
+      - seguranca
+      - demografia
+
+  - id: medicina
+    title: Medicina
+    default_lang: mixed
+    file: medicina.jsonl
+    subtopics:
+      - historia-medicina
+      - epidemiologia
+      - farmacologia
+      - etica-medica
+      - saude-publica
+      - genetica
+      - psiquiatria
+      - cirurgia
+      - politicas-saude
+      - tecnologia-medica
+
+  - id: geografia_regional
+    title: Geografia Regional
+    default_lang: mixed
+    file: geografia_regional.jsonl
+    subtopics:
+      - teorias-geograficas
+      - tectonica
+      - clima-global
+      - urbanismo
+      - geopolitica-recursos
+      - migracao
+      - antropoceno
+      - cartografia
+      - economia-espacial
+      - justica-ambiental

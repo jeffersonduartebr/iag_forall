@@ -14,15 +14,15 @@ needed. The module also combines:
 
 from __future__ import annotations
 
-import os
-import json
 import hashlib
+import json
 import logging
-import time
 import threading
+import time
 from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
-from typing import List, Dict, Optional, Any, Tuple
 
 # Importação Condicional para não quebrar se a lib faltar
 try:
@@ -35,7 +35,8 @@ except ImportError:
 try:
     from openai import OpenAI as OpenAIClient
 except ImportError:
-    OpenAIClient = None
+    # Optional dependency: fall back to a sentinel when the SDK is absent.
+    OpenAIClient = None  # type: ignore[assignment,misc]
 
 from app.settings_dynamic import settings
 from app.utils.redis_client import get_redis
@@ -128,7 +129,7 @@ def get_local_model():
         # trust_remote_code=True é necessário para Nomic
         _LOCAL_MODEL_INSTANCE = SentenceTransformer(EMBED_MODEL_TEXT, trust_remote_code=True)
         # Otimização para CPU
-        _LOCAL_MODEL_INSTANCE.eval() 
+        _LOCAL_MODEL_INSTANCE.eval()
     return _LOCAL_MODEL_INSTANCE
 
 # ============================================================
@@ -173,11 +174,11 @@ def _local_cpu_embed(text: str) -> List[float]:
     model = get_local_model()
     if not model:
         raise RuntimeError("SentenceTransformers não instalado ou falha ao carregar.")
-    
+
     # Prefixo específico para Nomic v1.5 (Melhora qualidade)
     if "nomic" in EMBED_MODEL_TEXT and not text.startswith("search_"):
         text = f"search_query: {text}"
-        
+
     # Gera vetor
     vec = model.encode(text, convert_to_numpy=True)
     return vec.tolist()
@@ -244,7 +245,7 @@ def embed_image(image_b64: str) -> List[float]:
     embeddings, so direct image embeddings remain intentionally stubbed while
     preserving a stable public interface.
     """
-    return [0.0] 
+    return [0.0]
 
 def embed_multimodal(text: str, image_b64: Optional[str]) -> Dict[str, List[float]]:
     """Return the multimodal embedding payload expected by downstream callers.

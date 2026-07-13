@@ -1,5 +1,5 @@
 # ============================================================
-# Prometheus Configuration — LLM Router Stack (Jefferson Duarte)
+# Prometheus — LLM Router Stack
 # ============================================================
 
 global:
@@ -7,96 +7,38 @@ global:
   scrape_timeout: 15s
   evaluation_interval: 15s
   external_labels:
-    monitor: 'llm-router-stack'
+    monitor: llm-router-stack
 
-# ============================================================
-# Scrape Configurations
-# ============================================================
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/alerts.yml
 
 scrape_configs:
-  # ---------------------------
-  # 🧠 API Principal — FastAPI / Uvicorn
-  # ---------------------------
-  - job_name: 'llm_router_api'
+  - job_name: llm_router_api
     metrics_path: /metrics
     static_configs:
-      - targets: ['llm_router_api:8000']
+      - targets: ["api:8000"]
         labels:
-          service: 'llm_router_api'
-          env: 'production'
+          service: llm_router_api
+          env: production
 
-  # ---------------------------
-  # 🧮 NSGA-II Updater
-  # ---------------------------
-  - job_name: 'nsga_updater'
+  - job_name: nsga_updater
     metrics_path: /metrics
     static_configs:
-      - targets: ['nsga_weights_updater:9999']
+      - targets: ["nsga_weights_updater:9999"]
         labels:
-          service: 'nsga_updater'
-          env: 'production'
+          service: nsga_updater
+          env: production
 
-  # ---------------------------
-  # 🎛 Painel Dash de Controle
-  # ---------------------------
-  - job_name: 'dash_control_panel'
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['dash_control_panel:8050']
-        labels:
-          service: 'dash_control_panel'
-          env: 'production'
-
-  # ---------------------------
-  # 📈 Prometheus (auto-monitoramento)
-  # ---------------------------
-  - job_name: 'prometheus'
+  - job_name: prometheus
     scrape_interval: 60s
     metrics_path: /metrics
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["localhost:9090"]
         labels:
-          service: 'prometheus'
-          env: 'internal'
-
-  # ---------------------------
-  # 🧩 Ollama (coleta opcional, se modificado para expor métricas)
-  # ---------------------------
-# ...
-  - job_name: 'ollama'
-    static_configs:
-      
-      - targets: ['ollama_exporter:9100']
-        labels:
-          service: 'ollama'
-          env: 'production'
-
-  # ---------------------------
-  # 🧱 Redis Exporter (coleta real de métricas Redis)
-  # ---------------------------
-  - job_name: 'redis_exporter'
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['redis_exporter:9121']
-        labels:
-          service: 'redis'
-          env: 'production'
-
-  # ---------------------------
-  # 🗄️ MariaDB Exporter (opcional)
-  # ---------------------------
-  - job_name: 'mariadb_exporter'
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['mariadb_exporter:9104']
-        labels:
-          service: 'mariadb'
-          env: 'production'
-
-  - job_name: 'correlation_metrics'
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['correlation_metrics:9105']
-        labels:
-          service: 'correlation_metrics'
-          env: 'production'
+          service: prometheus
+          env: internal

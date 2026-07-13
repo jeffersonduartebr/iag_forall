@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "run_id": "run-2",
+  "created_at": 1783973266.735363,
+  "git": {
+    "commit": "d5583fff3706832c015c280441b83e1c9a905b60",
+    "dirty": true,
+    "branch": "feat/tool-calling"
+  },
+  "benchmark": {
+    "catalog_dir": "/data/desenvolvimento/iag_forall/data/benchmark_queries",
+    "manifest_version": 1,
+    "catalog_fingerprint_sha256": "904f5030c87da6fc05f0b703b31e67a50d6b5500f19f63a2b138dce8489490ee",
+    "expected_total_queries": 4780,
+    "split_seed": 42,
+    "held_out_ratio": 0.2,
+    "split_filter": null,
+    "split_counts": {
+      "dev": 3821,
+      "held_out": 959
+    },
+    "themes": []
+  },
+  "frozen_policy": false,
+  "config_snapshot": {
+    "NSGA_W_QUALITY": "1.0",
+    "NSGA_W_LATENCY": "0.5",
+    "NSGA_W_COST": "50.0",
+    "BANDIT_EPSILON": "0.12",
+    "UNCERTAINTY_THRESHOLD": "0.7",
+    "CANDIDATE_MODELS_LIST": "[]",
+    "JUDGE_LLMS": null,
+    "JUDGE_LLM_MODEL": null,
+    "TEMPERATURE_DEFAULT": "0.55",
+    "MAX_TOKENS_DEFAULT": "2000",
+    "OPENROUTER_EXPLORATION_ENABLED": "0",
+    "OPENROUTER_EXPLORATION_RATE": "0.10"
+  }
+}

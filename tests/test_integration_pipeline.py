@@ -10,8 +10,9 @@ Tests end-to-end request flow through the API including:
 - Error handling at API level
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 

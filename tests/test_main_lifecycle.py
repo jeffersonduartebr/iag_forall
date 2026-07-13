@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 
 import pytest
-from fastapi import Response
 
 
 async def _async_result(value):
@@ -268,8 +267,9 @@ async def test_route_query_stream_uses_query_runtime(monkeypatch):
 @pytest.mark.asyncio
 async def test_health_and_versioned_endpoints(monkeypatch):
     """Operational routes and versioned wrappers should use extracted routers."""
-    from app import main
     from app.api import ops_routes
+
+    from app import main
 
     async def _h():
         return {"status": "unhealthy", "components": {"redis": {"healthy": False}}}
