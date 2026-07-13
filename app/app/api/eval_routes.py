@@ -27,6 +27,7 @@ from ..schemas import EvalRunCreateRequest, EvalRunExecuteRequest
 from ..services.eval_feedback import get_latest_eval_feedback
 from ..services.experiment_manifest import build_experiment_manifest, write_experiment_manifest
 from ..services.expert_review import expert_judge_agreement_report
+from ..services.tool_eval import tool_eval_golden_set_as_dicts
 from ..services.uq_calibration import build_uq_calibration_report
 from ..settings_dynamic import settings
 from ..tasks import task_execute_eval_run
@@ -310,6 +311,24 @@ def get_builtin_golden_sets(
         required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
     )
     return {"items": list_golden_sets()}
+
+
+@router.get("/admin/evals/tool-eval/golden-set", tags=["Eval"])
+def get_tool_eval_golden_set(
+    x_admin_token: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_user_roles: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    """Return the built-in tool-calling (function-calling) eval golden set."""
+    require_admin_or_role(
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        authorization=authorization,
+        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
+    )
+    return {"items": tool_eval_golden_set_as_dicts()}
 
 
 @router.get("/admin/evals/benchmark-themes", tags=["Eval"])
