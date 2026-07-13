@@ -9,7 +9,7 @@
   "app/app/reliability.py": 510,
   "app/app/roadmap_features.py": 1046,
   "app/app/router_core.py": 532,
-  "app/app/services/query_runtime.py": 697,
+  "app/app/services/query_runtime.py": 713,
   "app/app/services/router_execution.py": 551,
   "app/app/settings_dynamic.py": 858,
   "tests/test_providers_reliability.py": 514,

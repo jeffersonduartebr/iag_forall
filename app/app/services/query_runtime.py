@@ -34,6 +34,7 @@ from ..services.governance_runtime import (
 )
 from ..services.hot_path_runtime import check_input_guardrails_async
 from ..services.query_complexity import apply_complexity_runtime_adjustments, detect_query_complexity
+from ..services.tool_governance import audit_tool_denial, evaluate_tool_policy
 from ..services.tool_observability import record_tool_turn
 from ..settings_dynamic import settings
 from ..tasks import task_process_feedback
@@ -491,6 +492,22 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
         selected_policy = active_policy.get("version")
     if active_policy and active_policy.get("version"):
         POLICY_VERSION_ACTIVE.labels(policy_version=str(active_policy["version"])).set(1)
+
+    req_tools = getattr(req, "tools", None)
+    if req_tools:
+        tool_decision = evaluate_tool_policy(req_tools, active_policy, req.tenant_id)
+        if not tool_decision.allowed:
+            audit_tool_denial(req.tenant_id, tool_decision)
+            ROUTER_QUERY_OUTCOME.labels(outcome="tool_policy_denied", model="tool_governance", modality=modality).inc()
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": True,
+                    "category": "tool_policy_denied",
+                    "reason": tool_decision.reason,
+                    "tool": tool_decision.offending_tool,
+                },
+            )
 
     assigned_variant = None
     if req.experiment_id and settings.AB_TESTING_ENABLED:
