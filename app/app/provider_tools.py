@@ -522,3 +522,80 @@ def from_ollama_chat(data: Dict[str, Any]) -> Tuple[str, Optional[List[ToolCall]
     else:
         finish = "stop"
     return text_out, (tool_calls or None), finish
+
+
+# ---------------------------------------------------------------------------
+# Structured outputs / JSON mode (response_format) — item #5 do roadmap
+# ---------------------------------------------------------------------------
+# ``response_format`` canônico (estilo OpenAI):
+#   {"type": "json_object"}                                → JSON livre
+#   {"type": "json_schema", "json_schema": {"name",         → JSON com schema
+#                                            "schema", "strict"}}
+#   {"type": "text"} | ausente                              → sem restrição (default)
+def _response_format_type(response_format: Any) -> str:
+    """Retorna o ``type`` normalizado de um ``response_format`` canônico."""
+    if not isinstance(response_format, dict):
+        return "text"
+    return str(response_format.get("type") or "text").strip().lower()
+
+
+def _response_format_schema(response_format: Any) -> Optional[Dict[str, Any]]:
+    """Extrai o JSON Schema de um ``response_format`` do tipo ``json_schema`` (ou ``None``)."""
+    if _response_format_type(response_format) != "json_schema":
+        return None
+    js = response_format.get("json_schema") if isinstance(response_format, dict) else None
+    schema = js.get("schema") if isinstance(js, dict) else None
+    return schema if isinstance(schema, dict) else None
+
+
+def wants_json(response_format: Any) -> bool:
+    """Indica se o cliente pediu saída em JSON (``json_object`` ou ``json_schema``)."""
+    return _response_format_type(response_format) in {"json_object", "json_schema"}
+
+
+def to_ollama_format(response_format: Any) -> Optional[Any]:
+    """Traduz ``response_format`` para o campo ``format`` do Ollama.
+
+    ``json_object`` → ``"json"``; ``json_schema`` → o dict do JSON Schema;
+    ``text``/ausente → ``None`` (sem restrição de formato).
+    """
+    ftype = _response_format_type(response_format)
+    if ftype == "json_object":
+        return "json"
+    if ftype == "json_schema":
+        schema = _response_format_schema(response_format)
+        return schema if schema is not None else "json"
+    return None
+
+
+def to_gemini_response_config(response_format: Any) -> Dict[str, Any]:
+    """Traduz ``response_format`` para chaves de ``generation_config``/``config`` do Gemini.
+
+    Retorna ``{"response_mime_type": "application/json"}`` (mais ``"response_schema"``
+    limpo de chaves não aceitas quando há JSON Schema), ou ``{}`` sem pedido de JSON.
+    """
+    if not wants_json(response_format):
+        return {}
+    cfg: Dict[str, Any] = {"response_mime_type": "application/json"}
+    schema = _response_format_schema(response_format)
+    if schema is not None:
+        cfg["response_schema"] = _clean_gemini_schema(schema)
+    return cfg
+
+
+def json_mode_system_suffix(response_format: Any) -> Optional[str]:
+    """Instrução de sistema para *emular* JSON mode em provedores sem suporte nativo.
+
+    Anthropic não tem ``response_format`` nativo; este sufixo é anexado ao system
+    prompt como melhor esforço. Retorna ``None`` quando não há pedido de JSON.
+    """
+    if not wants_json(response_format):
+        return None
+    suffix = "\n\nResponda SOMENTE com JSON válido, sem texto fora do objeto JSON."
+    schema = _response_format_schema(response_format)
+    if schema is not None:
+        try:
+            suffix += " O JSON deve seguir este schema: " + json.dumps(schema, ensure_ascii=False)
+        except Exception:
+            suffix += f" (schema: {schema})"
+    return suffix

@@ -113,6 +113,7 @@ def build_internal_route_coro(
     tools: list | None = None,
     tool_choice: Any = None,
     messages: list | None = None,
+    response_format: dict | None = None,
 ):
     """Return async callable that invokes route_and_answer_internal_impl."""
 
@@ -133,6 +134,7 @@ def build_internal_route_coro(
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            response_format=response_format,
         )
 
     return _run

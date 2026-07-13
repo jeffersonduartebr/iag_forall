@@ -89,6 +89,7 @@ async def route_and_answer_internal_impl(
     tools: list | None = None,
     tool_choice: Any = None,
     messages: list | None = None,
+    response_format: dict | None = None,
 ) -> Dict[str, Any]:
     """Execute the synchronous routing path using injected dependencies."""
     start_time = time.time()
@@ -436,6 +437,7 @@ async def route_and_answer_internal_impl(
                 tools=tools,
                 tool_choice=tool_choice,
                 messages=messages,
+                response_format=response_format,
                 system_prompt=system_prompt,
             )
 
@@ -510,6 +512,7 @@ async def route_and_answer_internal_impl(
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            response_format=response_format,
             system_prompt=system_prompt,
         )
         _observe_stage("provider_call", provider_started_at)

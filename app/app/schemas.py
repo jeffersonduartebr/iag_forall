@@ -138,6 +138,7 @@ class QueryRequest(BaseModel):
     tools: Annotated[Optional[List[Dict[str, Any]]], Field(description="Lista de tools no formato OpenAI: [{type:function, function:{name,description,parameters}}].")] = None
     tool_choice: Annotated[Optional[Union[str, Dict[str, Any]]], Field(description="Controle de tools: 'auto' | 'none' | 'required' | {type:function, function:{name}}.")] = None
     messages: Annotated[Optional[List[Dict[str, Any]]], Field(description="Histórico multi-turn (formato OpenAI) para follow-up com resultados de tools (role:tool).")] = None
+    response_format: Annotated[Optional[Dict[str, Any]], Field(description="Formato de saída (estilo OpenAI): {type:json_object} | {type:json_schema, json_schema:{name,schema,strict}} | {type:text}.")] = None
 
     @field_validator("query")
     @classmethod

@@ -1160,6 +1160,12 @@ class OpenAIProvider(BaseProvider):
                 if tool_choice is not None:
                     api_args["tool_choice"] = tool_choice
 
+            # Structured outputs / JSON mode (formato OpenAI é o canônico → pass-through
+            # nativo, tanto json_object quanto json_schema).
+            response_format = kwargs.get("response_format")
+            if response_format:
+                api_args["response_format"] = response_format
+
             if model.startswith("o1-") or "gpt-5" in model:
                 api_args["max_completion_tokens"] = max_tokens
             else:
@@ -1273,6 +1279,12 @@ class AnthropicProvider(BaseProvider):
             )
             system_text, anth_messages = ptools.to_anthropic_messages(canonical_messages)
 
+            # Anthropic não tem ``response_format`` nativo: emulamos JSON mode em melhor
+            # esforço anexando uma instrução ao system prompt (item #5 do roadmap).
+            json_suffix = ptools.json_mode_system_suffix(kwargs.get("response_format"))
+            if json_suffix:
+                system_text = f"{system_text or ''}{json_suffix}"
+
             create_args: Dict[str, Any] = {
                 "model": model,
                 "max_tokens": kwargs.get("max_tokens", 512),
@@ -1334,6 +1346,7 @@ class GeminiProvider(BaseProvider):
             tool_config: Optional[dict] = None,
             contents: Optional[list] = None,
             system_instruction: Optional[str] = None,
+            response_format: Optional[dict] = None,
         ):
             """Execute one Gemini generation call using the available SDK.
 
@@ -1357,6 +1370,7 @@ class GeminiProvider(BaseProvider):
                     config["tools"] = tools
                 if tool_config:
                     config["tool_config"] = tool_config
+                config.update(ptools.to_gemini_response_config(response_format))
                 resp = client.models.generate_content(
                     model=model_name,
                     contents=req_contents,
@@ -1384,6 +1398,7 @@ class GeminiProvider(BaseProvider):
             gen_kwargs: Dict[str, Any] = {
                 "generation_config": {"temperature": temperature, "max_output_tokens": max_tokens}
             }
+            gen_kwargs["generation_config"].update(ptools.to_gemini_response_config(response_format))
             if tool_config:
                 gen_kwargs["tool_config"] = tool_config
             return gmodel.generate_content(gen_contents, **gen_kwargs)
@@ -1429,6 +1444,7 @@ class GeminiProvider(BaseProvider):
                     tool_config=gem_tool_config,
                     contents=gem_contents,
                     system_instruction=gem_system,
+                    response_format=kwargs.get("response_format"),
                 )
 
             resp = await asyncio.to_thread(_call)
@@ -1495,6 +1511,8 @@ class OllamaProvider(BaseProvider):
         tools = kwargs.get("tools")
         tool_choice = kwargs.get("tool_choice")
         messages = kwargs.get("messages")
+        # Structured outputs: Ollama usa o campo ``format`` ("json" ou JSON Schema).
+        ollama_format = ptools.to_ollama_format(kwargs.get("response_format"))
         # Migração condicional: só usa /api/chat (messages + tools) quando há tools
         # ou histórico multi-turn; caso contrário mantém /api/generate + reasoning.
         use_chat = bool(tools) or bool(messages)
@@ -1541,6 +1559,8 @@ class OllamaProvider(BaseProvider):
                 }
                 if tools and not ptools.tools_disabled(tool_choice):
                     chat_payload["tools"] = tools
+                if ollama_format is not None:
+                    chat_payload["format"] = ollama_format
                 resp = await client.post(f"{self.host}/api/chat", json=chat_payload, timeout=timeout)
                 resp.raise_for_status()
                 data = resp.json()
@@ -1559,6 +1579,8 @@ class OllamaProvider(BaseProvider):
                 }
                 if image_b64:
                     payload["images"] = [image_b64]
+                if ollama_format is not None:
+                    payload["format"] = ollama_format
                 resp = await client.post(f"{self.host}/api/generate", json=payload, timeout=timeout)
                 resp.raise_for_status()
                 data = resp.json()
@@ -1672,6 +1694,7 @@ async def call_model(
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Any] = None,
     messages: Optional[List[Dict[str, Any]]] = None,
+    response_format: Optional[Dict[str, Any]] = None,
     system_prompt: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Run one model call through the normalized provider pipeline.
@@ -1703,6 +1726,7 @@ async def call_model(
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            response_format=response_format,
             system_prompt=system_prompt,
         )
 

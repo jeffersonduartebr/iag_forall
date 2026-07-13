@@ -524,6 +524,7 @@ async def route_and_answer(
     tools: list | None = None,
     tool_choice: Any = None,
     messages: list | None = None,
+    response_format: dict | None = None,
 ) -> Dict[str, Any]:
     """Execute the route and answer routine with retry, dedup, and timeout handling."""
     # Tools/multi-turn desabilitam a deduplicação: requisições com o mesmo texto
@@ -545,6 +546,7 @@ async def route_and_answer(
         tools=tools,
         tool_choice=tool_choice,
         messages=messages,
+        response_format=response_format,
     )
     return await route_and_answer_with_resilience(
         settings=settings,

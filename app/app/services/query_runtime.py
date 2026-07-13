@@ -550,6 +550,7 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
             tools=getattr(req, "tools", None),
             tool_choice=getattr(req, "tool_choice", None),
             messages=getattr(req, "messages", None),
+            response_format=getattr(req, "response_format", None),
         )
     except asyncio.TimeoutError:
         ROUTER_QUERY_OUTCOME.labels(

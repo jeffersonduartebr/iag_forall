@@ -233,6 +233,149 @@ async def test_ollama_provider_uses_generate_endpoint_without_tools(monkeypatch)
     assert out.text == "4" and out.tool_calls is None
 
 
+# --------------------------------------------------------------------------
+# Structured outputs / JSON mode (response_format) chega a cada provider
+# --------------------------------------------------------------------------
+JSON_OBJECT_FORMAT = {"type": "json_object"}
+JSON_SCHEMA_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {"name": "w", "schema": {"type": "object", "properties": {"c": {"type": "string"}}}, "strict": True},
+}
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_forwards_response_format(monkeypatch):
+    _close_breakers()
+    captured = {}
+
+    async def _create(**kwargs):
+        captured.update(kwargs)
+        msg = SimpleNamespace(content='{"c":"Natal"}', tool_calls=None)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+            usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3),
+            model_dump=lambda: {},
+        )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+    monkeypatch.setattr(pa, "AsyncOpenAI", lambda api_key=None: fake_client)
+    monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.1)
+
+    provider = pa.OpenAIProvider()
+    await provider.generate(prompt="clima em Natal?", model="gpt-4o", response_format=JSON_SCHEMA_FORMAT)
+
+    # response_format é pass-through nativo no formato canônico OpenAI.
+    assert captured["response_format"] == JSON_SCHEMA_FORMAT
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_sets_format_on_generate_endpoint(monkeypatch):
+    _close_breakers()
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"response": '{"c":"Natal"}', "prompt_eval_count": 3, "eval_count": 2, "load_duration": 0}
+
+    class _Client:
+        async def post(self, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["payload"] = json
+            return _Resp()
+
+    async def _get_client():
+        return _Client()
+
+    monkeypatch.setattr(pa, "get_http_client", _get_client)
+    monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.0)
+
+    provider = pa.OllamaProvider()
+    await provider.generate(prompt="clima?", model="gemma3:4b", response_format=JSON_OBJECT_FORMAT)
+
+    assert captured["url"].endswith("/api/generate")
+    assert captured["payload"]["format"] == "json"
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_sets_schema_format_on_chat_endpoint(monkeypatch):
+    _close_breakers()
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "{}"}, "prompt_eval_count": 5, "eval_count": 1, "load_duration": 0}
+
+    class _Client:
+        async def post(self, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["payload"] = json
+            return _Resp()
+
+    async def _get_client():
+        return _Client()
+
+    monkeypatch.setattr(pa, "get_http_client", _get_client)
+    monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.0)
+
+    provider = pa.OllamaProvider()
+    # tools força o endpoint /api/chat; o schema deve virar o campo ``format``.
+    await provider.generate(prompt="clima?", model="qwen2.5", tools=TOOLS, response_format=JSON_SCHEMA_FORMAT)
+
+    assert captured["url"].endswith("/api/chat")
+    assert captured["payload"]["format"] == JSON_SCHEMA_FORMAT["json_schema"]["schema"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_provider_appends_json_system_suffix(monkeypatch):
+    _close_breakers()
+    captured = {}
+
+    async def _create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="{}")],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=5, output_tokens=1),
+        )
+
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=_create))
+    monkeypatch.setattr(pa, "AsyncAnthropic", lambda api_key=None: fake_client)
+    monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.1)
+
+    provider = pa.AnthropicProvider()
+    await provider.generate(prompt="clima?", model="claude-3-5-sonnet-latest", response_format=JSON_OBJECT_FORMAT)
+
+    # Anthropic não tem response_format nativo: instrução de JSON vai no system prompt.
+    assert "JSON" in (captured.get("system") or "")
+
+
+@pytest.mark.asyncio
+async def test_call_model_threads_response_format_to_provider(monkeypatch):
+    captured = {}
+
+    class _Provider:
+        async def generate(self, **kwargs):
+            captured.update(kwargs)
+            return pa.LLMResponse(
+                text="{}", latency=0.1, load_time=0.0, cost=0.0, prompt_tokens=5,
+                completion_tokens=1, model_used=kwargs["model"], raw_payload="{}",
+                reasoning=None, tool_calls=None, finish_reason="stop",
+            )
+
+    monkeypatch.setattr(pa, "is_provider_temporarily_unavailable", lambda _m: False)
+    monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda _m: _Provider())
+    monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.0)
+
+    await pa.call_model("openai/gpt-4o", "clima?", response_format=JSON_OBJECT_FORMAT)
+    assert captured["response_format"] == JSON_OBJECT_FORMAT
+
+
 @pytest.mark.asyncio
 async def test_call_model_estimates_tokens_for_tool_turn_without_usage(monkeypatch):
     # roadmap #4: se o provider não contabiliza tokens de tool_calls, call_model estima.
