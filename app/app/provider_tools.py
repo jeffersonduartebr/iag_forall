@@ -24,6 +24,8 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.native_tools import is_native_tool, split_tools
+
 ToolCall = Dict[str, Any]
 Messages = List[Dict[str, Any]]
 
@@ -206,11 +208,19 @@ def openai_finish_reason(raw_finish: Optional[str], has_tool_calls: bool) -> str
 # Anthropic
 # ---------------------------------------------------------------------------
 def to_anthropic_tools(tools: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
-    """Traduz tools canônicas para o formato Anthropic (usa ``input_schema``)."""
+    """Traduz tools canônicas para o formato Anthropic (usa ``input_schema``).
+
+    Function tools são traduzidas (``input_schema``). Tools nativas/server-side (ex.:
+    ``{"type":"web_search_20250305","name":"web_search"}``) são repassadas inalteradas,
+    ao lado das traduzidas, pois o próprio Anthropic as executa.
+    """
     if not tools:
         return None
     out = []
     for t in tools:
+        if is_native_tool(t):
+            out.append(t)
+            continue
         fn = _function_of(t)
         out.append(
             {
@@ -346,20 +356,30 @@ def _clean_gemini_schema(schema: Any) -> Any:
 
 
 def to_gemini_tools(tools: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
-    """Traduz tools canônicas para ``[{"function_declarations":[...]}]`` do Gemini."""
+    """Traduz tools canônicas para o ``tools`` do Gemini.
+
+    Function tools viram um bloco ``{"function_declarations":[...]}``. Tools nativas de
+    grounding/execução (``{"google_search":{}}``, ``{"code_execution":{}}`` ...) são
+    mescladas no payload inalteradas, ao lado do bloco de declarações.
+    """
     if not tools:
         return None
-    decls = []
-    for t in tools:
-        fn = _function_of(t)
-        decls.append(
-            {
-                "name": fn.get("name"),
-                "description": fn.get("description") or "",
-                "parameters": _clean_gemini_schema(fn.get("parameters") or {"type": "object", "properties": {}}),
-            }
-        )
-    return [{"function_declarations": decls}]
+    function_tools, native_tools = split_tools(tools)
+    out: List[Dict[str, Any]] = []
+    if function_tools:
+        decls = []
+        for t in function_tools:
+            fn = _function_of(t)
+            decls.append(
+                {
+                    "name": fn.get("name"),
+                    "description": fn.get("description") or "",
+                    "parameters": _clean_gemini_schema(fn.get("parameters") or {"type": "object", "properties": {}}),
+                }
+            )
+        out.append({"function_declarations": decls})
+    out.extend(native_tools)
+    return out or None
 
 
 def to_gemini_tool_config(tool_choice: Any) -> Optional[Dict[str, Any]]:

@@ -4,6 +4,7 @@
 import json
 from types import SimpleNamespace
 
+from app import native_tools as nt
 from app import provider_tools as pt
 
 TOOLS = [
@@ -21,6 +22,12 @@ TOOLS = [
         },
     }
 ]
+
+# Tools nativas (server-side) por provedor, no array canônico ``tools``.
+ANTHROPIC_SERVER_TOOL = {"type": "web_search_20250305", "name": "web_search"}
+GEMINI_GROUNDING_TOOL = {"google_search": {}}
+GEMINI_CODE_EXEC_TOOL = {"code_execution": {}}
+OPENAI_HOSTED_TOOL = {"type": "web_search"}
 
 MULTITURN = [
     {"role": "user", "content": "Qual o clima em Natal?"},
@@ -226,3 +233,58 @@ def test_from_ollama_chat_tool_calls():
 def test_from_ollama_chat_plain_text():
     text, tool_calls, finish = pt.from_ollama_chat({"message": {"content": "resposta"}})
     assert text == "resposta" and tool_calls is None and finish == "stop"
+
+
+# --------------------------------------------------------------------------
+# Tools nativas (server-side) — pass-through por provedor
+# --------------------------------------------------------------------------
+def test_anthropic_native_server_tool_passes_through_next_to_function():
+    out = pt.to_anthropic_tools(TOOLS + [ANTHROPIC_SERVER_TOOL])
+    # A function tool continua traduzida (usa input_schema).
+    assert out[0]["name"] == "get_weather" and "input_schema" in out[0]
+    # O bloco server-side é repassado inalterado.
+    assert ANTHROPIC_SERVER_TOOL in out
+    assert len(out) == 2
+
+
+def test_anthropic_native_only_tools_pass_through():
+    out = pt.to_anthropic_tools([ANTHROPIC_SERVER_TOOL])
+    assert out == [ANTHROPIC_SERVER_TOOL]
+
+
+def test_anthropic_function_only_translation_unchanged():
+    out = pt.to_anthropic_tools(TOOLS)
+    assert len(out) == 1 and "input_schema" in out[0] and "type" not in out[0]
+
+
+def test_gemini_merges_grounding_alongside_function_declarations():
+    out = pt.to_gemini_tools(TOOLS + [GEMINI_GROUNDING_TOOL])
+    # Grounding nativo mesclado inalterado.
+    assert GEMINI_GROUNDING_TOOL in out
+    # Bloco de function_declarations presente e traduzido.
+    fdecls = [b for b in out if isinstance(b, dict) and "function_declarations" in b]
+    assert fdecls and fdecls[0]["function_declarations"][0]["name"] == "get_weather"
+    assert "additionalProperties" not in fdecls[0]["function_declarations"][0]["parameters"]
+
+
+def test_gemini_native_only_grounding_pass_through():
+    out = pt.to_gemini_tools([GEMINI_GROUNDING_TOOL, GEMINI_CODE_EXEC_TOOL])
+    assert out == [GEMINI_GROUNDING_TOOL, GEMINI_CODE_EXEC_TOOL]
+    # Sem function tools, não há bloco de declarações.
+    assert all("function_declarations" not in b for b in out)
+
+
+def test_gemini_function_only_output_unchanged():
+    out = pt.to_gemini_tools(TOOLS)
+    assert out == [{"function_declarations": [
+        {"name": "get_weather", "description": "clima atual",
+         "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
+    ]}]
+
+
+def test_openai_openrouter_native_tools_pass_through_untouched():
+    # O caminho OpenAI/OpenRouter repassa o array canônico verbatim; a classificação
+    # garante que a hosted tool não é descartada nem confundida com uma function tool.
+    fns, natives = nt.split_tools(TOOLS + [OPENAI_HOSTED_TOOL])
+    assert fns == TOOLS
+    assert natives == [OPENAI_HOSTED_TOOL]

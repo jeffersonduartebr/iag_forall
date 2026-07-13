@@ -7,6 +7,7 @@ import time
 from typing import Any, Dict
 
 from app.model_registry import filter_configured_model_names, filter_tool_capable_model_names
+from app.native_tools import filter_native_tool_capable_model_names, split_tools
 
 
 def _deadline_remaining_seconds(runtime_hints: Dict[str, Any] | None) -> float:
@@ -231,15 +232,14 @@ async def route_and_answer_internal_impl(
     # candidatos aos modelos com suporte a function calling. Se nenhum candidato
     # configurado suportar, falha com erro claro (mapeado para HTTP 422).
     if tools_requested:
-        configured_tool_models = [
-            m
-            for m in (getattr(deps["settings"], "CANDIDATE_TOOL_MODELS_LIST", None) or [])
-            if isinstance(m, str) and not any(m.startswith(prefix) for prefix in deps["BLOCKED_PREFIXES"])
-        ]
+        configured_tool_models = [m for m in (getattr(deps["settings"], "CANDIDATE_TOOL_MODELS_LIST", None) or []) if isinstance(m, str) and not any(m.startswith(prefix) for prefix in deps["BLOCKED_PREFIXES"])]
         if configured_tool_models:
             tool_candidates = filter_configured_model_names(configured_tool_models)
         else:
             tool_candidates = filter_tool_capable_model_names(valid_models)
+        native_tools = split_tools(tools)[1]
+        if native_tools and tool_candidates:
+            tool_candidates = filter_native_tool_capable_model_names(tool_candidates, native_tools)
         if not tool_candidates:
             raise deps["ProviderCallError"](
                 model="none",
