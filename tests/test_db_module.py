@@ -12,6 +12,25 @@ import pytest
 
 from app import db
 
+# Capturado no import (antes de qualquer fixture do conftest patchar): estes testes
+# exercitam o ciclo de vida REAL do engine, então precisam das funções reais em vez
+# dos mocks globais do conftest. Isso torna o arquivo independente da identidade de
+# módulo (antes ele dependia do sys.modules.pop de outros testes para escapar do mock).
+_REAL_GET_ENGINE = db.get_engine
+_REAL_CHECK_HEALTH = db.check_db_health
+
+
+@pytest.fixture(autouse=True)
+def _use_real_engine(monkeypatch):
+    """Restaura as funções reais de engine/health e zera o singleton por teste."""
+    monkeypatch.setattr(db, "get_engine", _REAL_GET_ENGINE)
+    monkeypatch.setattr(db, "check_db_health", _REAL_CHECK_HEALTH)
+    db._engine = None
+    db._engine_initialized = False
+    yield
+    db._engine = None
+    db._engine_initialized = False
+
 
 def test_get_db_url_with_config():
     """Testa get db url with config."""

@@ -8,9 +8,28 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-for _mod in [m for m in list(sys.modules) if m == "app" or m.startswith("app.")]:
-    sys.modules.pop(_mod, None)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app")))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_modules():
+    """Reimporta os módulos ``app.*`` isoladamente por teste e restaura o estado
+    global depois.
+
+    Antes, um ``sys.modules.pop`` no nível do módulo (executado na COLEÇÃO) apagava
+    a identidade de todos os módulos ``app.*`` para a suíte inteira, quebrando
+    patches por string em outros arquivos. Escopar a limpeza a este arquivo, com
+    restauração, mantém o isolamento sem contaminar os demais testes.
+    """
+    saved = {m: sys.modules[m] for m in list(sys.modules) if m == "app" or m.startswith("app.")}
+    for _m in saved:
+        sys.modules.pop(_m, None)
+    try:
+        yield
+    finally:
+        for _m in [m for m in list(sys.modules) if m == "app" or m.startswith("app.")]:
+            sys.modules.pop(_m, None)
+        sys.modules.update(saved)
 
 
 def _stabilize_settings_get(monkeypatch):

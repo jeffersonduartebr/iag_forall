@@ -12,9 +12,22 @@ import sys
 import pytest
 
 # Prioriza /app do projeto para resolver pacote "app" correto nos testes.
-for _mod in [m for m in list(sys.modules) if m == "app" or m.startswith("app.")]:
-    sys.modules.pop(_mod, None)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app")))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_modules():
+    """Reimporta ``app.*`` isoladamente por teste e restaura o estado global depois
+    (evita que um ``sys.modules.pop`` de coleção contamine a suíte inteira)."""
+    saved = {m: sys.modules[m] for m in list(sys.modules) if m == "app" or m.startswith("app.")}
+    for _m in saved:
+        sys.modules.pop(_m, None)
+    try:
+        yield
+    finally:
+        for _m in [m for m in list(sys.modules) if m == "app" or m.startswith("app.")]:
+            sys.modules.pop(_m, None)
+        sys.modules.update(saved)
 
 
 @pytest.mark.asyncio
