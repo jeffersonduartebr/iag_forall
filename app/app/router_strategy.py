@@ -20,6 +20,7 @@ from typing import Dict, List
 
 # Importa helpers do bandits.py
 from app.bandits import get_snapshot, sample_metrics_from_snapshot
+from app.model_registry import is_vision_only_model, model_supports_vision
 from app.reliability import get_cascade_detector, get_circuit_breaker_manager
 from app.settings_dynamic import settings
 
@@ -123,15 +124,10 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # ==================================================================
 
     # 1. SE FOR VISÃO: Exige capacidade multimodal
+    # Fonte única de verdade da capacidade em app.model_registry (antes esta lista
+    # de marcadores era duplicada aqui).
     if modality in ("vision", "multimodal"):
-        # Lista de termos que identificam modelos que "enxergam"
-        vision_markers = ["vision", "vl", "llava", "moondream", "gpt-4o", "gemini", "claude"]
-
-        # Filtra: Mantém apenas se tiver algum marcador visual no nome
-        vision_candidates = [
-            m for m in candidates
-            if any(tag in m.lower() for tag in vision_markers)
-        ]
+        vision_candidates = [m for m in candidates if model_supports_vision(m)]
 
         if vision_candidates:
             candidates = vision_candidates
@@ -140,14 +136,10 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             logger.warning("[Strategy] ⚠️ NENHUM modelo de visão encontrado na lista! Usando fallback Qwen3-VL.")
             candidates = ["ollama/qwen3-vl:4b"]
 
-    # 2. SE FOR TEXTO: Remove modelos de visão (para economizar VRAM/Custo)
+    # 2. SE FOR TEXTO: Remove modelos estritamente de visão (economia de VRAM/custo);
+    # modelos "Omni" (gpt-4o) permanecem por serem ótimos em texto também.
     elif modality == "text":
-        # Remove modelos que tenham tags de visão explícitas,
-        # a menos que sejam modelos "Omni" (GPT-4o) que são ótimos em texto também.
-        candidates = [
-            m for m in candidates
-            if not any(tag in m.lower() for tag in ["vision", "vl", "llava", "moondream"])
-        ]
+        candidates = [m for m in candidates if not is_vision_only_model(m)]
         # Se sobrar vazio, fallback para texto
         if not candidates:
             candidates = ["ollama/gemma3:4b"]

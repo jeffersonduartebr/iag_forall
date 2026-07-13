@@ -600,32 +600,14 @@ def filter_configured_model_names(model_names: List[str]) -> List[str]:
     return get_model_registry().filter_configured_model_names(model_names)
 
 
-def model_supports_tools(model_name: str) -> bool:
-    """Return whether one model supports tool/function calling.
-
-    Ordem de decisão:
-    1. Capacidade declarada no registry (``Capability.FUNCTION_CALLING``).
-    2. Para modelos OpenRouter, o sinal autoritativo ``supported_parameters`` do
-       catálogo (contém ``"tools"`` quando o modelo suporta function calling).
-
-    Modelos desconhecidos/locais sem sinal explícito retornam ``False`` (estrito);
-    para habilitá-los, liste-os em ``CANDIDATE_TOOL_MODELS_LIST``.
-    """
-    if not isinstance(model_name, str) or not model_name:
-        return False
-    cfg = get_model_registry().get(model_name)
-    if cfg is not None and cfg.supports_tools:
-        return True
-    if model_name.startswith("openrouter/"):
-        try:
-            from app.openrouter_catalog import openrouter_supports_tools
-
-            return bool(openrouter_supports_tools(model_name.split("/", 1)[1]))
-        except Exception:
-            return False
-    return False
-
-
-def filter_tool_capable_model_names(model_names: List[str]) -> List[str]:
-    """Keep only model names that support tool/function calling."""
-    return [m for m in model_names if model_supports_tools(m)]
+# Helpers de capacidade (tools/visão) foram centralizados em model_capabilities.
+# Reexportados aqui para compatibilidade com importadores existentes.
+from app.model_capabilities import (  # noqa: E402,F401  (re-export)
+    VISION_CAPABLE_MARKERS,
+    VISION_ONLY_MARKERS,
+    filter_tool_capable_model_names,
+    filter_vision_capable_model_names,
+    is_vision_only_model,
+    model_supports_tools,
+    model_supports_vision,
+)
