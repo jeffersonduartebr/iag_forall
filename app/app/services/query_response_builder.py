@@ -55,6 +55,7 @@ def build_query_response(result: Dict[str, Any], correlation_id: str | None) -> 
         perf_mode_enabled=metadata.get("perf_mode_enabled"),
         retrieval_mode=metadata.get("retrieval_mode"),
         workload_class=metadata.get("workload_class"),
+        stage_timings_ms=metadata.get("stage_timings_ms"),
         raw_payload=parsed_payload,
     )
 

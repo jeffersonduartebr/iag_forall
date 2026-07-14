@@ -100,9 +100,14 @@ async def route_and_answer_internal_impl(
     if tools_requested or messages:
         use_cache = False
 
+    stage_timings_ms: Dict[str, float] = {}
+
     def _observe_stage(stage: str, started_at: float) -> None:
+        elapsed = time.time() - started_at
+        # Per-request breakdown surfaced in diagnostics for single-request triage.
+        stage_timings_ms[stage] = round(stage_timings_ms.get(stage, 0.0) + elapsed * 1000.0, 3)
         try:
-            deps["ROUTER_STAGE_LATENCY"].labels(stage=stage).observe(time.time() - started_at)
+            deps["ROUTER_STAGE_LATENCY"].labels(stage=stage).observe(elapsed)
         except Exception:
             pass
 
@@ -155,7 +160,7 @@ async def route_and_answer_internal_impl(
                 "latency_s": round(time.time() - start_time, 3),
                 "estimated_cost_usd": 0.0,
                 "cost_per_1k": 0.0,
-                "metadata": {"cached": True},
+                "metadata": {"cached": True, "stage_timings_ms": dict(stage_timings_ms)},
                 "route": {
                     "chosen_model": "semantic_cache",
                     "objectives": {"latency": 0, "cost": 0, "uncertainty": 0},
@@ -182,6 +187,7 @@ async def route_and_answer_internal_impl(
     finally:
         _observe_stage("precheck", precheck_started_at)
 
+    selection_started_at = time.time()
     all_candidates = (
         deps["settings"].CANDIDATE_MODELS_LIST
         + deps["settings"].CANDIDATE_VISION_MODELS_LIST
@@ -316,6 +322,7 @@ async def route_and_answer_internal_impl(
     else:
         top2 = [chosen]
 
+    _observe_stage("selection", selection_started_at)
     deps["logger"].info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | exploration={exploration_mode}")
 
     if chosen.startswith("ollama/") and not deps["is_ollama_model_verified"](chosen.replace("ollama/", "")):
@@ -582,6 +589,7 @@ async def route_and_answer_internal_impl(
             "retrieval_skipped_reason": retrieval_bundle.get("retrieval_skipped_reason"),
             "openrouter_exploration": exploration_mode,
             "exploration_info": exploration_info,
+            "stage_timings_ms": dict(stage_timings_ms),
         },
         "route": {
             "chosen_model": chosen,

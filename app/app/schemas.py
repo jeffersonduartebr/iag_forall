@@ -289,6 +289,7 @@ class ResponseDiagnostics(BaseModel):
     retrieval_mode: Optional[str] = None
     workload_class: Optional[str] = None
     detected_complexity: Optional[str] = None
+    stage_timings_ms: Optional[Dict[str, float]] = None
     raw_payload: Optional[Any] = None
 
 

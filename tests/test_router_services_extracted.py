@@ -779,6 +779,64 @@ async def test_router_execution_covers_execute_provider_and_empty_fallback_error
 
 
 @pytest.mark.asyncio
+async def test_router_execution_reports_stage_timings_breakdown():
+    """Normal execution should surface a per-request stage-latency breakdown (perf #21)."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+
+    async def _call_model(**kwargs):
+        return "ok", {"prompt_tokens": 1, "completion_tokens": 1, "cost_per_1k": 0.0}
+
+    deps["call_model"] = _call_model
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="pergunta",
+        system_prompt="SYS",
+        use_rag=False,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+    )
+    timings = out["metadata"]["stage_timings_ms"]
+    assert isinstance(timings, dict)
+    # Selection + provider + postprocess are always on the non-cached path.
+    assert "selection" in timings
+    assert "provider_call" in timings
+    assert "postprocess" in timings
+    assert all(isinstance(v, float) and v >= 0.0 for v in timings.values())
+
+
+@pytest.mark.asyncio
+async def test_router_execution_cache_hit_reports_cache_lookup_timing():
+    """Cache-hit path should still report a stage-latency breakdown with cache_lookup (perf #21)."""
+    deps = _deps_for_execution()
+
+    async def _cache(*args, **kwargs):
+        return {"text": "cached", "similarity": 0.95}
+
+    deps["check_cache"] = _cache
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="pergunta",
+        system_prompt="SYS",
+        use_rag=False,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=True,
+    )
+    assert out["model"] == "semantic_cache"
+    assert "cache_lookup" in out["metadata"]["stage_timings_ms"]
+
+
+@pytest.mark.asyncio
 async def test_router_feedback_covers_failure_branches():
     """Feedback helper should tolerate judge, reward, bandit, cache, metric, log, and outer failures."""
     warnings = []
