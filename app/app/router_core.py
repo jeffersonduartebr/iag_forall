@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional, Tuple
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from .adaptive_timeout import get_ema_latency
 from .bandits import _get_ctx_stats, bandit_update, compute_reward, select_model, select_model_async
 from .db import get_engine
 from .embeddings import embed_text
@@ -37,6 +38,7 @@ from .observability import (
     FEEDBACK_TASK_FAILURES,
     ROUTER_ATTEMPTS_PER_QUERY,
     ROUTER_FALLBACK_SKIPPED,
+    ROUTER_HEDGE,
     ROUTER_HISTORY_ENTRIES,
     ROUTER_LOCAL_USAGE_RATIO,
     ROUTER_QUALITY_AVG,
@@ -70,6 +72,7 @@ from .reliability import (  # noqa: F401  (get_request_deduplicator re-export p/
 )
 from .router_strategy import choose_top2_models
 from .semantic_cache import check_cache, store_cache
+from .services.hedged_execution import execute_with_hedge
 from .services.router_execution import route_and_answer_internal_impl
 from .services.router_facade import (
     build_internal_route_coro,
@@ -498,8 +501,12 @@ def _build_route_deps() -> Dict[str, Any]:
         "build_final_prompt": build_final_prompt,
         "_safe_setting_bool": _safe_setting_bool,
         "_safe_setting_int": _safe_setting_int,
+        "_safe_setting_float": _safe_setting_float,
         "call_model": call_model,
         "execute_with_fallback": execute_with_fallback,
+        "execute_with_hedge": execute_with_hedge,
+        "get_ema_latency": get_ema_latency,
+        "ROUTER_HEDGE": ROUTER_HEDGE,
         "ProviderCallError": ProviderCallError,
         "parse_meta_cost": parse_meta_cost,
         "get_model_cost": get_model_cost,

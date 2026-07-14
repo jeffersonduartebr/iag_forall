@@ -779,6 +779,52 @@ async def test_router_execution_covers_execute_provider_and_empty_fallback_error
 
 
 @pytest.mark.asyncio
+async def test_router_execution_uses_hedge_when_enabled():
+    """With hedging enabled and a distinct backup, execution routes through execute_with_hedge (perf #22)."""
+    deps = _deps_for_execution()
+    deps["check_cache"] = lambda *a, **k: None
+    # Two distinct candidates so top2 has a real backup.
+    deps["choose_top2_models"] = lambda candidates, weights, query_text, modality="text", uncertainty_score=0.0, min_quality=0.0: ["openai/gpt-4o", "ollama/phi4:latest"]
+
+    async def _select(models, query, modality):
+        return "openai/gpt-4o"
+
+    deps["select_model_async"] = _select
+    deps["_safe_setting_bool"] = lambda key, default=False: key == "REQUEST_HEDGING_ENABLED"
+    deps["_safe_setting_float"] = lambda key, default=0.0: default
+    deps["get_ema_latency"] = lambda model, modality: 0.01
+    hedge_calls = {}
+
+    async def _hedge(models, execute_fn, hedge_delay_s, max_parallel=2):
+        hedge_calls["models"] = models
+        hedge_calls["delay"] = hedge_delay_s
+        out = await execute_fn(models[0])
+        return SimpleNamespace(success=True, result=out, model_used=models[0], models_tried=[models[0]], errors=[])
+
+    async def _call_model(**kwargs):
+        return "hedged-ok", {"prompt_tokens": 1, "completion_tokens": 1, "cost_per_1k": 0.0}
+
+    deps["execute_with_hedge"] = _hedge
+    deps["call_model"] = _call_model
+    deps["ROUTER_HEDGE"] = _Metric()
+
+    out = await route_and_answer_internal_impl(
+        deps=deps,
+        query="pergunta",
+        system_prompt="SYS",
+        use_rag=False,
+        max_tokens=None,
+        temperature=None,
+        modality="text",
+        image_b64=None,
+        rag_modality="text",
+        use_cache=False,
+    )
+    assert out["answer"] == "hedged-ok"
+    assert hedge_calls["models"] == ["openai/gpt-4o", "ollama/phi4:latest"]
+
+
+@pytest.mark.asyncio
 async def test_router_execution_reports_stage_timings_breakdown():
     """Normal execution should surface a per-request stage-latency breakdown (perf #21)."""
     deps = _deps_for_execution()

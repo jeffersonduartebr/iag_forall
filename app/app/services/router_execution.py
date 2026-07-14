@@ -31,6 +31,33 @@ def _effective_provider_timeout_seconds(runtime_hints: Dict[str, Any] | None) ->
     return max(1.0, min(configured_timeout, budget))
 
 
+def _hedge_delay_seconds(deps: Dict[str, Any], model: str, modality: str, runtime_hints: Dict[str, Any] | None) -> float:
+    """Seconds to wait before launching the hedge (backup) request.
+
+    Fires the backup once the primary exceeds a multiple of its expected (EMA)
+    latency — the tied-request heuristic. A fixed ``REQUEST_HEDGE_DELAY_MS`` wins
+    when set; otherwise the delay is ``EMA * REQUEST_HEDGE_EMA_FACTOR``. Never
+    exceeds the remaining synchronous deadline.
+    """
+    fixed_ms = deps["_safe_setting_int"]("REQUEST_HEDGE_DELAY_MS", 0)
+    if fixed_ms and fixed_ms > 0:
+        base = fixed_ms / 1000.0
+    else:
+        ema = None
+        getter = deps.get("get_ema_latency")
+        if getter is not None:
+            try:
+                ema = getter(model, modality)
+            except Exception:
+                ema = None
+        factor = deps["_safe_setting_float"]("REQUEST_HEDGE_EMA_FACTOR", 1.3)
+        base = (ema if ema and ema > 0 else 8.0) * factor
+    remaining = _deadline_remaining_seconds(runtime_hints)
+    if remaining != float("inf"):
+        base = min(base, max(0.5, remaining - 1.0))
+    return max(0.2, base)
+
+
 def _setting_value(settings: Any, key: str, default: Any) -> Any:
     """Return one setting from either the dynamic settings facade or a simple stub object."""
     getter = getattr(settings, "get", None)
@@ -412,106 +439,24 @@ async def route_and_answer_internal_impl(
         )
 
     use_fallback_chain = deps["_safe_setting_bool"]("REQUEST_FALLBACK_ENABLED", False)
+    # Hedging races the primary against one backup after a short delay (perf #22).
+    # Off by default; skipped for tool/multi-turn turns and when no distinct backup exists.
+    use_hedging = (
+        deps["_safe_setting_bool"]("REQUEST_HEDGING_ENABLED", False)
+        and "execute_with_hedge" in deps
+        and len(top2) >= 2
+        and bool(top2[1])
+        and top2[1] != chosen
+        and not tools_requested
+        and not messages
+    )
     fallback_used = False
     fallback_models_tried = [chosen]
     fallback_errors = []
 
-    if use_fallback_chain:
-        max_fallbacks = int((runtime_hints or {}).get("max_fallbacks", deps["_safe_setting_int"]("REQUEST_MAX_FALLBACKS", 2)))
-        provider_timeout_seconds = _effective_provider_timeout_seconds(runtime_hints)
-        remaining_budget = _deadline_remaining_seconds(runtime_hints)
-        if remaining_budget <= 1.0:
-            raise deps["ProviderCallError"](
-                model=chosen,
-                message="Synchronous deadline exhausted before provider execution",
-                category="provider_timeout",
-                retryable=True,
-            )
-        if remaining_budget != float("inf") and provider_timeout_seconds is not None and remaining_budget <= provider_timeout_seconds + 2.0:
-            max_fallbacks = 0
-            try:
-                deps["ROUTER_FALLBACK_SKIPPED"].labels(reason="insufficient_deadline_budget").inc()
-            except Exception:
-                pass
-
-        async def _execute_provider(model_name: str):
-            return await deps["call_model"](
-                model=model_name,
-                prompt=final_prompt,
-                modality=modality,
-                image_b64=image_b64,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout_seconds=_effective_provider_timeout_seconds(runtime_hints),
-                workload_class=(runtime_hints or {}).get("workload_class"),
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-                response_format=response_format,
-                system_prompt=system_prompt,
-            )
-
-        provider_started_at = time.time()
-        fallback_result = await deps["execute_with_fallback"](
-            primary_model=chosen,
-            execute_fn=_execute_provider,
-            max_fallbacks=max_fallbacks,
-        )
-        _observe_stage("provider_call", provider_started_at)
-        if not fallback_result.success:
-            try:
-                for err in fallback_result.errors:
-                    deps["ROUTER_RETRY_TOTAL"].labels(
-                        model=fallback_result.model_used or chosen,
-                        reason=err.get("category", "provider_error"),
-                    ).inc()
-            except Exception:
-                pass
-            if fallback_result.errors:
-                last = fallback_result.errors[-1]
-                raise deps["ProviderCallError"](
-                    model=fallback_result.model_used,
-                    message=last.get("error", "All fallback models failed"),
-                    category=last.get("category", "provider_unavailable"),
-                    retryable=True,
-                )
-            raise deps["ProviderCallError"](
-                model=chosen,
-                message="All fallback models failed",
-                category="provider_unavailable",
-                retryable=True,
-            )
-
-        out, meta = fallback_result.result
-        chosen = fallback_result.model_used
-        fallback_used = len(fallback_result.models_tried) > 1
-        fallback_models_tried = fallback_result.models_tried
-        fallback_errors = fallback_result.errors
-        try:
-            retry_count = max(0, len(fallback_models_tried) - 1)
-            for err in fallback_errors:
-                deps["ROUTER_RETRY_TOTAL"].labels(
-                    model=chosen,
-                    reason=err.get("category", "provider_error"),
-                ).inc()
-            if fallback_used and len(fallback_models_tried) >= 2:
-                deps["FALLBACK_USED"].labels(
-                    first_model=fallback_models_tried[0],
-                    second_model=fallback_models_tried[1],
-                ).inc()
-        except Exception:
-            retry_count = max(0, len(fallback_models_tried) - 1)
-    else:
-        provider_started_at = time.time()
-        if _deadline_remaining_seconds(runtime_hints) <= 1.0:
-            raise deps["ProviderCallError"](
-                model=chosen,
-                message="Synchronous deadline exhausted before provider execution",
-                category="provider_timeout",
-                retryable=True,
-            )
-        out, meta = await deps["call_model"](
-            model=chosen,
+    async def _execute_provider(model_name: str):
+        return await deps["call_model"](
+            model=model_name,
             prompt=final_prompt,
             modality=modality,
             image_b64=image_b64,
@@ -525,6 +470,98 @@ async def route_and_answer_internal_impl(
             response_format=response_format,
             system_prompt=system_prompt,
         )
+
+    def _deadline_guard() -> None:
+        if _deadline_remaining_seconds(runtime_hints) <= 1.0:
+            raise deps["ProviderCallError"](
+                model=chosen,
+                message="Synchronous deadline exhausted before provider execution",
+                category="provider_timeout",
+                retryable=True,
+            )
+
+    def _finalize_provider_result(fallback_result):
+        """Map a FallbackResult/HedgeResult onto router outputs, raising on failure."""
+        if not fallback_result.success:
+            try:
+                for err in fallback_result.errors:
+                    deps["ROUTER_RETRY_TOTAL"].labels(
+                        model=fallback_result.model_used or chosen,
+                        reason=err.get("category", "provider_error"),
+                    ).inc()
+            except Exception:
+                pass
+            if fallback_result.errors:
+                last = fallback_result.errors[-1]
+                raise deps["ProviderCallError"](
+                    model=fallback_result.model_used,
+                    message=last.get("error", "All provider attempts failed"),
+                    category=last.get("category", "provider_unavailable"),
+                    retryable=True,
+                )
+            raise deps["ProviderCallError"](
+                model=chosen,
+                message="All provider attempts failed",
+                category="provider_unavailable",
+                retryable=True,
+            )
+        r_out, r_meta = fallback_result.result
+        r_chosen = fallback_result.model_used
+        r_tried = fallback_result.models_tried
+        r_used = len(r_tried) > 1
+        r_errors = fallback_result.errors
+        try:
+            for err in r_errors:
+                deps["ROUTER_RETRY_TOTAL"].labels(
+                    model=r_chosen,
+                    reason=err.get("category", "provider_error"),
+                ).inc()
+            if r_used and len(r_tried) >= 2:
+                deps["FALLBACK_USED"].labels(first_model=r_tried[0], second_model=r_tried[1]).inc()
+        except Exception:
+            pass
+        return r_out, r_meta, r_chosen, r_used, r_tried, r_errors, max(0, len(r_tried) - 1)
+
+    if use_hedging:
+        _deadline_guard()
+        primary = chosen
+        provider_started_at = time.time()
+        hedge_result = await deps["execute_with_hedge"](
+            models=[chosen, top2[1]],
+            execute_fn=_execute_provider,
+            hedge_delay_s=_hedge_delay_seconds(deps, chosen, modality, runtime_hints),
+            max_parallel=deps["_safe_setting_int"]("REQUEST_HEDGE_MAX_PARALLEL", 2),
+        )
+        _observe_stage("provider_call", provider_started_at)
+        out, meta, chosen, fallback_used, fallback_models_tried, fallback_errors, retry_count = _finalize_provider_result(hedge_result)
+        try:
+            outcome = "backup_win" if (hedge_result.success and chosen != primary) else ("primary_win" if hedge_result.success else "all_failed")
+            deps["ROUTER_HEDGE"].labels(outcome=outcome).inc()
+        except Exception:
+            pass
+    elif use_fallback_chain:
+        max_fallbacks = int((runtime_hints or {}).get("max_fallbacks", deps["_safe_setting_int"]("REQUEST_MAX_FALLBACKS", 2)))
+        provider_timeout_seconds = _effective_provider_timeout_seconds(runtime_hints)
+        remaining_budget = _deadline_remaining_seconds(runtime_hints)
+        _deadline_guard()
+        if remaining_budget != float("inf") and provider_timeout_seconds is not None and remaining_budget <= provider_timeout_seconds + 2.0:
+            max_fallbacks = 0
+            try:
+                deps["ROUTER_FALLBACK_SKIPPED"].labels(reason="insufficient_deadline_budget").inc()
+            except Exception:
+                pass
+        provider_started_at = time.time()
+        fallback_result = await deps["execute_with_fallback"](
+            primary_model=chosen,
+            execute_fn=_execute_provider,
+            max_fallbacks=max_fallbacks,
+        )
+        _observe_stage("provider_call", provider_started_at)
+        out, meta, chosen, fallback_used, fallback_models_tried, fallback_errors, retry_count = _finalize_provider_result(fallback_result)
+    else:
+        provider_started_at = time.time()
+        _deadline_guard()
+        out, meta = await _execute_provider(chosen)
         _observe_stage("provider_call", provider_started_at)
         retry_count = 0
 

@@ -225,6 +225,12 @@ FALLBACK_USED = Counter(
     ["first_model", "second_model"],
     registry=registry,
 )
+ROUTER_HEDGE = Counter(
+    "router_hedge_total",
+    "Speculative (hedged) provider races by outcome",
+    ["outcome"],
+    registry=registry,
+)
 RESPONSE_ABSTAIN_TOTAL = Counter(
     "router_response_abstain_total",
     "Responses intentionally abstained for safety or low confidence",

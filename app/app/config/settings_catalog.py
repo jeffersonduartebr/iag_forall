@@ -217,6 +217,13 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "ADAPTIVE_TIMEOUT_REASONING_MULTIPLIER": "3.0",
         "MIN_TIMEOUT": "30",
         "MAX_TIMEOUT": "1200",
+        # Speculative (hedged) requests (perf #22): race the primary against one
+        # backup to cut tail latency. Off by default (extra provider cost on the
+        # hedged fraction). Delay is EMA*factor unless a fixed ms is set.
+        "REQUEST_HEDGING_ENABLED": "0",
+        "REQUEST_HEDGE_DELAY_MS": "0",
+        "REQUEST_HEDGE_EMA_FACTOR": "1.3",
+        "REQUEST_HEDGE_MAX_PARALLEL": "2",
         "CIRCUIT_BREAKER_FAIL_MAX": "5",
         "CIRCUIT_BREAKER_RESET_TIMEOUT": "60",
         "CIRCUIT_BREAKER_LOCAL_FAIL_MAX": "3",
