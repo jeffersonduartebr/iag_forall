@@ -9,7 +9,6 @@ current runtime architecture and operational documentation.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import threading
@@ -17,7 +16,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Dict, Optional
 
-from .embeddings import embed_image, embed_multimodal, embed_text
+from .embeddings import aembed_image, aembed_multimodal, aembed_text
 from .observability import (
     L1_CACHE_HITS,
     L1_CACHE_MISSES,
@@ -188,11 +187,11 @@ async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
     """
     try:
         if modality == "text":
-            return await asyncio.to_thread(embed_text, query)
+            return await aembed_text(query)
         if modality == "vision":
-            if not image_b64: return await asyncio.to_thread(embed_text, query)
-            return await asyncio.to_thread(embed_image, image_b64)
-        emb = await asyncio.to_thread(embed_multimodal, query, image_b64)
+            if not image_b64: return await aembed_text(query)
+            return await aembed_image(image_b64)
+        emb = await aembed_multimodal(query, image_b64)
         return emb.get("multimodal") or emb.get("text")
     except Exception as e:
         logger.warning(f"[semantic_cache] Embed fail: {e}")

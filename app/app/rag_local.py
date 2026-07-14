@@ -11,8 +11,8 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .embeddings import (
-    embed_multimodal,
-    embed_text,
+    aembed_multimodal,
+    aembed_text,
 )
 
 # Importamos o call_model para gerar a descrição da imagem (Ponte Visual)
@@ -228,7 +228,7 @@ async def _compute_embedding(query: str, modality: str, image_b64: Optional[str]
     try:
         # RAG Clássico (Texto -> Texto)
         if modality == "text":
-            return await asyncio.to_thread(embed_text, query)
+            return await aembed_text(query)
 
         # RAG Visual (Imagem -> Texto via Ponte Descritiva)
         if modality == "vision" and image_b64:
@@ -243,15 +243,15 @@ async def _compute_embedding(query: str, modality: str, image_b64: Optional[str]
                 query_to_embed = f"{query} {visual_desc}"
 
             # Embedamos o TEXTO resultante para buscar no banco de TEXTO
-            return await asyncio.to_thread(embed_text, query_to_embed)
+            return await aembed_text(query_to_embed)
 
         # Multimodal (Conceito avançado de espaço latente compartilhado)
         # Só funciona se o vectorstore suportar embeddings multimodais nativos
         if modality == "multimodal":
-            emb_dict = await asyncio.to_thread(embed_multimodal, query, image_b64)
+            emb_dict = await aembed_multimodal(query, image_b64)
             return emb_dict.get("multimodal") or emb_dict.get("text")
 
-        return await asyncio.to_thread(embed_text, query)
+        return await aembed_text(query)
 
     except Exception as e:
         logger.warning(f"[rag_local] Falha ao gerar embedding ({modality}): {e}")

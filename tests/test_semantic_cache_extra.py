@@ -35,9 +35,18 @@ class _Metric:
 @pytest.mark.asyncio
 async def test_make_embedding_and_normalize_paths(monkeypatch):
     """Testa make embedding and normalize paths."""
-    monkeypatch.setattr(sc, "embed_text", lambda q: [len(q)])
-    monkeypatch.setattr(sc, "embed_image", lambda b64: [len(b64)])
-    monkeypatch.setattr(sc, "embed_multimodal", lambda q, b: {"multimodal": [9], "text": [8]})
+    async def _atext(q):
+        return [len(q)]
+
+    async def _aimage(b64):
+        return [len(b64)]
+
+    async def _amultimodal(q, b):
+        return {"multimodal": [9], "text": [8]}
+
+    monkeypatch.setattr(sc, "aembed_text", _atext)
+    monkeypatch.setattr(sc, "aembed_image", _aimage)
+    monkeypatch.setattr(sc, "aembed_multimodal", _amultimodal)
 
     assert sc._normalize_modality("image") == "vision"
     assert sc._normalize_modality("multimodal") == "multimodal"
@@ -48,7 +57,10 @@ async def test_make_embedding_and_normalize_paths(monkeypatch):
     assert await sc._make_embedding("q", "vision", None) == [1]
     assert await sc._make_embedding("q", "multimodal", "img") == [9]
 
-    monkeypatch.setattr(sc, "embed_text", lambda q: (_ for _ in ()).throw(RuntimeError("x")))
+    async def _athrow(q):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(sc, "aembed_text", _athrow)
     assert await sc._make_embedding("abc", "text", None) is None
 
 

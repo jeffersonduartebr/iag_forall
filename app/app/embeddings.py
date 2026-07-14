@@ -261,3 +261,33 @@ def embed_multimodal(text: str, image_b64: Optional[str]) -> Dict[str, List[floa
         "vision": [],
         "multimodal": text_vec
     }
+
+
+# ============================================================
+# ASYNC WRAPPERS (dedicated CPU pool — perf #23)
+# ============================================================
+# Route the GIL-bound encode() onto a CPU-isolated thread pool instead of the
+# shared asyncio default executor, so embedding bursts do not starve I/O work
+# (DB reads, Redis) that also rides asyncio.to_thread. Callers on the async
+# hot path (semantic cache, RAG retrieval) should prefer these over
+# asyncio.to_thread(embed_*, ...).
+
+async def aembed_text(text: str) -> List[float]:
+    """Async text embedding executed on the dedicated CPU pool."""
+    from .utils.executors import run_cpu_bound
+
+    return await run_cpu_bound(embed_text, text)
+
+
+async def aembed_image(image_b64: str) -> List[float]:
+    """Async image embedding executed on the dedicated CPU pool."""
+    from .utils.executors import run_cpu_bound
+
+    return await run_cpu_bound(embed_image, image_b64)
+
+
+async def aembed_multimodal(text: str, image_b64: Optional[str]) -> Dict[str, List[float]]:
+    """Async multimodal embedding executed on the dedicated CPU pool."""
+    from .utils.executors import run_cpu_bound
+
+    return await run_cpu_bound(embed_multimodal, text, image_b64)

@@ -62,8 +62,14 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 @pytest.mark.asyncio
 async def test_compute_embedding_and_fusion_paths(monkeypatch):
     """Testa compute embedding and fusion paths."""
-    monkeypatch.setattr(rl, "embed_text", lambda txt: [len(txt)])
-    monkeypatch.setattr(rl, "embed_multimodal", lambda q, img: {"multimodal": [9.0], "text": [8.0]})
+    async def _atext(txt):
+        return [len(txt)]
+
+    async def _amultimodal(q, img):
+        return {"multimodal": [9.0], "text": [8.0]}
+
+    monkeypatch.setattr(rl, "aembed_text", _atext)
+    monkeypatch.setattr(rl, "aembed_multimodal", _amultimodal)
     async def _vq(_img):
         """Execute the vq routine.
 

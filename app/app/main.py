@@ -113,6 +113,7 @@ from .services.query_runtime import (  # noqa: F401  (re-export p/ query_http/te
 )
 from .services.tenant_context import bind_tenant_to_request
 from .settings_dynamic import settings, start_reload_listener, stop_reload_listener, validate_critical_settings
+from .utils.executors import get_cpu_executor, shutdown_cpu_executor
 from .utils.redis_client import close_redis, get_redis
 from .vectorstore import add_document as vs_add_document
 from .vectorstore import init_vectorstore
@@ -434,6 +435,9 @@ async def startup_event():
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=executor_workers)
     asyncio.get_running_loop().set_default_executor(executor)
     logger.info(f"[startup] ThreadPoolExecutor configured with {executor_workers} workers")
+    # Dedicated CPU pool for GIL-bound embedding work, isolated from the I/O
+    # default executor above so embedding bursts do not starve DB/Redis reads (perf #23).
+    get_cpu_executor()
     start_reload_listener()
     start_background_services()
     log_process_file_descriptor_limit("startup")
@@ -539,6 +543,13 @@ async def shutdown_event():
         logger.info("[shutdown] Database connections closed")
     except Exception as e:
         logger.warning(f"[shutdown] Erro ao fechar database: {e}")
+
+    # Tear down the dedicated CPU embedding pool (perf #23)
+    try:
+        shutdown_cpu_executor()
+        logger.info("[shutdown] CPU embedding pool closed")
+    except Exception as e:
+        logger.warning(f"[shutdown] Erro ao fechar CPU pool: {e}")
 
     logger.info("[shutdown] Shutdown completo.")
 
