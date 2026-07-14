@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "run_id": "run-1",
-  "created_at": 1783973266.6956077,
+  "created_at": 1784047553.419435,
   "git": {
-    "commit": "d5583fff3706832c015c280441b83e1c9a905b60",
-    "dirty": true,
-    "branch": "feat/tool-calling"
+    "commit": "d284051b7d2cec9b387201805433e2e1fb4bfc37",
+    "dirty": false,
+    "branch": "main"
   },
   "benchmark": {
     "catalog_dir": "/data/desenvolvimento/iag_forall/data/benchmark_queries",
