@@ -222,6 +222,23 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "CIRCUIT_BREAKER_LOCAL_FAIL_MAX": "3",
         "CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT": "30",
     },
+    "adversarial_governance": {
+        # Closed-loop adversarial governance (roadmap #17). Off by default so
+        # production routing is unaffected until explicitly enabled.
+        "ADVGOV_ENABLED": "0",
+        # Judge score (0..10) below which an adversarial attack counts as a success.
+        "ADVGOV_FAIL_SCORE_THRESHOLD": "7.0",
+        # Minimum duels observed before a knowledge cluster can be flagged high-risk.
+        "ADVGOV_CLUSTER_MIN_SAMPLES": "5",
+        # Attack-success rate at/above which a cluster is considered high-risk.
+        "ADVGOV_CLUSTER_FAILURE_RATE_THRESHOLD": "0.5",
+        # TTL (seconds) for per-cluster risk state in Redis (default 30 days).
+        "ADVGOV_CLUSTER_TTL_S": "2592000",
+        # Whether high-risk clusters / high UQ escalate the chosen model.
+        "ADVGOV_ESCALATION_ENABLED": "1",
+        # Preferred escalation targets (JSON list); first match in candidates wins.
+        "ADVGOV_ESCALATION_MODELS": json.dumps([]),
+    },
     "feedback": {
         "DRIFT_THRESHOLD": "0.15",
         "DRIFT_WINDOW_SIZE": "100",
@@ -253,9 +270,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
 }
 
 SETTINGS_DEFAULTS: Dict[str, str] = {
-    key: value
-    for domain_defaults in SETTINGS_BY_DOMAIN.values()
-    for key, value in domain_defaults.items()
+    key: value for domain_defaults in SETTINGS_BY_DOMAIN.values() for key, value in domain_defaults.items()
 }
 
 REQUIRES_RESTART_KEYS = {

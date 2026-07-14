@@ -8,23 +8,24 @@ Escala: 30 Tópicos x 30 Ataques = 900 Interações.
 """
 
 import asyncio
-import pandas as pd
-import numpy as np
-import os
 import logging
+import os
 import time
+
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
-from tqdm.asyncio import tqdm
 from scipy import stats
-import statsmodels.api as sm
-from statsmodels.formula.api import ols
+from tqdm.asyncio import tqdm
+
+from app.app.benchmark_catalog import append_catalog_entry, list_theme_ids
+from app.app.judges import judge_answer
 
 # Módulos da Aplicação
 from app.app.providers_async import call_model
-from app.app.judges import judge_answer
-from app.app.benchmark_catalog import append_catalog_entry, list_theme_ids
 from app.app.schemas import QueryRequest, WorkloadHints
+from app.app.services.academic_stats import anova_oneway, kruskal_wallis, spearman
+from app.app.services.adversarial_governance import record_adversarial_outcome
 from app.app.services.query_runtime import process_query_request
 
 # ==============================================================================
@@ -72,6 +73,17 @@ async def process_duel(topico, rodada, semaphore):
             score = veredito[0]["score"] if veredito else 0
             detected_complexity = (res_tutor.get("metadata") or {}).get("detected_complexity")
             _persist_generated_attack(topico, estrategia, pergunta, score)
+            # Roadmap #17: feed the auditor verdict back into the online loop
+            # (bandits + error predictor) and the per-cluster risk memory. No-op
+            # unless ADVGOV_ENABLED, so the thesis batch stays reproducible.
+            record_adversarial_outcome(
+                cluster_id=str(topico),
+                model=res_tutor["model"],
+                score=float(score),
+                strategy=estrategia,
+                query=pergunta,
+                latency_s=res_tutor.get("latency_s"),
+            )
             return {
                 "topico": topico,
                 "estrategia": estrategia,
@@ -137,18 +149,21 @@ def perform_statistical_analysis(df):
     # 2. Comparação entre Tópicos (Kruskal-Wallis - Não Paramétrico)
     # H0: O desempenho do Tutor é igual em todos os tópicos
     groups = [group['score'].values for name, group in df.groupby('topico')]
-    h_stat, p_kruskal = stats.kruskal(*groups)
+    kw = kruskal_wallis(*groups)
+    h_stat, p_kruskal = kw["h_stat"], kw["p_value"]
     print(f"Kruskal-Wallis entre Tópicos: H={h_stat:.2f}, p={p_kruskal:.4f}")
 
     # 3. Correlação de Spearman: Incerteza (UQ) vs Score do Auditor
     # Esperamos correlação negativa: quanto mais incerto, menor o score (se o roteador falhar)
-    corr, p_corr = stats.spearmanr(df['uq'], df['score'])
+    sp = spearman(df['uq'].tolist(), df['score'].tolist())
+    corr, p_corr = sp["rho"], sp["p_value"]
     print(f"Correlação UQ vs Score: r={corr:.3f}, p={p_corr:.4f}")
 
-    # 4. ANOVA: Impacto da Estratégia de Ataque no Sucesso do Ataque
-    model = ols('score ~ C(estrategia)', data=df).fit()
-    anova_table = sm.stats.anova_lm(model, typ=2)
-    
+    # 4. ANOVA: Impacto da Estratégia de Ataque no Score do Auditor
+    anova_groups = [group['score'].values for name, group in df.groupby('estrategia')]
+    anova_table = anova_oneway(*anova_groups)
+    print(f"ANOVA por Estratégia: F={anova_table['f_stat']:.2f}, p={anova_table['p_value']:.4f}")
+
     # 5. Sumário por Tópico para Tabela LaTeX
     summary = df.groupby('topico').agg({
         'score': 'mean',
@@ -156,9 +171,9 @@ def perform_statistical_analysis(df):
         'sucesso_ataque': 'mean',
         'latencia': 'mean'
     }).rename(columns={'sucesso_ataque': 'ASR'}).reset_index()
-    
+
     summary.to_csv(f"{OUTPUT_DIR}/statistical_summary.csv", index=False)
-    
+
     return p_kruskal, corr, anova_table
 
 # ==============================================================================
@@ -167,7 +182,7 @@ def perform_statistical_analysis(df):
 
 def generate_plots(df):
     sns.set_theme(style="whitegrid")
-    
+
     # Plot 1: Distribuição de Scores por Área (Boxplot)
     plt.figure(figsize=(14, 8))
     sns.boxplot(data=df, x='score', y='topico', palette='viridis')
@@ -193,16 +208,16 @@ def generate_plots(df):
 
 async def main():
     start_time = time.time()
-    
+
     # Executa Duelos
     df = await run_experiment()
-    
+
     # Executa Estatística
     p_kruskal, corr, anova = perform_statistical_analysis(df)
-    
+
     # Gera Gráficos
     generate_plots(df)
-    
+
     elapsed = time.time() - start_time
     print("\n" + "="*60)
     print(f"✨ EXPERIMENTO COMPLETO CONCLUÍDO EM {elapsed/60:.2f} MIN")

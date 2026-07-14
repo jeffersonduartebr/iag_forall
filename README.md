@@ -165,6 +165,7 @@ Leitura recomendada:
 - `docs/ARCHITECTURE.md`
 - `docs/CONFIGURATION.md`
 - `docs/MODULE_INDEX.md`
+- `docs/PRODUCT_ROADMAP.md` (próximos passos de implementação, itens #13+)
 
 ### Para público leigo em IA
 Objetivo: entender a IA como apoio e a revisão humana.

@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 from app.model_registry import filter_configured_model_names, filter_tool_capable_model_names
 from app.native_tools import filter_native_tool_capable_model_names, split_tools
+from app.services.adversarial_governance import advgov_escalate
 
 
 def _deadline_remaining_seconds(runtime_hints: Dict[str, Any] | None) -> float:
@@ -308,12 +309,14 @@ async def route_and_answer_internal_impl(
             chosen = await select_async(top2, query, modality)
         else:
             chosen = await deps["asyncio"].to_thread(deps["select_model"], top2, query, modality)
+        # Adversarial governance (roadmap #17): a high-risk knowledge cluster or
+        # high epistemic uncertainty may escalate to a stronger candidate. No-op
+        # unless ADVGOV_ENABLED; self-gated inside the helper.
+        chosen, top2 = advgov_escalate(deps, chosen, top2, valid_models, uncertainty_score, runtime_hints)
     else:
         top2 = [chosen]
 
-    deps["logger"].info(
-        f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | exploration={exploration_mode}"
-    )
+    deps["logger"].info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | exploration={exploration_mode}")
 
     if chosen.startswith("ollama/") and not deps["is_ollama_model_verified"](chosen.replace("ollama/", "")):
         deps["asyncio"].create_task(
