@@ -40,6 +40,31 @@ def test_get_db_url_with_config():
     assert url == "mysql+pymysql://u:p@h:3306/d"
 
 
+def test_get_pool_config_env_override(monkeypatch):
+    """Pool sizing honors env overrides (perf #25)."""
+    monkeypatch.setenv("DB_POOL_SIZE", "42")
+    monkeypatch.setenv("DB_MAX_OVERFLOW", "7")
+    cfg = db._get_pool_config()
+    assert cfg["pool_size"] == 42
+    assert cfg["max_overflow"] == 7
+
+
+def test_get_pool_config_invalid_env_falls_back(monkeypatch):
+    """Non-numeric / non-positive overrides fall back to the tuned defaults."""
+    monkeypatch.setenv("DB_POOL_SIZE", "not-a-number")
+    monkeypatch.setenv("DB_MAX_OVERFLOW", "0")
+    cfg = db._get_pool_config()
+    assert cfg["pool_size"] == 10
+    assert cfg["max_overflow"] == 5
+
+
+def test_db_manager_reuses_shared_engine():
+    """db_manager delegates to the single db.get_engine() pool, not a second engine (perf #25)."""
+    from app import db_manager
+
+    assert db_manager.engine is db.engine
+
+
 def test_engine_singleton_close_and_lazy(monkeypatch):
     """Testa engine singleton close and lazy."""
     db._engine = None

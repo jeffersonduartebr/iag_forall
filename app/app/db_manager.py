@@ -16,8 +16,12 @@ import logging
 import os
 from typing import Any, Dict
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+
+# Reusa o engine singleton de db.py em vez de abrir um segundo pool de conexões,
+# evitando fragmentar o orçamento de conexões do MariaDB (perf #25).
+from app.db import engine
 
 # Configuração de Logging
 logging.basicConfig(
@@ -42,11 +46,10 @@ DB_USER = settings.DB_USER
 DB_PASS = settings.DB_PASS
 DB_NAME = settings.DB_NAME
 
-# URL de conexão SQLAlchemy
+# URL de conexão SQLAlchemy (mantida para diagnóstico/logs)
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 logger.info(f"[db_manager] Conectando em {DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}...")
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 
 
 # ---------------------------------------------------------------------

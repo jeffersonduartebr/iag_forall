@@ -66,6 +66,28 @@ _engine: Optional[Engine] = None
 _engine_initialized: bool = False
 
 
+def _get_pool_config() -> dict:
+    """Resolve connection-pool sizing from env, defaulting to the tuned baseline.
+
+    Exposing these as env knobs lets operators right-size the pool to the worker
+    count and MariaDB ``max_connections`` without a code change (perf #25).
+    """
+
+    def _int(name: str, default: int) -> int:
+        try:
+            value = int(os.getenv(name, str(default)))
+            return value if value > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "pool_size": _int("DB_POOL_SIZE", 10),
+        "max_overflow": _int("DB_MAX_OVERFLOW", 5),
+        "pool_recycle": _int("DB_POOL_RECYCLE", 300),
+        "pool_timeout": _int("DB_POOL_TIMEOUT", 60),
+    }
+
+
 def get_engine() -> Engine:
     """
     Get the singleton database engine instance.
@@ -92,16 +114,14 @@ def get_engine() -> Engine:
 
     try:
         db_url = get_db_url()
+        pool_cfg = _get_pool_config()
 
         _engine = create_engine(
             db_url,
             poolclass=QueuePool,
             pool_pre_ping=True,
-            pool_recycle=300,  # 5 minutes - prevents stale connections in cloud environments
-            pool_size=10,      # Per-process baseline (2 workers x 15 = 30 max connections)
-            max_overflow=5,    # Supports burst without overcommitting mariadb max_connections
-            pool_timeout=60,   # Wait up to 60s for a connection
             echo=False,        # Set to True for SQL debugging
+            **pool_cfg,
         )
 
         # Test the connection
@@ -109,8 +129,9 @@ def get_engine() -> Engine:
             conn.execute(text("SELECT 1"))
 
         logger.info(
-            f"[db] Engine created: pool_size=10, max_overflow=5, "
-            f"pool_recycle=300s, host={_get_db_config()['host']}"
+            f"[db] Engine created: pool_size={pool_cfg['pool_size']}, "
+            f"max_overflow={pool_cfg['max_overflow']}, "
+            f"pool_recycle={pool_cfg['pool_recycle']}s, host={_get_db_config()['host']}"
         )
 
         return _engine
