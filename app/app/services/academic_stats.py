@@ -117,6 +117,60 @@ def cohens_kappa(rater_a: Sequence[int], rater_b: Sequence[int]) -> Dict[str, An
     return {"kappa": float(kappa), "n": n, "observed_agreement": po, "expected_agreement": pe, "method": "cohen_kappa"}
 
 
+def spearman(a: Sequence[float], b: Sequence[float]) -> Dict[str, Any]:
+    """Spearman rank correlation between two paired samples (scipy fallback).
+
+    Single source of truth for rank correlation; ``uq_calibration`` delegates here.
+    """
+    x = list(a)
+    y = list(b)
+    if len(x) != len(y) or len(x) < 3:
+        return {"rho": None, "p_value": None, "n": len(x), "method": "insufficient_samples"}
+    if scipy_stats is None:
+        return {"rho": None, "p_value": None, "n": len(x), "method": "scipy_unavailable"}
+    try:
+        rho, p = scipy_stats.spearmanr(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+        return {"rho": float(rho), "p_value": float(p), "n": len(x), "method": "spearman"}
+    except Exception:
+        return {"rho": None, "p_value": None, "n": len(x), "method": "spearman_failed"}
+
+
+def kruskal_wallis(*groups: Sequence[float]) -> Dict[str, Any]:
+    """Kruskal-Wallis H-test across 2+ independent groups (non-parametric).
+
+    Tests H0: all groups share the same distribution. scipy fallback returns
+    ``method="scipy_unavailable"`` with null statistics.
+    """
+    clean = [list(g) for g in groups if len(list(g)) > 0]
+    if len(clean) < 2:
+        return {"h_stat": None, "p_value": None, "n_groups": len(clean), "method": "insufficient_groups"}
+    if scipy_stats is None:
+        return {"h_stat": None, "p_value": None, "n_groups": len(clean), "method": "scipy_unavailable"}
+    try:
+        h, p = scipy_stats.kruskal(*[np.asarray(g, dtype=float) for g in clean])
+        return {"h_stat": float(h), "p_value": float(p), "n_groups": len(clean), "method": "kruskal_wallis"}
+    except Exception:
+        return {"h_stat": None, "p_value": None, "n_groups": len(clean), "method": "kruskal_failed"}
+
+
+def anova_oneway(*groups: Sequence[float]) -> Dict[str, Any]:
+    """One-way ANOVA across 2+ groups (parametric mean comparison).
+
+    Equivalent to the single-factor ``statsmodels`` ANOVA used previously, without
+    the heavy dependency. scipy fallback returns null statistics.
+    """
+    clean = [list(g) for g in groups if len(list(g)) > 0]
+    if len(clean) < 2:
+        return {"f_stat": None, "p_value": None, "n_groups": len(clean), "method": "insufficient_groups"}
+    if scipy_stats is None:
+        return {"f_stat": None, "p_value": None, "n_groups": len(clean), "method": "scipy_unavailable"}
+    try:
+        f, p = scipy_stats.f_oneway(*[np.asarray(g, dtype=float) for g in clean])
+        return {"f_stat": float(f), "p_value": float(p), "n_groups": len(clean), "method": "anova_oneway"}
+    except Exception:
+        return {"f_stat": None, "p_value": None, "n_groups": len(clean), "method": "anova_failed"}
+
+
 def build_model_comparison_report(
     by_model: Dict[str, Dict[str, List[float]]],
     *,

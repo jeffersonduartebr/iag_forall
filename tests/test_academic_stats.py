@@ -2,11 +2,14 @@
 """Tests for Holm-Bonferroni, Cohen's d, bootstrap CI, and kappa."""
 
 from app.services.academic_stats import (
+    anova_oneway,
     bootstrap_mean_ci,
     build_model_comparison_report,
     cohens_d,
     cohens_kappa,
     holm_bonferroni,
+    kruskal_wallis,
+    spearman,
 )
 
 
@@ -42,3 +45,39 @@ def test_build_model_comparison_report():
     assert report["models"][0]["model"] == "router"
     assert len(report["comparisons"]) == 1
     assert report["comparisons"][0]["cohens_d"] is not None
+
+
+def test_spearman_monotonic_positive():
+    out = spearman([1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0])
+    assert out["method"] == "spearman"
+    assert out["rho"] == 1.0
+
+
+def test_spearman_insufficient_samples():
+    out = spearman([1.0, 2.0], [3.0, 4.0])
+    assert out["method"] == "insufficient_samples"
+    assert out["rho"] is None
+
+
+def test_kruskal_wallis_separates_groups():
+    out = kruskal_wallis([1.0, 2.0, 3.0], [10.0, 11.0, 12.0], [20.0, 21.0, 22.0])
+    assert out["method"] == "kruskal_wallis"
+    assert out["n_groups"] == 3
+    assert out["p_value"] < 0.05
+
+
+def test_kruskal_wallis_needs_two_groups():
+    out = kruskal_wallis([1.0, 2.0, 3.0])
+    assert out["method"] == "insufficient_groups"
+
+
+def test_anova_oneway_detects_mean_difference():
+    out = anova_oneway([1.0, 1.1, 0.9], [5.0, 5.1, 4.9], [9.0, 9.1, 8.9])
+    assert out["method"] == "anova_oneway"
+    assert out["n_groups"] == 3
+    assert out["p_value"] < 0.05
+
+
+def test_anova_oneway_needs_two_groups():
+    out = anova_oneway([1.0, 2.0])
+    assert out["method"] == "insufficient_groups"

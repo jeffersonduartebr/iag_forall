@@ -20,7 +20,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 from sqlalchemy import text
 
 from .db import get_engine
@@ -31,11 +30,6 @@ logger = logging.getLogger(__name__)
 _HOTPATH_POLICY_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_POLICY_CACHE_TTL_S", "30")))
 _HOTPATH_TENANT_BUDGET_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_TENANT_BUDGET_CACHE_TTL_S", "60")))
 _HOTPATH_TENANT_USAGE_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_TENANT_USAGE_CACHE_TTL_S", "5")))
-
-try:
-    from scipy import stats as scipy_stats
-except Exception:  # pragma: no cover
-    scipy_stats = None
 
 
 DDL_STATEMENTS = [
@@ -850,21 +844,6 @@ def check_access(
         source = "jwt" if jwt_roles else "rbac"
         return AccessDecision(True, source, roles)
     return AccessDecision(False, "missing_required_role", roles)
-
-
-def _welch_ttest(a: List[float], b: List[float]) -> Dict[str, Any]:
-    """Compute Welch's t-test with scipy fallback."""
-    if len(a) < 2 or len(b) < 2:
-        return {"p_value": None, "method": "insufficient_samples"}
-
-    if scipy_stats is None:
-        return {"p_value": None, "method": "scipy_unavailable"}
-
-    try:
-        _t, p = scipy_stats.ttest_ind(np.array(a, dtype=float), np.array(b, dtype=float), equal_var=False)
-        return {"p_value": float(p), "method": "welch_ttest"}
-    except Exception:
-        return {"p_value": None, "method": "ttest_failed"}
 
 
 def eval_significance_report(run_id: str) -> Dict[str, Any]:

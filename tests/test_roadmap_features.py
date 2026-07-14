@@ -90,7 +90,6 @@ def test_budget_usage_policy_rbac_and_significance(monkeypatch):
         ),
     )
     monkeypatch.setattr(rf.time, "strftime", lambda fmt: "2026-03-12" if fmt == "%Y-%m-%d" else "2026-03")
-    monkeypatch.setattr(rf, "scipy_stats", SimpleNamespace(ttest_ind=lambda a, b, equal_var=False: (0.0, 0.04)))
     monkeypatch.setattr(rf, "_usage_snapshot", lambda tenant_id: {"daily": 1.0, "monthly": 3.0})
     monkeypatch.setattr(rf, "get_roles_for_user", lambda user_id, tenant_id=None: ["role1", "role2"])
     monkeypatch.setattr(

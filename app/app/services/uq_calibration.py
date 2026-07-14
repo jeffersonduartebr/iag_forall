@@ -7,11 +7,6 @@ from typing import Any, Dict, List, Sequence
 
 import numpy as np
 
-try:
-    from scipy import stats as scipy_stats
-except Exception:  # pragma: no cover
-    scipy_stats = None
-
 
 def expected_calibration_error(
     confidences: Sequence[float],
@@ -60,13 +55,13 @@ def spearman_confidence_quality(
     confidences: Sequence[float],
     qualities: Sequence[float],
 ) -> Dict[str, Any]:
-    """Spearman correlation between confidence and judge quality."""
-    if len(confidences) != len(qualities) or len(confidences) < 3:
-        return {"rho": None, "p_value": None, "n": len(confidences), "method": "insufficient_samples"}
-    if scipy_stats is None:
-        return {"rho": None, "p_value": None, "n": len(confidences), "method": "scipy_unavailable"}
-    rho, p = scipy_stats.spearmanr(confidences, qualities)
-    return {"rho": float(rho), "p_value": float(p), "n": len(confidences), "method": "spearman"}
+    """Spearman correlation between confidence and judge quality.
+
+    Thin wrapper over :func:`academic_stats.spearman` (single source of truth).
+    """
+    from .academic_stats import spearman
+
+    return spearman(confidences, qualities)
 
 
 def build_uq_calibration_report(rows: List[Dict[str, Any]], *, quality_threshold: float = 6.0) -> Dict[str, Any]:
