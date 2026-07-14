@@ -13,6 +13,7 @@ ignore = ["E501", "E701", "E731"]
 [tool.ruff.lint.per-file-ignores]
 # Propriedades de settings usam UPPER_CASE para espelhar as chaves de ambiente.
 "app/app/settings_dynamic.py" = ["N802", "N803"]
+"app/app/config/settings_properties.py" = ["N802", "N803"]
 "app/app/db_manager.py" = ["N802", "N806"]
 # Notação matemática (NSGA/bandits): nomes de variáveis/args em maiúsculas.
 "app/app/nsga_meta_optimizer.py" = ["N802", "N803", "N806", "E402"]
