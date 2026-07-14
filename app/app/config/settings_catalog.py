@@ -154,6 +154,9 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "CACHE_THRESHOLD_MAX": "0.98",
         "CACHE_HIT_RATE_TARGET": "0.20",
         "CACHE_THRESHOLD_ADAPT_ENABLED": "0",
+        # Canonicalize queries (casefold + whitespace collapse) before hashing/
+        # embedding so trivial surface variants share a cache entry (perf #24).
+        "SEMANTIC_CACHE_NORMALIZE_ENABLED": "1",
         "UNCERTAINTY_THRESHOLD": "0.7",
         "RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1",
         "RAG_LIGHT_TOP_K": "2",

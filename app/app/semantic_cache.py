@@ -45,6 +45,19 @@ def _compute_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _normalize_query(query: str) -> str:
+    """Canonicalize a query so trivial surface variants share a cache entry (perf #24).
+
+    Casefolds and collapses runs of whitespace so "What is  2+2?" and
+    "what is 2+2?" resolve to the same L1 key and the same L2 lookup embedding,
+    lifting the cache hit rate. Gated by ``SEMANTIC_CACHE_NORMALIZE_ENABLED``
+    (on by default); returns the input unchanged when disabled.
+    """
+    if str(settings.get("SEMANTIC_CACHE_NORMALIZE_ENABLED", "1")) not in ("1", "true", "True"):
+        return query
+    return " ".join((query or "").split()).casefold()
+
+
 def _normalize_modality(mod: str) -> str:
     """Normalize cache modality names to the set recognized by the runtime.
 
@@ -218,9 +231,10 @@ async def check_cache(
     lookup_started_at = time.time()
 
     # 1. L1 Cache (Exact Match em RAM)
+    norm_query = _normalize_query(query)
     tenant_ns = (tenant_id or "global").strip()
     img_hash = hashlib.sha256(image_b64.encode()).hexdigest() if image_b64 else "no_img"
-    full_hash = f"{tenant_ns}:{modality}:{_compute_sha256(query)}:{img_hash}"
+    full_hash = f"{tenant_ns}:{modality}:{_compute_sha256(norm_query)}:{img_hash}"
 
     if cached := _l1_cache.get(full_hash):
         logger.info("[semantic_cache] L1 RAM Hit")
@@ -238,8 +252,8 @@ async def check_cache(
     except Exception:
         pass
 
-    # 2. Gera Embedding
-    q_emb = await _make_embedding(query, modality, image_b64)
+    # 2. Gera Embedding (na forma normalizada, simétrica ao store)
+    q_emb = await _make_embedding(norm_query, modality, image_b64)
     if q_emb is None:
         try:
             SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="error").inc()
@@ -336,9 +350,12 @@ async def store_cache(
     Armazena uma resposta de alta qualidade no ChromaDB e L1 cache.
     """
     modality = _normalize_modality(modality)
+    # Normaliza simetricamente ao check_cache: chave L1, doc_id e o texto indexado
+    # (cujo embedding é o alvo do match semântico) usam a forma canônica.
+    norm_query = _normalize_query(query)
 
     # ID único para o documento de cache
-    doc_id = f"cache_{_compute_sha256(query)}_{int(time.time())}"
+    doc_id = f"cache_{_compute_sha256(norm_query)}_{int(time.time())}"
 
     tenant_ns = (tenant_id or "global").strip()
 
@@ -353,7 +370,7 @@ async def store_cache(
     }
 
     img_hash = hashlib.sha256(image_b64.encode()).hexdigest() if image_b64 else "no_img"
-    full_hash = f"{tenant_ns}:{modality}:{_compute_sha256(query)}:{img_hash}"
+    full_hash = f"{tenant_ns}:{modality}:{_compute_sha256(norm_query)}:{img_hash}"
     l1_entry = {
         "text": answer,
         "similarity": 1.0,  # Exact match
@@ -374,7 +391,7 @@ async def store_cache(
         await add_document(
             modality="cache",  # Vai para semantic_cache_v2
             doc_id=doc_id,
-            text=query,  # O texto indexado é a pergunta
+            text=norm_query,  # Texto indexado normalizado (embedding simétrico ao lookup)
             metadata=meta
         )
 

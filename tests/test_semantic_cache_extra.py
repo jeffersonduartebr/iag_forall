@@ -32,6 +32,33 @@ class _Metric:
         self.values.append(("observe", value))
 
 
+def test_normalize_query_casefolds_and_collapses_whitespace():
+    """Enabled normalization canonicalizes case and whitespace (perf #24)."""
+    assert sc._normalize_query("What is  2+2?") == sc._normalize_query("what is 2+2?")
+    assert sc._normalize_query("  Hello   WORLD  ") == "hello world"
+
+
+def test_normalize_query_disabled_is_identity(monkeypatch):
+    """With the flag off, the query is returned unchanged."""
+    monkeypatch.setattr(sc.settings, "get", lambda key, default=None: "0")
+    assert sc._normalize_query("What is  2+2?") == "What is  2+2?"
+
+
+@pytest.mark.asyncio
+async def test_query_normalization_yields_l1_hit_on_surface_variant(monkeypatch):
+    """A stored answer is served from L1 for a case/whitespace variant (perf #24)."""
+    async def _noop_add(**kwargs):
+        return None
+
+    monkeypatch.setattr(sc, "add_document", _noop_add)
+    sc._l1_cache._cache.clear()
+
+    await sc.store_cache("What is  the Capital of France?", "Paris", modality="text")
+    hit = await sc.check_cache("what is the capital of france?", modality="text")
+    assert hit is not None
+    assert hit["text"] == "Paris"
+
+
 @pytest.mark.asyncio
 async def test_make_embedding_and_normalize_paths(monkeypatch):
     """Testa make embedding and normalize paths."""
