@@ -29,11 +29,15 @@ estoura o teto (formatar só *divide* one-liners compostos, nunca funde).
 
 | Arquivo | SLOC | Estratégia de divisão sugerida |
 |---|---:|---|
-| `app/app/providers_async.py` | 1168 | Pacote `providers/`: `base` (BaseProvider, LLMResponse, factory), `openai`, `anthropic`, `gemini`, `ollama`, `http` (client/retry/circuit breaker/timeout). Reexportar `call_model`, `ProviderFactory`, `LLMResponse` de `providers_async` para não quebrar imports. |
-| `app/app/settings_dynamic.py` | 708 | Extrair grupos de properties (providers, routing, cache/RAG, resiliência) em mixins/módulos por domínio. |
 | `app/app/openrouter_explorer.py` | 606 | Separar seleção/pool, promoção automática, e persistência (stats Redis/DB). |
 | `app/app/bandits.py` | 577 | Separar algoritmos (epsilon-greedy/UCB1/Thompson) da meta-política e do estado/persistência. |
-| `app/app/nsga_weights_updater.py` | 561 | Separar setup DEAP/otimização do tuning de UQ e do tuning de estratégia. |
+
+### ✅ Concluídos (roadmap #19)
+- `nsga_weights_updater.py` 561→370 → `services/nsga_tuning.py` + `services/nsga_metrics.py`.
+- `settings_dynamic.py` 708→332 → `config/settings_properties.py` (mixin) + `config/settings_env.py`.
+- `providers_async.py` 1168→170 → pacote `providers/{_infra,_ollama,_implementations}.py`;
+  facade com `__getattr__` (PEP 562) reexporta tudo. Símbolos test-patchados roteados
+  via `_pa.` para preservar os `monkeypatch(pa, ...)` sem alterar testes.
 
 > Saíram do baseline com a métrica lógica (agora ≤500): `observability.py`,
 > `roadmap_features.py`, `judges.py`, `services/query_runtime.py`,
