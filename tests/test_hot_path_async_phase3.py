@@ -48,6 +48,7 @@ async def test_settings_get_async_uses_async_redis(monkeypatch):
 
     monkeypatch.setattr(sd, "_get_from_redis_async", _redis_get)
     monkeypatch.setattr(sd, "_get_from_db", lambda key: None)
+    monkeypatch.setattr(sd, "_prime_cache", lambda: False)  # exercita o caminho por chave
     sd._lru.clear()
     value = await sd.settings.get_async("NSGA_W_QUALITY", "1.0")
     assert value == "42"

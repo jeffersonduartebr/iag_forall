@@ -63,9 +63,10 @@ def mock_dependencies(monkeypatch):
     Mocka automaticamente conexões externas para TODOS os testes.
     """
     try:
-        from app.settings_dynamic import _lru
+        import app.settings_dynamic as settings_dynamic_module
 
-        _lru.clear()
+        settings_dynamic_module._lru.clear()
+        settings_dynamic_module._last_prime = 0.0
     except Exception:
         pass
     try:

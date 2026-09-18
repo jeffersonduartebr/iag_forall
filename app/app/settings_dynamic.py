@@ -21,6 +21,7 @@ runtime can treat settings as a normal attribute-based configuration source.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -187,7 +188,9 @@ _lru = LRUCache(maxsize=SETTINGS_CACHE_SIZE, ttl_s=SETTINGS_CACHE_TTL_S)
 
 def _invalidate_cache():
     """Clear the local settings cache after a runtime configuration change."""
+    global _last_prime
     _lru.clear()
+    _last_prime = 0.0  # a próxima leitura recarrega tudo em lote
     logger.info("[settings_dynamic] Cache LRU invalidado.")
 
 
@@ -236,6 +239,70 @@ def _get_from_db(key: str) -> Optional[str]:
     return None
 
 
+# ============================================================
+# Recarga em lote (1 SELECT + 1 MGET em vez de GET+SELECT por chave)
+# ============================================================
+_PRIME_MIN_INTERVAL_S = float(os.getenv("SETTINGS_PRIME_MIN_INTERVAL_S", "5"))
+_prime_lock = threading.Lock()
+_last_prime = 0.0
+
+
+def _all_from_db() -> Optional[Dict[str, str]]:
+    """Every persisted setting in one query (``None`` when the DB is unavailable)."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT setting_key, setting_value FROM settings_dynamic")).fetchall()
+        return {str(row[0]): row[1] for row in rows}
+    except Exception:
+        return None
+
+
+def _many_from_redis(keys: List[str]) -> Optional[Dict[str, str]]:
+    """Redis overrides for ``keys`` in one MGET (``None`` when Redis is unavailable)."""
+    rds = _get_rds()
+    if not rds:
+        return None
+    try:
+        values = rds.mget([f"{REDIS_PREFIX}{key}" for key in keys])
+        return {key: decode_redis_value(raw) for key, raw in zip(keys, values) if raw is not None}
+    except Exception:
+        return None
+
+
+def _prime_cache() -> bool:
+    """Resolve every catalogued/persisted setting into the LRU with one DB query and one MGET.
+
+    Same precedence as the per-key path (``resolve_setting_value`` over the
+    preloaded dicts). Rate-limited and non-blocking: concurrent callers skip it
+    and fall back to the per-key path. Returns whether it ran.
+    """
+    global _last_prime
+    now = time.monotonic()
+    if now - _last_prime < _PRIME_MIN_INTERVAL_S or not _prime_lock.acquire(blocking=False):
+        return False
+    try:
+        _last_prime = now
+        db_values = _all_from_db()
+        keys = sorted(set(SETTINGS_DEFAULTS) | set(db_values or {}))
+        redis_values = _many_from_redis(keys)
+        if db_values is None and redis_values is None:
+            return False
+        for key in keys:
+            resolve_setting_value(
+                key=key,
+                fallback=None,
+                defaults=SETTINGS_DEFAULTS,
+                cache_get=lambda _key: None,
+                cache_set=_lru.set,
+                redis_get=(redis_values or {}).get,
+                db_get=(db_values or {}).get,
+                env_get=os.getenv,
+            )
+        return True
+    finally:
+        _prime_lock.release()
+
+
 def _set_to_redis(key: str, val: str):
     """Write one resolved setting value to Redis as a best-effort cache/update."""
     rds = _get_rds()
@@ -270,6 +337,8 @@ class DynamicSettings(TypedSettingsMixin):
 
     def get(self, key: str, fallback: Any = None) -> Any:
         """Resolve one setting through cache, Redis, DB, environment, and defaults."""
+        if _lru.get(key) is None:
+            _prime_cache()
         return resolve_setting_value(
             key=key,
             fallback=fallback,
@@ -283,6 +352,8 @@ class DynamicSettings(TypedSettingsMixin):
 
     async def get_async(self, key: str, fallback: Any = None) -> Any:
         """Resolve one setting without blocking the event loop on Redis I/O."""
+        if _lru.get(key) is None:
+            await asyncio.to_thread(_prime_cache)
         return await resolve_setting_value_async(
             key=key,
             fallback=fallback,
