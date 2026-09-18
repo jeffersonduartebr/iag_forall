@@ -9,18 +9,20 @@ semântica em relação aos clusters de conhecimento prévio (centróides)
 armazenados pelo sistema Bandit.
 """
 
-import json
 import logging
-from typing import Dict, List
 
 import numpy as np
+
 from app.embeddings import embed_text
+from app.services.bandit_centroids import load_centroid_matrix, normalize_centroid_vec
 from app.utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
 # Chave Redis onde o bandits.py armazena os vetores de queries bem-sucedidas
 R_CENTROIDS_KEY = "meta:bandit:centroids"
+# Hash de metadados (revisão) que o bandits.py atualiza a cada gravação dos centróides
+R_CENTROIDS_META_KEY = "meta:bandit:centroids:meta"
 
 def _cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     """Calcula similaridade de cosseno entre dois vetores numpy."""
@@ -34,6 +36,12 @@ def get_uncertainty_score(query_text: str, modality: str = "text") -> float:
     """
     Calcula o score de incerteza para uma query.
     Retorna: 0.0 (Máxima Confiança/Certeza) a 1.0 (Máxima Incerteza).
+
+    u(q) = 1 - max_j cos(v_q, c_j) sobre os centróides do bandit. A matriz de
+    centróides (normalizada, float32) vem de ``load_centroid_matrix``, que só
+    relê o JSON do Redis quando a revisão dos centróides muda; a similaridade
+    é um único produto matriz-vetor. Função síncrona: o roteador a executa em
+    thread (``asyncio.to_thread``) para não bloquear o event loop.
     """
     # Incerteza só faz sentido para texto ou multimodal com texto rico.
     # Se for só imagem ou texto muito curto, a comparação semântica é frágil.
@@ -47,52 +55,23 @@ def get_uncertainty_score(query_text: str, modality: str = "text") -> float:
         return 1.0
 
     try:
-        # 1. Carrega Centróides de Conhecimento do Redis
-        raw_data = rds.get(R_CENTROIDS_KEY)
-        if not raw_data:
-            # Cold Start: Se não há histórico, tudo é incerto.
-            # logger.debug("[UQ] Cold start (sem centróides). Incerteza = 1.0")
+        # 1. Centróides de conhecimento (cold start: sem histórico, tudo é incerto)
+        centroids = load_centroid_matrix(rds, R_CENTROIDS_KEY, R_CENTROIDS_META_KEY)
+        if centroids is None:
             return 1.0
 
-        centroids_data: List[Dict] = json.loads(raw_data)
-        if not centroids_data:
-             return 1.0
-
-        # 2. Gera Embedding da Query Atual
-        # Nota: Embeddings são cacheados internamente pelo lru_cache no embeddings.py,
-        # então chamar aqui não deve gerar recomputação excessiva se o router já chamou.
+        # 2. Embedding da query (cache L1/L2 em embeddings.py; o cache semântico já o calculou)
         query_vec_list = embed_text(query_text)
         if not query_vec_list or all(v == 0 for v in query_vec_list):
-             logger.warning("[UQ] Falha no embedding da query. Incerteza = 1.0")
-             return 1.0
+            logger.warning("[UQ] Falha no embedding da query. Incerteza = 1.0")
+            return 1.0
+        q_np = normalize_centroid_vec(np.asarray(query_vec_list, dtype=np.float32), centroids.matrix.shape[1])
 
-        q_np = np.array(query_vec_list, dtype=np.float32)
-
-        # 3. Encontra a maior similaridade com o conhecimento existente
-        max_similarity = -1.0
-
-        for centroid in centroids_data:
-            # Formato esperado do centróide: {"vec": [floats], "text": "..."}
-            c_vec_list = centroid.get("vec")
-            if not c_vec_list: continue
-
-            c_np = np.array(c_vec_list, dtype=np.float32)
-            sim = _cosine_similarity(q_np, c_np)
-
-            if sim > max_similarity:
-                max_similarity = sim
-
-        # Clampa a similaridade entre 0 e 1 por segurança matemática
-        max_similarity = max(0.0, min(1.0, max_similarity))
+        # 3. Maior similaridade de cosseno (linhas e query unitárias), limitada a [0, 1]
+        max_similarity = max(0.0, min(1.0, float(np.max(centroids.matrix @ q_np))))
 
         # 4. A Incerteza é o inverso da Similaridade (Familiaridade)
-        # Se similaridade é alta (1.0), incerteza é baixa (0.0).
-        uncertainty = 1.0 - max_similarity
-
-        # Logging para análise (pode ser ruidoso em produção)
-        # logger.debug(f"[UQ] Query: '{query_text[:20]}...' | MaxSim: {max_similarity:.3f} | UQ: {uncertainty:.3f}")
-
-        return uncertainty
+        return 1.0 - max_similarity
 
     except Exception as e:
         logger.error(f"[UQ] Erro crítico no cálculo de incerteza: {e}", exc_info=True)

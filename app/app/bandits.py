@@ -36,6 +36,7 @@ from app.observability import (
 )
 from app.services import bandit_policy
 from app.services.bandit_centroids import (
+    load_centroid_matrix,
     nearest_centroid_from_array,
     normalize_centroid_vec,
 )
@@ -321,6 +322,8 @@ def _save_centroids(cents: List[dict]) -> None:
                 "count": str(len(serial)),
             },
         )
+        # Revisão monotônica: leitores (incerteza, rótulo de contexto) só reprocessam o JSON quando muda.
+        pipe.hincrby(R_CENTROIDS_META, "rev", 1)
         pipe.execute()
 
         # Update the pre-computed matrix cache
@@ -420,23 +423,21 @@ def _nearest_centroid_label(query_text: str) -> Optional[str]:
     Unlike ``centroids_online_update()``, this helper never mutates centroid
     state. It exists for logging, inspection, and other non-learning paths.
     """
+    rds = _get_rds()
+    if not rds:
+        return None
     try:
+        centroids = load_centroid_matrix(rds, R_CENTROIDS, R_CENTROIDS_META, CENTROIDS_DIM)
+        if centroids is None:
+            return None
         v = embed_text(query_text)
         if not isinstance(v, np.ndarray):
             v = np.array(v, dtype=np.float32)
         v = _ensure_dim(v)
+        idx = int(np.argmax(centroids.matrix @ v))
     except Exception:
         return None
-
-    cents = _load_centroids()
-    if not cents:
-        return None
-
-    idx, sim = _nearest_centroid_vec(v, cents)
-    if idx is None:
-        return None
-    cid = int(cents[idx]["id"])
-    return f"semctx:{cid}"
+    return f"semctx:{centroids.ids[idx]}"
 
 # ============================================================
 # Contextos automáticos via clustering dinâmico

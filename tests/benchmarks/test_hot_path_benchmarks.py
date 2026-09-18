@@ -30,12 +30,17 @@ def _unit(rng, n=DIM):
 @pytest.fixture
 def centroid_redis(monkeypatch):
     """fakeredis with the bandit centroids and a fixed query embedding."""
+    from app.services.bandit_centroids import reset_centroid_matrix_cache
     from app.utils import uncertainty
+
+    reset_centroid_matrix_cache()
 
     rng = np.random.default_rng(7)
     server = fakeredis.FakeRedis()
     cents = [{"id": i, "vec": _unit(rng).tolist(), "count": 5, "last": 0} for i in range(N_CENTROIDS)]
     server.set(uncertainty.R_CENTROIDS_KEY, json.dumps(cents))
+    # Como em produção: bandits._save_centroids publica a revisão junto com os centróides.
+    server.hset(uncertainty.R_CENTROIDS_META_KEY, mapping={"updated_at": "1", "rev": "1"})
     query_vec = _unit(rng).tolist()
     monkeypatch.setattr(uncertainty, "get_redis", lambda *a, **k: server)
     monkeypatch.setattr(uncertainty, "embed_text", lambda text: query_vec)

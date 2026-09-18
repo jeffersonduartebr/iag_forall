@@ -268,7 +268,14 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     cid = bandits.centroids_online_update("hello")
     assert cid == 7
 
-    monkeypatch.setattr(bandits, "_load_centroids", lambda update_matrix_cache=True: cents)
-    monkeypatch.setattr(bandits, "_nearest_centroid_vec", lambda v, c: (0, 0.42))
+    from app.services.bandit_centroids import CentroidMatrix
+
+    monkeypatch.setattr(bandits, "_get_rds", lambda: object())
+    monkeypatch.setattr(
+        bandits,
+        "load_centroid_matrix",
+        lambda rds, key, meta, dim: CentroidMatrix(np.array([[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]), [3, 7]),
+    )
+    monkeypatch.setattr(bandits, "embed_text", lambda q: np.array([0.9, 0.1, 0.0, 0.0], dtype=np.float32))
     label = bandits._nearest_centroid_label("hello")
     assert label == "semctx:7"

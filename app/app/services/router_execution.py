@@ -202,7 +202,10 @@ async def route_and_answer_internal_impl(
     precheck_started_at = time.time()
     try:
         if deps["_dep_uq_breaker"].current_state != "open":
-            uncertainty_score = deps["_dep_uq_breaker"].call(deps["get_uncertainty_score"], query, modality)
+            # Embedding + Redis: roda em thread para não bloquear o event loop.
+            uncertainty_score = await deps["asyncio"].to_thread(
+                deps["_dep_uq_breaker"].call, deps["get_uncertainty_score"], query, modality
+            )
         deps["_record_dependency_breaker_metrics"]()
     except Exception as exc:
         try:
