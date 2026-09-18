@@ -68,6 +68,12 @@ def mock_dependencies(monkeypatch):
         _lru.clear()
     except Exception:
         pass
+    try:
+        from app.services.bandit_stats_store import cold_contexts
+
+        cold_contexts.clear()
+    except Exception:
+        pass
 
     mock_engine = _make_mock_db_engine()
     try:

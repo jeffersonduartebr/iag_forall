@@ -195,7 +195,6 @@ def test_bandit_update_and_reward(monkeypatch):
     monkeypatch.setattr(bandits, "BANDIT_REWARD", _DummyMetric())
     monkeypatch.setattr(bandits, "centroids_online_update", lambda query: 1)
     monkeypatch.setattr(bandits, "_auto_context_labels", lambda q, m: ["global"])
-    monkeypatch.setattr(bandits, "_upsert_ctx_db", lambda *_args, **_kwargs: None)
 
     captured = {}
 

@@ -25,7 +25,6 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from sqlalchemy import text
 
 from app.db import get_engine
 from app.embeddings import embed_text
@@ -39,6 +38,16 @@ from app.services.bandit_centroids import (
     load_centroid_matrix,
     nearest_centroid_from_array,
     normalize_centroid_vec,
+    reset_centroid_matrix_cache,
+)
+from app.services.bandit_stats_store import (
+    cold_contexts,
+    db_fallback,
+    load_stats_from_db,
+    parse_redis_stats,
+    sanitize_model_stats,
+    serialize_model_stats,
+    upsert_stats_db,
 )
 
 # Recompensa acoplada ao NSGA-II: implementação em app.services.reward, reexportada
@@ -133,35 +142,8 @@ def _ensure_dim(v: np.ndarray) -> np.ndarray:
     return normalize_centroid_vec(v, CENTROIDS_DIM)
 
 
-def _sanitize_model_stats(raw: Optional[Dict[str, float]]) -> Dict[str, float]:
-    """Centralized sanitization for per-model stats used by selection/update."""
-    s = raw or {}
-
-    def _f(key: str, default: float) -> float:
-        """Coerce one floating-point statistic and guard against NaN/inf values."""
-        try:
-            v = float(s.get(key, default))
-            return v if math.isfinite(v) else default
-        except Exception:
-            return default
-
-    def _i(key: str, default: int) -> int:
-        """Coerce one non-negative integer statistic used in bandit state."""
-        try:
-            v = int(s.get(key, default))
-            return max(0, v)
-        except Exception:
-            return default
-
-    out = {
-        "mean": max(0.0, min(1.0, _f("mean", _f("avg", 0.0)))),
-        "count": _i("count", 0),
-        "var": max(0.0, _f("var", 0.0)),
-        "M2": max(0.0, _f("M2", 0.0)),
-        "alpha": max(1e-6, _f("alpha", 1.0)),
-        "beta": max(1e-6, _f("beta", 1.0)),
-    }
-    return out
+# Sanitização das estatísticas: ver services.bandit_stats_store.sanitize_model_stats.
+_sanitize_model_stats = sanitize_model_stats
 
 
 # ============================================================
@@ -492,50 +474,15 @@ def _ctx_key(ctx: str) -> str:
 
 def _get_ctx_stats_from_db(ctx: str) -> Dict[str, Dict[str, float]]:
     """Load contextual bandit stats from MariaDB."""
-    stats: Dict[str, Dict[str, float]] = {}
-    try:
-        with _get_db_engine().connect() as conn:
-            rows = conn.execute(
-                text(
-                    """
-                    SELECT model, avg_reward, count, var, M2
-                    FROM bandit_context_stats
-                    WHERE context_label = :ctx
-                    """
-                ),
-                {"ctx": ctx},
-            ).fetchall()
-        for row in rows:
-            model = row[0]
-            stats[model] = _sanitize_model_stats(
-                {
-                    "mean": float(row[1] or 0.0),
-                    "count": int(row[2] or 0),
-                    "var": float(row[3] or 0.0),
-                    "M2": float(row[4] or 0.0),
-                    "alpha": 1.0 + float(row[1] or 0.0) * float(row[2] or 0.0),
-                    "beta": 1.0 + max(
-                        0.0,
-                        float(row[2] or 0.0) - float(row[1] or 0.0) * float(row[2] or 0.0),
-                    ),
-                }
-            )
-    except Exception as e:
-        logger.warning(f"[bandit] Falha DB ctx={ctx}: {e}")
-    return stats
+    return load_stats_from_db(_get_db_engine, ctx)
 
 
-def _parse_ctx_stats_from_redis(raw_map: Dict[str, str]) -> Dict[str, Dict[str, float]]:
-    """Parse contextual stats stored in one Redis hash."""
-    stats: Dict[str, Dict[str, float]] = {}
-    for model, payload in raw_map.items():
-        try:
-            obj = json.loads(payload)
-        except Exception:
-            continue
-        if isinstance(obj, dict):
-            stats[model] = _sanitize_model_stats(obj)
-    return stats
+_parse_ctx_stats_from_redis = parse_redis_stats
+
+
+def _ctx_stats_db_fallback(ctx: str) -> Dict[str, Dict[str, float]]:
+    """DB read for a context missing from Redis (write-back + short negative cache)."""
+    return db_fallback(ctx, _get_ctx_stats_from_db, _set_ctx_stats)
 
 
 def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
@@ -547,29 +494,13 @@ def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
     }
     """
     stats: Dict[str, Dict[str, float]] = {}
-
-    # Redis
     rds = _get_rds()
     if rds:
         try:
-            raw = rds.hgetall(_ctx_key(ctx))
-            for k, v in raw.items():
-                model = k.decode() if isinstance(k, bytes) else k
-                try:
-                    obj = json.loads(v)
-                except Exception:
-                    continue
-                if not isinstance(obj, dict):
-                    continue
-                stats[model] = _sanitize_model_stats(obj)
+            stats = parse_redis_stats(rds.hgetall(_ctx_key(ctx)))
         except Exception as e:
             logger.warning(f"[bandit] Falha Redis ctx={ctx}: {e}")
-
-    # Se vazio, tenta DB
-    if not stats:
-        stats = _get_ctx_stats_from_db(ctx)
-
-    return stats
+    return stats or _ctx_stats_db_fallback(ctx)
 
 
 async def _get_ctx_stats_async(ctx: str) -> Dict[str, Dict[str, float]]:
@@ -577,29 +508,19 @@ async def _get_ctx_stats_async(ctx: str) -> Dict[str, Dict[str, float]]:
     stats = _parse_ctx_stats_from_redis(await redis_hgetall_map(_ctx_key(ctx)))
     if stats:
         return stats
-    return await asyncio.to_thread(_get_ctx_stats_from_db, ctx)
+    return await asyncio.to_thread(_ctx_stats_db_fallback, ctx)
 
 
 def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
     """Persist one context's bandit statistics to Redis."""
+    cold_contexts.forget(ctx)
     rds = _get_rds()
     if not rds:
         return
     try:
-        key = _ctx_key(ctx)
         pipe = rds.pipeline()
         for model, s in stats.items():
-            payload = json.dumps(
-                {
-                    "mean": float(s.get("mean", 0.0)),
-                    "count": int(s.get("count", 0)),
-                    "var": float(s.get("var", 0.0)),
-                    "M2": float(s.get("M2", 0.0)),
-                    "alpha": float(s.get("alpha", 1.0)),
-                    "beta": float(s.get("beta", 1.0)),
-                }
-            )
-            pipe.hset(key, model, payload)
+            pipe.hset(_ctx_key(ctx), model, serialize_model_stats(s))
         pipe.execute()
     except Exception as e:
         logger.warning(f"[bandit] Falha ao salvar ctx={ctx} no Redis: {e}")
@@ -607,70 +528,7 @@ def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
 
 def _batch_upsert_ctx_db(updates: list[tuple[str, str, Dict[str, float]]]) -> None:
     """Persist multiple contextual statistics in one DB transaction."""
-    if not updates:
-        return
-    try:
-        with _get_db_engine().begin() as conn:
-            for ctx, model, s in updates:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO bandit_context_stats
-                          (context_label, model, avg_reward, count, var, M2)
-                        VALUES (:ctx, :model, :avg, :count, :var, :M2)
-                        ON DUPLICATE KEY UPDATE
-                          avg_reward = :avg,
-                          count = :count,
-                          var = :var,
-                          M2 = :M2,
-                          last_update = CURRENT_TIMESTAMP
-                        """
-                    ),
-                    {
-                        "ctx": ctx,
-                        "model": model,
-                        "avg": float(s.get("mean", 0.0)),
-                        "count": int(s.get("count", 0)),
-                        "var": float(s.get("var", 0.0)),
-                        "M2": float(s.get("M2", 0.0)),
-                    },
-                )
-    except Exception as e:
-        logger.warning(f"[bandit] Falha no batch upsert DB ({len(updates)} rows): {e}")
-
-
-def _upsert_ctx_db(ctx: str, model: str, s: Dict[str, float]) -> None:
-    """Persist one model's contextual statistics to MariaDB."""
-    try:
-        with _get_db_engine().begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO bandit_context_stats
-                      (context_label, model, avg_reward, count, var, M2)
-                    VALUES (:ctx, :model, :avg, :count, :var, :M2)
-                    ON DUPLICATE KEY UPDATE
-                      avg_reward = :avg,
-                      count = :count,
-                      var = :var,
-                      M2 = :M2,
-                      last_update = CURRENT_TIMESTAMP
-                    """
-                ),
-                {
-                    "ctx": ctx,
-                    "model": model,
-                    "avg": float(s.get("mean", 0.0)),
-                    "count": int(s.get("count", 0)),
-                    "var": float(s.get("var", 0.0)),
-                    "M2": float(s.get("M2", 0.0)),
-                },
-            )
-    except Exception as e:
-        logger.warning(
-            f"[bandit] Falha no upsert DB ctx={ctx}, model={model}: {e}"
-        )
-# ============================================================
+    upsert_stats_db(_get_db_engine, updates)
 
 
 # ============================================================
@@ -1031,3 +889,5 @@ def sample_metrics_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, float]:
 def reset_bandits_runtime_state() -> None:
     """Reset in-memory runtime caches/singletons (test/dev utility)."""
     _centroid_matrix_cache.update([])
+    cold_contexts.clear()
+    reset_centroid_matrix_cache()
