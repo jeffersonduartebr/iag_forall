@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from collections import OrderedDict
@@ -49,19 +50,25 @@ if not logger.handlers:
 # ============================================================
 # L1 Cache In-Memory com LRU e TTL
 # ============================================================
-EMBED_L1_CACHE_SIZE = 100000  # Optimized for high-capacity environment (64GB RAM) - ~300MB memory
+# Vetores guardados em float32: ~3 KB por embedding de 768 dimensões (como list[float]
+# seriam ~24 KB). No limite padrão, ~300 MB por processo.
+EMBED_L1_CACHE_SIZE = int(os.getenv("EMBED_L1_CACHE_SIZE", "100000"))
 EMBED_L1_CACHE_TTL_S = 28800  # 8 horas - reduces embedding recalculation by 50-70%
 
 
 class EmbeddingL1Cache:
-    """Store recent embeddings in process memory with LRU and TTL behavior."""
+    """Store recent embeddings in process memory with LRU and TTL behavior.
+
+    Vectors are kept as float32 arrays and returned as ``list[float]``, so the
+    public contract of ``embed_text`` is unchanged.
+    """
 
     def __init__(self, maxsize: int = EMBED_L1_CACHE_SIZE, ttl_s: int = EMBED_L1_CACHE_TTL_S):
         """Create an in-memory embedding cache with bounded size and freshness."""
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
-        self._data: "OrderedDict[str, Tuple[List[float], float]]" = OrderedDict()
+        self._data: "OrderedDict[str, Tuple[np.ndarray, float]]" = OrderedDict()
         self._hits = 0
         self._misses = 0
 
@@ -80,15 +87,16 @@ class EmbeddingL1Cache:
             # Move to end (most recently used)
             self._data.move_to_end(key)
             self._hits += 1
-            return vec
+        return vec.tolist()
 
     def set(self, key: str, vec: List[float]) -> None:
-        """Store one embedding vector in the in-memory cache."""
+        """Store one embedding vector (copied as float32) in the in-memory cache."""
+        arr = np.array(vec, dtype=np.float32)
         now = time.time()
         with self._lock:
             if key in self._data:
                 self._data.move_to_end(key)
-            self._data[key] = (vec, now)
+            self._data[key] = (arr, now)
             while len(self._data) > self.maxsize:
                 self._data.popitem(last=False)
 
@@ -146,11 +154,33 @@ def _norm(vec: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(vec)
     return vec if n == 0 else vec / n
 
+# L2 (Redis): bytes float32 com prefixo mágico (3 KB por vetor de 768 dimensões, contra
+# ~15 KB em JSON). Entradas legadas em JSON ({"v": [...]}) continuam legíveis até expirar.
+_L2_BINARY_MAGIC = b"f32:"
+
+
+def _encode_cached_vector(vec: List[float]) -> bytes:
+    """Serialize one embedding for the L2 cache."""
+    return _L2_BINARY_MAGIC + np.asarray(vec, dtype=np.float32).tobytes()
+
+
+def _decode_cached_vector(raw: Any) -> Optional[List[float]]:
+    """Deserialize an L2 entry (binary float32 or legacy JSON)."""
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    if raw.startswith(_L2_BINARY_MAGIC):
+        payload = raw[len(_L2_BINARY_MAGIC):]
+        if len(payload) % 4:
+            return None
+        return np.frombuffer(payload, dtype=np.float32).tolist()
+    return json.loads(raw).get("v")
+
+
 def _save_cache(key: str, vec: List[float]):
     """Persist one embedding vector to the Redis-backed L2 cache."""
     if _rds:
         try:
-            _rds.setex(key, EMBED_CACHE_TTL_S, json.dumps({"v": vec}))
+            _rds.setex(key, EMBED_CACHE_TTL_S, _encode_cached_vector(vec))
         except Exception as e:
             logger.warning(f"[Embeddings] Failed to save cache for key {key[:20]}...: {e}")
 
@@ -160,7 +190,7 @@ def _load_cache(key: str) -> Optional[List[float]]:
         try:
             raw = _rds.get(key)
             if raw:
-                return json.loads(raw).get("v")
+                return _decode_cached_vector(raw)
         except Exception as e:
             logger.warning(f"[Embeddings] Failed to load cache for key {key[:20]}...: {e}")
     return None
@@ -225,6 +255,8 @@ def embed_text(text: str) -> List[float]:
                 logger.error(f"[Embeddings] Falha OpenAI: {ex}")
 
     if vec:
+        # Forma canônica float32: igual com ou sem acerto de cache (o modelo local já produz float32).
+        vec = np.asarray(vec, dtype=np.float32).tolist()
         _save_cache(key, vec)           # L2 Cache
         _embed_l1_cache.set(key, vec)   # L1 Cache
         return vec

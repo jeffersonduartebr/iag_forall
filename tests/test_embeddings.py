@@ -39,7 +39,7 @@ class TestEmbeddingL1Cache:
 
         result = cache.get("test_key")
 
-        assert result == test_vec
+        assert result == pytest.approx(test_vec)  # guardado como float32
 
     def test_cache_miss_returns_none(self):
         """Test that cache miss returns None."""

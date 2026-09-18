@@ -15,6 +15,7 @@ import threading
 import time
 
 import numpy as np
+import pytest
 
 
 class TestEMAHistoryCache:
@@ -116,7 +117,7 @@ class TestEmbeddingL1Cache:
         result = cache.get(key)
 
         assert result is not None
-        assert result == vec
+        assert result == pytest.approx(vec)  # guardado como float32
 
     def test_embedding_cache_miss_tracking(self):
         """Testa tracking de hits e misses."""
