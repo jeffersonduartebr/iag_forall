@@ -3,27 +3,6 @@
 Documento gerado automaticamente por `scripts/generate_docs_catalog.py`.
 Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 
-## `app/app/00providers.py`
-
-Resumo do arquivo: providers.py — versão multimodal + UM-RAG compatível (VALIDAÇÃO DE PARÂMETROS)
-
-### Funções de módulo
-
-- `heuristic_quality_estimate(text)` (`app/app/00providers.py:130`): Estimativa simples de "qualidade" (0–10) baseada em:
-- `_estimate_tokens(text)` (`app/app/00providers.py:149`): Aproximação bem grosseira: ~4 chars por token.
-- `_encode_image_vision(image_b64)` (`app/app/00providers.py:159`): Helper genérico para payloads multimodais que usam URL base64.
-- `call_model(model, prompt, modality, image_b64, temperature, max_tokens)` (`app/app/00providers.py:175`): Chamada unificada para todos os provedores.
-- `_ensure_ollama_model(model_name)` (`app/app/00providers.py:514`): Garante que o modelo Ollama esteja presente:
-
-## `app/app/00rag.py`
-
-Resumo do arquivo: Módulo principal: descreve responsabilidades e integrações deste arquivo.
-
-### Funções de módulo
-
-- `retrieve_context(query, top_k)` (`app/app/00rag.py:11`): (Função original simples) - mantém por compatibilidade.
-- `retrieve_context_adaptive(query)` (`app/app/00rag.py:26`): Ativa RAG apenas se a similaridade do top-1 exceder o threshold.
-
 ## `app/app/__init__.py`
 
 Resumo do arquivo: Módulo principal: descreve responsabilidades e integrações deste arquivo.
@@ -696,14 +675,6 @@ Resumo do arquivo: query_service.py — versão MULTIMODAL COMPLETA
   - `_EngineProxy.connect(self)` (`app/app/query_service.py:67`): Executa connect.
   - `_EngineProxy.execute(self, *args, **kwargs)` (`app/app/query_service.py:71`): Executa execute.
 
-## `app/app/rag_context_provider.py`
-
-Resumo do arquivo: rag_context_provider.py
-
-### Funções de módulo
-
-- `get_rag_context(query, k, modality, image_b64)` (`app/app/rag_context_provider.py:40`): Recupera contexto para enriquecer um prompt — inclusive para juízes multimodais.
-
 ## `app/app/rag_healthcheck.py`
 
 Resumo do arquivo: rag_healthcheck.py
@@ -1183,19 +1154,6 @@ Resumo do arquivo: Celery tasks for background processing.
 - `on_worker_process_shutdown(**kwargs)` (`app/app/tasks.py:78`): Clean up event loop when worker process shuts down.
 - `task_process_feedback(self, query, answer, chosen_model, modality, latency_s, cost_val, image_b64, raw_payload, prompt_tokens, completion_tokens)` (`app/app/tasks.py:95`): Executa o feedback loop (Juízes, Bandit Update, Logging) em background via Celery.
 - `task_execute_eval_run(self, run_id, modality, use_cache, max_tokens, temperature)` (`app/app/tasks.py:141`): Execute an eval run asynchronously and persist per-prompt metrics.
-
-## `app/app/umrag.py`
-
-Resumo do arquivo: umrag.py — Unified Multimodal RAG
-
-### Funções de módulo
-
-- `_unit(x)` (`app/app/umrag.py:63`): Executa unit.
-- `_embed_for_rag(query, modality, image_b64)` (`app/app/umrag.py:70`): Executa embed for rag.
-- `_extract_docs_from(res)` (`app/app/umrag.py:107`): Executa extract docs from.
-- `build_augmented_prompt(query, modality, image_b64, top_k)` (`app/app/umrag.py:123`): Estrategia unificada (C):
-- `add_document(doc_id, text, metadata, modality, image_b64)` (`app/app/umrag.py:187`): Compatível com chamadas antigas.
-- `health()` (`app/app/umrag.py:217`): Executa health.
 
 ## `app/app/update_nsga_best_params.py`
 

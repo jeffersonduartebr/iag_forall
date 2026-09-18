@@ -2,16 +2,12 @@
 source =
     app
 omit =
-    */00providers.py
-    */00rag.py
     */correlation_metrics.py
     */nsga_meta_optimizer.py
     */nsga_weights_updater.py
     */dash_control_panel.py
     */update_nsga_best_params.py
-    */umrag.py
     */db_manager.py
-    */rag_context_provider.py
     */reset_chroma_collections.py
     */utils/bkp.redis_client.py
 

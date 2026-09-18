@@ -19,9 +19,6 @@ ignore = ["E501", "E701", "E731"]
 "app/app/nsga_meta_optimizer.py" = ["N802", "N803", "N806", "E402"]
 "app/app/nsga_weights_updater.py" = ["N806"]
 "app/app/bandits.py" = ["N806"]
-# Módulos legados de compatibilidade (nome iniciando com dígito) e re-exports por *.
-"app/app/00providers.py" = ["N999", "F401", "F403", "F405"]
-"app/app/00rag.py" = ["N999", "F401", "F403", "F405"]
 # Pacote de configuração reexporta símbolos via import *.
 "app/app/config/__init__.py" = ["F401", "F403", "F405"]
 # Stubs de teste com propriedades UPPER_CASE que espelham settings.
@@ -35,8 +32,6 @@ indent-style = "space"
 python_version = "3.11"
 ignore_missing_imports = true
 strict_optional = true
-# Módulos legados de compatibilidade (nome iniciando com dígito) não são type-checked.
-exclude = ['app/app/00.*\.py$']
 warn_redundant_casts = true
 warn_unused_ignores = true
 disallow_untyped_defs = false # Permite funções sem tipagem (para não quebrar código legado agora)

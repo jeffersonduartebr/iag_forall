@@ -5,8 +5,6 @@ Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 
 | Arquivo | Módulo | Classes | Funções |
 |---|---|---:|---:|
-| `app/app/00providers.py` | providers.py — versão multimodal + UM-RAG compatível (VALIDAÇÃO DE PARÂMETROS) | 0 | 5 |
-| `app/app/00rag.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 2 |
 | `app/app/__init__.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 0 |
 | `app/app/ab_testing.py` | ab_testing.py — A/B Testing Infrastructure | 5 | 1 |
 | `app/app/adaptive_timeout.py` | adaptive_timeout.py — Adaptive Timeout Calculation | 0 | 8 |
@@ -38,7 +36,6 @@ Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 | `app/app/prometheus_setup.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 3 |
 | `app/app/providers_async.py` | providers_async.py (FINAL: Suporte a Reasoning/Thinking Explícito) | 9 | 13 |
 | `app/app/query_service.py` | query_service.py — versão MULTIMODAL COMPLETA | 1 | 5 |
-| `app/app/rag_context_provider.py` | rag_context_provider.py | 0 | 1 |
 | `app/app/rag_healthcheck.py` | rag_healthcheck.py | 0 | 3 |
 | `app/app/rag_local.py` | rag_local.py — RAG Multimodal Unificado (Com suporte Imagem -> Texto) | 0 | 8 |
 | `app/app/reliability.py` | reliability.py — Reliability Patterns for LLM Providers | 5 | 8 |
@@ -60,7 +57,6 @@ Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 | `app/app/settings_dynamic.py` | settings_dynamic.py (VERSÃO FINAL: Com Configuração de Amostragem) | 3 | 12 |
 | `app/app/sparse_index.py` | sparse_index.py — Gerenciador de Índice BM25 (Busca por Palavras-Chave) | 1 | 0 |
 | `app/app/tasks.py` | Celery tasks for background processing. | 0 | 6 |
-| `app/app/umrag.py` | umrag.py — Unified Multimodal RAG | 0 | 6 |
 | `app/app/update_nsga_best_params.py` | update_nsga_best_params.py  (VERSÃO MULTIMODAL) | 0 | 5 |
 | `app/app/user_feedback.py` | user_feedback.py — User Feedback Processing | 3 | 6 |
 | `app/app/utils/bkp.redis_client.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 1 |
