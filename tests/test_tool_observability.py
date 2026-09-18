@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+
 from app.services import tool_observability as to
 
 
@@ -102,3 +103,10 @@ def test_tool_metrics_registered_on_shared_registry():
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_function_label_cardinality_is_bounded(monkeypatch):
+    monkeypatch.setattr(to, "_MAX_FUNCTION_LABELS", 2)
+    monkeypatch.setattr(to, "_function_labels", set())
+    labels = [to._function_label(_call(name, "{}")) for name in ("a", "b", "c", "a", "d")]
+    assert labels == ["a", "b", "other", "a", "other"]

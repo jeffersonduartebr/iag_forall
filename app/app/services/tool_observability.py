@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Sequence
+import os
+from typing import Any, Dict, List, Sequence, Set
 
 from prometheus_client import Counter, Histogram
 
@@ -97,6 +98,23 @@ def _function_name(tool_call: Dict[str, Any]) -> str:
     return "unknown"
 
 
+# Os nomes de função vêm das tools declaradas pelo cliente: sem limite, cada nome
+# novo criaria uma série Prometheus. Os primeiros N distintos viram label; o resto, "other".
+_MAX_FUNCTION_LABELS = int(os.getenv("TOOL_METRIC_MAX_FUNCTIONS", "100"))
+_function_labels: Set[str] = set()
+
+
+def _function_label(tool_call: Dict[str, Any]) -> str:
+    """Bounded-cardinality metric label for the requested function."""
+    name = _function_name(tool_call)
+    if name in _function_labels:
+        return name
+    if len(_function_labels) < _MAX_FUNCTION_LABELS:
+        _function_labels.add(name)
+        return name
+    return "other"
+
+
 def tool_call_quality(tool_calls: Any) -> float:
     """Score tool-call well-formedness on ``0..1`` (fraction with valid JSON args).
 
@@ -134,7 +152,7 @@ def record_tool_turn(
         TOOL_CALLS_TOTAL.labels(model=chosen_model).inc()
         TOOL_CALL_DEPTH.labels(model=chosen_model).observe(max(0, int(conversation_depth)))
         for tc in calls:
-            TOOL_CALL_FUNCTIONS_TOTAL.labels(model=chosen_model, function=_function_name(tc)).inc()
+            TOOL_CALL_FUNCTIONS_TOTAL.labels(model=chosen_model, function=_function_label(tc)).inc()
             if not _arguments_valid(tc):
                 TOOL_CALL_ARGS_INVALID.labels(model=chosen_model).inc()
     except Exception as exc:  # pragma: no cover - métrica jamais quebra o roteamento
