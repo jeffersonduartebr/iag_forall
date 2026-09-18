@@ -127,7 +127,7 @@ async def process_background_feedback_impl(
                     is_correct_label = final_quality >= 7.0
                     predictor.learn(query_embedding, is_correct_label)
                     predictor.record_outcome(predicted_error_prob, not is_correct_label)
-                    predictor.save()
+                    predictor.maybe_save()
             except Exception:
                 final_quality = 5.0
                 quality_source = "fallback_default"

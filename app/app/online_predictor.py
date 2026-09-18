@@ -40,6 +40,21 @@ logger = logging.getLogger(__name__)
 
 # Validation log max size (configurable via settings)
 DEFAULT_VALIDATION_WINDOW = 1000
+# Persistência com debounce: grava após N atualizações ou T segundos (antes: a cada amostra).
+SAVE_EVERY_N_UPDATES = int(os.getenv("PREDICTOR_SAVE_EVERY_N", "50"))
+SAVE_EVERY_S = float(os.getenv("PREDICTOR_SAVE_EVERY_S", "60"))
+
+
+def _atomic_pickle(obj, path: str) -> None:
+    """Write ``obj`` to ``path`` atomically (temp file + os.replace).
+
+    Several processes (API workers, Celery) share the same state files; a
+    reader never sees a half-written pickle and the last writer wins.
+    """
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "wb") as f:
+        pickle.dump(obj, f)
+    os.replace(tmp, path)
 
 
 def _resolve_state_dir() -> Path:
@@ -301,18 +316,33 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         return total / len(self.prediction_log)
 
     def save(self):
-        """Persiste o modelo treinado em disco."""
+        """Persiste o modelo treinado em disco (gravação atômica)."""
         if not self.pipeline or not self.persistence_enabled:
             return
         try:
-            with open(self.save_path, "wb") as f:
-                pickle.dump(self.pipeline, f)
-            # logger.debug(f"[OnlinePredictor] Saved state to {self.save_path}")
+            _atomic_pickle(self.pipeline, self.save_path)
         except Exception as e:
             logger.warning(f"[OnlinePredictor] Save failed: {e}")
 
         # Also save validation data
         self._save_validation()
+        self._updates_since_save = 0
+        self._last_save_mono = time.monotonic()
+
+    def maybe_save(self) -> bool:
+        """Debounced save for per-sample callers; returns whether it persisted.
+
+        Saves after ``SAVE_EVERY_N_UPDATES`` calls or ``SAVE_EVERY_S`` seconds
+        since the last save, whichever comes first.
+        """
+        if not getattr(self, "pipeline", None) or not getattr(self, "persistence_enabled", False):
+            return False
+        self._updates_since_save = getattr(self, "_updates_since_save", 0) + 1
+        elapsed = time.monotonic() - getattr(self, "_last_save_mono", float("-inf"))
+        if self._updates_since_save < SAVE_EVERY_N_UPDATES and elapsed < SAVE_EVERY_S:
+            return False
+        self.save()
+        return True
 
     def _save_validation(self):
         """Save validation log and calibration parameters."""
@@ -325,8 +355,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                 "total_predictions": self._total_predictions,
                 "correct_predictions": self._correct_predictions,
             }
-            with open(self.validation_path, "wb") as f:
-                pickle.dump(validation_data, f)
+            _atomic_pickle(validation_data, self.validation_path)
         except Exception as e:
             logger.warning(f"[OnlinePredictor] Validation save failed: {e}")
 

@@ -202,7 +202,7 @@ def _close_online_loop(
             predicted_error_prob = predictor.predict_error_probability(emb)
             predictor.learn(emb, not is_failure)
             predictor.record_outcome(predicted_error_prob, is_failure)
-            predictor.save()
+            predictor.maybe_save()
     except Exception as exc:
         logger.debug("[advgov] predictor learn failed for %s: %s", model, exc)
 

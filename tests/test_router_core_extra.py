@@ -214,6 +214,10 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 This helper encapsulates one focused step used by the surrounding workflow."""
             return None
 
+        def maybe_save(self):
+            """Debounced save (no-op in tests)."""
+            return False
+
     monkeypatch.setattr(rc, "get_predictor", lambda model: _Pred())
     monkeypatch.setattr(rc, "judge_answer", AsyncMock(return_value=[{"score": 0.8}, {"score": 1.0}]))
     monkeypatch.setattr(rc, "compute_reward", lambda *a, **k: 0.7)

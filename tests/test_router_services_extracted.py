@@ -218,6 +218,9 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
         def save(self):
             return None
 
+        def maybe_save(self):
+            return False
+
     class _History:
         def __init__(self):
             self.data = {}
@@ -901,6 +904,9 @@ async def test_router_feedback_covers_failure_branches():
 
         def save(self):
             return None
+
+        def maybe_save(self):
+            return False
 
     class _History:
         def get(self, key):
