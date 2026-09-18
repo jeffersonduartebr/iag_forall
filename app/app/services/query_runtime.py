@@ -435,47 +435,66 @@ def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None
     }
 
 
+def _raise_if_guardrail_blocked(req: Any, decision: Any) -> None:
+    """HTTP 400 when the input guardrails block the query."""
+    if decision.allowed:
+        return
+    ROUTER_QUERY_OUTCOME.labels(
+        outcome="guardrail_blocked",
+        model="guardrails",
+        modality=(getattr(req, "modality", None) or "text").lower(),
+    ).inc()
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": True,
+            "category": "guardrail_block",
+            "message": "Conteúdo bloqueado por política de segurança.",
+            "reasons": decision.reasons,
+        },
+    )
+
+
+def _raise_if_budget_exceeded(req: Any, budget: Any) -> None:
+    """HTTP 429 when the tenant budget is exhausted."""
+    if budget.allowed:
+        return
+    ROUTER_QUERY_OUTCOME.labels(
+        outcome="budget_rejected",
+        model="budget_control",
+        modality=(getattr(req, "modality", None) or "text").lower(),
+    ).inc()
+    raise HTTPException(
+        status_code=429,
+        detail={
+            "error": True,
+            "category": "tenant_budget_exceeded",
+            "reason": budget.reason,
+            "daily_spent": budget.daily_spent,
+            "monthly_spent": budget.monthly_spent,
+            "daily_limit": budget.daily_limit,
+            "monthly_limit": budget.monthly_limit,
+        },
+    )
+
+
 async def process_query_request(req: Any) -> Dict[str, Any]:
     """Process one query request with governance, guardrails, and experimentation hooks."""
     if not req or not req.query.strip():
         raise HTTPException(status_code=400, detail="Query obrigatória.")
 
-    input_decision = await check_input_guardrails_async(req.query)
-    if not input_decision.allowed:
-        ROUTER_QUERY_OUTCOME.labels(
-            outcome="guardrail_blocked",
-            model="guardrails",
-            modality=(getattr(req, "modality", None) or "text").lower(),
-        ).inc()
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": True,
-                "category": "guardrail_block",
-                "message": "Conteúdo bloqueado por política de segurança.",
-                "reasons": input_decision.reasons,
-            },
-        )
-
-    pre_budget = await check_tenant_budget(req.tenant_id)
-    if not pre_budget.allowed:
-        ROUTER_QUERY_OUTCOME.labels(
-            outcome="budget_rejected",
-            model="budget_control",
-            modality=(getattr(req, "modality", None) or "text").lower(),
-        ).inc()
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "error": True,
-                "category": "tenant_budget_exceeded",
-                "reason": pre_budget.reason,
-                "daily_spent": pre_budget.daily_spent,
-                "monthly_spent": pre_budget.monthly_spent,
-                "daily_limit": pre_budget.daily_limit,
-                "monthly_limit": pre_budget.monthly_limit,
-            },
-        )
+    # Guardrails (regex, sem I/O) primeiro: uma requisição bloqueada não toca Redis/DB.
+    _raise_if_guardrail_blocked(req, await check_input_guardrails_async(req.query))
+    # Orçamento e política ativa são leituras independentes: em paralelo, avaliadas na
+    # ordem original (o 429 do orçamento tem precedência sobre uma falha ao ler a política).
+    pre_budget, active_policy = await asyncio.gather(
+        check_tenant_budget(req.tenant_id), get_active_policy(), return_exceptions=True
+    )
+    if isinstance(pre_budget, BaseException):
+        raise pre_budget
+    _raise_if_budget_exceeded(req, pre_budget)
+    if isinstance(active_policy, BaseException):
+        raise active_policy
 
     modality = (req.modality or "text").lower()
     image_input = req.image_b64
@@ -487,7 +506,6 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     runtime_profile = apply_query_runtime_profile(req, modality=modality, image_input=image_input)
 
     selected_policy = req.policy_version
-    active_policy = await get_active_policy()
     if not selected_policy and active_policy:
         selected_policy = active_policy.get("version")
     if active_policy and active_policy.get("version"):
