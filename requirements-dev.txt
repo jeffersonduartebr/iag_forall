@@ -1,0 +1,22 @@
+# Dependências de desenvolvimento e teste (fora da imagem de produção).
+# Uso: pip install -r requirements-dev.txt
+-r app/requirements.txt
+
+# Test runner e cobertura
+pytest==8.3.3
+pytest-asyncio==0.23.8
+pytest-cov
+
+# Tipos de teste adicionais
+hypothesis==6.168.0        # testes baseados em propriedades
+fakeredis==2.38.0          # Redis em memória fiel ao protocolo (sync + asyncio)
+schemathesis==4.10.2       # contrato/fuzz da API a partir do OpenAPI (4.10.x: último compatível com pytest 8)
+pytest-benchmark==5.3.0    # benchmarks de regressão do caminho quente
+mutmut==3.8.0              # testes de mutação
+
+# Lint, tipos e hooks
+ruff
+mypy==2.1.0
+pre-commit==3.8.0
+types-requests
+types-redis

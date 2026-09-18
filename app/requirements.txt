@@ -57,12 +57,4 @@ datasets
 tqdm
 tabulate
 
-# Dev / QA
-pytest==8.3.3
-pytest-asyncio==0.23.8
-pytest-cov
-ruff
-mypy==2.1.0
-pre-commit==3.8.0
-types-requests
-types-redis
+# Dev / QA: ver requirements-dev.txt na raiz do repositório.
