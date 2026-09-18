@@ -7,11 +7,12 @@ import secrets
 import time
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..schemas import ExpertLoginRequest
 from ..settings_dynamic import settings
+from ..utils.client_ip import parse_trusted_proxies, resolve_client_ip
 from .auth import _auth_from_jwt, _encode_jwt_hs256, _extract_bearer_token
 
 router = APIRouter()
@@ -19,6 +20,7 @@ router = APIRouter()
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 _MAX_ATTEMPTS = 10
 _WINDOW_S = 300
+_MAX_TRACKED_CLIENTS = 10_000  # teto do dicionário de tentativas (evicção FIFO)
 
 
 class LoginRequest(BaseModel):
@@ -26,24 +28,28 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
-def _client_key(x_forwarded_for: Optional[str], remote: Optional[str]) -> str:
-    if isinstance(x_forwarded_for, str) and x_forwarded_for:
-        return x_forwarded_for.split(",")[0].strip()
-    if isinstance(remote, str) and remote:
-        return remote
-    return "unknown"
+def _client_key(request: Optional[Request], x_forwarded_for: Optional[str], x_real_ip: Optional[str]) -> str:
+    """Throttling key: the peer IP, or the forwarded client only behind a trusted proxy."""
+    forwarded = x_forwarded_for or x_real_ip
+    direct_ip = request.client.host if request is not None and request.client else None
+    return resolve_client_ip(direct_ip, forwarded, parse_trusted_proxies(settings.get("TRUSTED_PROXY_IPS", "")))
 
 
 def _check_rate_limit(key: str) -> None:
     now = time.time()
     attempts = [t for t in _LOGIN_ATTEMPTS.get(key, []) if now - t < _WINDOW_S]
-    _LOGIN_ATTEMPTS[key] = attempts
+    if attempts:
+        _LOGIN_ATTEMPTS[key] = attempts
+    else:
+        _LOGIN_ATTEMPTS.pop(key, None)  # não guarda chaves sem tentativas recentes
     if len(attempts) >= _MAX_ATTEMPTS:
         raise HTTPException(status_code=429, detail="Muitas tentativas. Tente novamente em alguns minutos.")
 
 
 def _record_failed_login(key: str) -> None:
     _LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
+    while len(_LOGIN_ATTEMPTS) > _MAX_TRACKED_CLIENTS:
+        _LOGIN_ATTEMPTS.pop(next(iter(_LOGIN_ATTEMPTS)))
 
 
 def _jwt_secret() -> str:
@@ -192,9 +198,10 @@ def admin_login(
     payload: LoginRequest,
     x_forwarded_for: Annotated[Optional[str], Header()] = None,
     x_real_ip: Annotated[Optional[str], Header()] = None,
+    request: Request = None,  # type: ignore[assignment]  # injetado pelo FastAPI
 ):
     """Authenticate admin UI user and return JWT."""
-    key = _client_key(x_forwarded_for, x_real_ip)
+    key = _client_key(request, x_forwarded_for, x_real_ip)
     _check_rate_limit(key)
     if not _validate_ui_credentials(payload.username, payload.password):
         _record_failed_login(key)
@@ -231,9 +238,10 @@ def expert_login(
     payload: ExpertLoginRequest,
     x_forwarded_for: Annotated[Optional[str], Header()] = None,
     x_real_ip: Annotated[Optional[str], Header()] = None,
+    request: Request = None,  # type: ignore[assignment]  # injetado pelo FastAPI
 ):
     """Authenticate expert portal user with limited reviewer role."""
-    key = f"expert:{_client_key(x_forwarded_for, x_real_ip)}"
+    key = f"expert:{_client_key(request, x_forwarded_for, x_real_ip)}"
     _check_rate_limit(key)
 
     identity = _authenticate_expert_login(payload.email, payload.password)

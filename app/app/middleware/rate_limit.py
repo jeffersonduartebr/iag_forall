@@ -31,6 +31,7 @@ from app.observability import (
 )
 from app.providers_async import get_ollama_admission_snapshot
 from app.settings_dynamic import settings
+from app.utils.client_ip import parse_trusted_proxies, resolve_client_ip
 from app.utils.redis_async_ops import redis_pipeline_execute
 from app.utils.redis_client import get_redis_async
 
@@ -413,16 +414,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _client_ip(self, request: Request) -> str:
         """Resolve the client IP, honoring X-Forwarded-For only behind trusted proxies."""
-        trusted_raw = (settings.get("TRUSTED_PROXY_IPS", "") or "").strip()
-        trusted = {ip.strip() for ip in trusted_raw.split(",") if ip.strip()}
-        direct_ip = request.client.host if request.client else "unknown"
-        if trusted and direct_ip in trusted:
-            forwarded_for = request.headers.get("X-Forwarded-For")
-            if forwarded_for:
-                first = forwarded_for.split(",")[0].strip()
-                if first:
-                    return first
-        return direct_ip
+        return resolve_client_ip(
+            request.client.host if request.client else None,
+            request.headers.get("X-Forwarded-For"),
+            parse_trusted_proxies(settings.get("TRUSTED_PROXY_IPS", "")),
+        )
 
     def _candidate_pressure_state(self, snapshot: Dict[str, float | int | str], cfg: Dict[str, float | int | bool]) -> str:
         """Classify the current runtime pressure before hysteresis is applied."""
