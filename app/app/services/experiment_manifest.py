@@ -155,8 +155,13 @@ def build_experiment_manifest(
 
 
 def write_experiment_manifest(run_id: str, manifest: Dict[str, Any], output_dir: Optional[Path] = None) -> Path:
-    """Persist manifest JSON next to thesis results or a custom directory."""
-    base = output_dir or (_repo_root() / "thesis_results" / "experiment_manifests")
+    """Persist manifest JSON next to thesis results or a custom directory.
+
+    ``EXPERIMENT_MANIFEST_DIR`` overrides the default location (the test suite
+    points it at a temporary directory so runs never rewrite tracked results).
+    """
+    env_dir = os.getenv("EXPERIMENT_MANIFEST_DIR")
+    base = output_dir or (Path(env_dir) if env_dir else _repo_root() / "thesis_results" / "experiment_manifests")
     base.mkdir(parents=True, exist_ok=True)
     path = base / f"{run_id}_experiment_manifest.json"
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -52,6 +52,12 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long-running tests")
 
 @pytest.fixture(autouse=True)
+def _isolate_experiment_manifests(monkeypatch, tmp_path):
+    """Keep eval runs from rewriting the tracked manifests in thesis_results/."""
+    monkeypatch.setenv("EXPERIMENT_MANIFEST_DIR", str(tmp_path / "experiment_manifests"))
+
+
+@pytest.fixture(autouse=True)
 def mock_dependencies(monkeypatch):
     """
     Mocka automaticamente conexões externas para TODOS os testes.
