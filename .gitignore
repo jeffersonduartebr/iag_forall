@@ -29,3 +29,9 @@ tmp_prom/
 .DS_Store
 .vscode/
 .idea/
+
+# Artefatos de qualidade (benchmarks, cobertura JSON, mutação)
+.benchmarks/
+coverage.json
+mutants/
+.hypothesis/
