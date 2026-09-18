@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 from typing import Dict, List
 
+from .constants import DEFAULT_UNCERTAINTY_THRESHOLD
+
 SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
     "auth": {
         "REQUIRE_API_AUTH": "0",
@@ -97,6 +99,11 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "JUDGE_CALIBRATION_ENABLED": "1",
         "JUDGE_CACHE_AGREEMENT_TARGET": "0.7",
         "JUDGE_MODELS": "[]",
+        # "rubric": 3 dimensões (Cap. 5, §5.3.5) por 2 juízes; "binary": CORRECT/INCORRECT.
+        "JUDGE_SCORING_MODE": "rubric",
+        "JUDGE_RUBRIC_WEIGHTS": json.dumps({"clareza": 0.3, "acuracia": 0.5, "alinhamento": 0.2}),
+        # Diferença em Q (0-10) entre os dois juízes a partir da qual o meta-juiz desempata.
+        "JUDGE_RUBRIC_DISAGREEMENT": "3.0",
     },
     "providers": {
         "OPENROUTER_API_KEY": "",
@@ -157,7 +164,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         # Canonicalize queries (casefold + whitespace collapse) before hashing/
         # embedding so trivial surface variants share a cache entry (perf #24).
         "SEMANTIC_CACHE_NORMALIZE_ENABLED": "1",
-        "UNCERTAINTY_THRESHOLD": "0.7",
+        "UNCERTAINTY_THRESHOLD": str(DEFAULT_UNCERTAINTY_THRESHOLD),
         "RAG_SIMPLE_QUERY_BYPASS_ENABLED": "1",
         "RAG_LIGHT_TOP_K": "2",
         "RAG_LIGHT_VECTOR_TOP_K": "6",
@@ -202,6 +209,10 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "NSGA_W_LATENCY": "0.5",
         "NSGA_W_COST": "100.0",
         "NSGA_W_ALIGNMENT": "1.0",
+        # C_base da recompensa (USD/1k tokens); derivação em app.services.reward.
+        "REWARD_COST_BASELINE_PER_1K": "0.007",
+        # Parcela mínima de cada objetivo nos pesos da recompensa publicados pelo NSGA-II.
+        "REWARD_WEIGHT_MIN_SHARE": "0.05",
         "NSGA_CONVERGENCE_HISTORY_SIZE": "20",
         "NSGA_UPDATE_INTERVAL_S": "300",
         "NSGA_LOOKBACK_MINUTES": "180",
@@ -268,6 +279,19 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "METAOPT_SCHEDULED_REPS": "2",
         "METAOPT_REPS": "5",
         "METAOPT_TRIALS": "100",
+    },
+    "local_cost": {
+        # Imputação do custo de inferência local pelo tempo de ocupação do equipamento
+        # (app.utils.pricing.impute_local_cost). Valores de hardware/energia PROVISÓRIOS:
+        # confirmar preço, consumo sob carga e tarifa antes de rodar experimentos.
+        "LOCAL_COST_IMPUTATION_ENABLED": "1",
+        "LOCAL_COST_USD_PER_HOUR": "0",
+        "LOCAL_COST_HW_PRICE_USD": "2300",
+        "LOCAL_COST_HW_LIFETIME_YEARS": "3",
+        "LOCAL_COST_HW_UTILIZATION": "0.5",
+        "LOCAL_COST_POWER_W": "400",
+        "LOCAL_COST_ENERGY_USD_PER_KWH": "0.16",
+        "LOCAL_COST_PARALLEL_SLOTS": "1",
     },
     "prediction": {
         "PREDICTOR_VALIDATION_ENABLED": "1",

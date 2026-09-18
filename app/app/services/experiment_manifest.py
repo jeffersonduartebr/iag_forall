@@ -92,6 +92,11 @@ def _config_snapshot() -> Dict[str, Any]:
         "MAX_TOKENS_DEFAULT",
         "OPENROUTER_EXPLORATION_ENABLED",
         "OPENROUTER_EXPLORATION_RATE",
+        "JUDGE_SCORING_MODE",
+        "JUDGE_RUBRIC_WEIGHTS",
+        "REWARD_COST_BASELINE_PER_1K",
+        "LOCAL_COST_IMPUTATION_ENABLED",
+        "LOCAL_COST_USD_PER_HOUR",
     ]
     snapshot: Dict[str, Any] = {}
     for key in keys:
@@ -99,6 +104,15 @@ def _config_snapshot() -> Dict[str, Any]:
             snapshot[key] = settings.get(key, getattr(settings, key, None))
         except Exception:
             snapshot[key] = None
+    try:
+        from app.services.reward import load_reward_weights
+        from app.utils.pricing import local_cost_rate_usd_per_hour
+
+        (w_q, w_l, w_c), source = load_reward_weights("text")
+        snapshot["REWARD_WEIGHTS_TEXT"] = {"quality": w_q, "latency": w_l, "cost": w_c, "source": source}
+        snapshot["LOCAL_COST_RATE_USD_PER_HOUR"] = local_cost_rate_usd_per_hour()
+    except Exception:
+        snapshot["REWARD_WEIGHTS_TEXT"] = None
     return snapshot
 
 

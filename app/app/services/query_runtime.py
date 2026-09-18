@@ -740,6 +740,8 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
                 cost_val=result.get("estimated_cost_usd", result.get("cost_per_1k", 0.0)),
                 query=req.query,
                 conversation_depth=len(_msgs) if isinstance(_msgs, (list, tuple)) else 0,
+                prompt_tokens=int(prompt_tokens or 0),
+                completion_tokens=int(completion_tokens or 0),
             )
         except Exception as exc:
             logger.warning(f"[main] Falha ao registrar turno de tool: {exc}")
@@ -747,7 +749,8 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     try:
         record_tenant_usage(
             tenant_id=req.tenant_id,
-            cost_usd=float(cost_usd),
+            # Orçamento do tenant: só custo de caixa, nunca a ocupação local imputada.
+            cost_usd=float(result.get("cash_cost_usd", cost_usd) or 0.0),
             tokens_in=int(prompt_tokens or 0),
             tokens_out=int(completion_tokens or 0),
             requests=1,

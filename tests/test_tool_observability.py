@@ -42,8 +42,8 @@ def test_arguments_valid_rejects_non_dict_function():
 def test_record_tool_turn_feeds_bandit_and_returns_quality(monkeypatch):
     seen = {}
 
-    def fake_compute_reward(model, quality, latency_s, cost_per_1k=None):
-        seen["compute"] = (model, quality, latency_s, cost_per_1k)
+    def fake_compute_reward(model, quality, latency_s, cost_per_1k=None, modality="text"):
+        seen["compute"] = (model, quality, latency_s, cost_per_1k, modality)
         return 0.42
 
     def fake_bandit_update(model, query, reward, modality="text"):
@@ -62,11 +62,15 @@ def test_record_tool_turn_feeds_bandit_and_returns_quality(monkeypatch):
         cost_val=0.001,
         query="weather in paris?",
         conversation_depth=3,
+        prompt_tokens=400,
+        completion_tokens=100,
     )
 
     assert quality == 1.0
-    # quality 1.0 é escalado para 0..10 antes de compute_reward
-    assert seen["compute"] == ("openai/gpt-4o", 10.0, 1.5, 0.001)
+    # quality 1.0 é escalado para 0..10; custo total 0.001 USD em 500 tokens = 0.002 USD/1k
+    model, q, lat, cost_per_1k, modality = seen["compute"]
+    assert (model, q, lat, modality) == ("openai/gpt-4o", 10.0, 1.5, "text")
+    assert cost_per_1k == pytest.approx(0.002)
     assert seen["update"]["model"] == "openai/gpt-4o"
     assert seen["update"]["reward"] == 0.42
     assert seen["update"]["modality"] == "text"

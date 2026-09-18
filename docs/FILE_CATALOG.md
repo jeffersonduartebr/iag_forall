@@ -24,9 +24,6 @@ Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 | `app/app/error_handling.py` | error_handling.py — Structured Error Handling and Logging | 3 | 6 |
 | `app/app/guardrails.py` | Basic content guardrails (MVP). | 1 | 2 |
 | `app/app/health.py` | health.py — Deep Health Checks for All Dependencies | 3 | 9 |
-| `app/app/judges/heuristic.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 4 |
-| `app/app/judges/judge.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 2 |
-| `app/app/judges/llm.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 3 |
 | `app/app/judges.py` | judges.py (VERSÃO FINAL: Binary Verdict + Tie-Breaker Meta-Judge) | 3 | 24 |
 | `app/app/main.py` | main.py (Production-Ready with Rate Limiting, Compression, Health Checks) | 1 | 51 |
 | `app/app/metrics_collector.py` | Coletor de métricas multimodais para o Router LLM. | 0 | 4 |

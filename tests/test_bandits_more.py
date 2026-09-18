@@ -211,28 +211,30 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert "global" in captured
     assert captured["global"]["m1"]["mean"] == pytest.approx(1.0)
 
-    # _load_nsga_weights default path (no redis)
-    monkeypatch.setattr(bandits, "_get_rds", lambda: None)
-    wq, wl, wc = bandits._load_nsga_weights()
-    assert (wq + wl + wc) == pytest.approx(1.0)
+    # Pesos da recompensa (app.services.reward): sem Redis -> padrão
+    from app.services import reward
 
-    monkeypatch.setattr(bandits, "_get_rds", lambda: _FakeRedis('{"quality": 2, "latency": 1, "cost": 1}'))
-    wq, wl, wc = bandits._load_nsga_weights()
+    monkeypatch.setattr(reward, "_get_rds", lambda: None)
+    (wq, wl, wc), source = reward.load_reward_weights("text")
+    assert (wq + wl + wc) == pytest.approx(1.0)
+    assert source == "default"
+
+    monkeypatch.setattr(reward, "_get_rds", lambda: _FakeRedis('{"quality": 2, "latency": 1, "cost": 1}'))
+    (wq, wl, wc), source = reward.load_reward_weights("text")
     assert wq == pytest.approx(0.5)
     assert wl == pytest.approx(0.25)
     assert wc == pytest.approx(0.25)
+    assert source == "nsga"
 
-    monkeypatch.setattr(bandits, "_load_nsga_weights", lambda: (0.6, 0.3, 0.1))
+    monkeypatch.setattr(reward, "load_reward_weights", lambda modality="text": ((0.6, 0.3, 0.1), "nsga"))
     r = bandits.compute_reward("m1", quality=8.0, latency_s=1.0, cost_per_1k=0.1)
     assert 0.0 <= r <= 1.0
 
-    def _boom():
-        """Execute the boom routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
+    def _boom(modality="text"):
+        """Simulate a failure while loading reward weights."""
         raise RuntimeError("x")
 
-    monkeypatch.setattr(bandits, "_load_nsga_weights", _boom)
+    monkeypatch.setattr(reward, "load_reward_weights", _boom)
     assert bandits.compute_reward("m1", quality=1.0, latency_s=1.0, cost_per_1k=0.1) == 0.0
 
 

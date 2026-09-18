@@ -24,6 +24,7 @@ def _redis_client():
 
 def build_frozen_snapshot() -> Dict[str, Any]:
     """Capture current routing settings for reproducible eval execution."""
+    from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
     from app.settings_dynamic import settings
 
     return {
@@ -31,6 +32,7 @@ def build_frozen_snapshot() -> Dict[str, Any]:
         "NSGA_W_LATENCY": float(settings.NSGA_W_LATENCY),
         "NSGA_W_COST": float(settings.NSGA_W_COST),
         "BANDIT_EPSILON": float(settings.get("BANDIT_EPSILON", 0.0) or 0.0),
+        "UNCERTAINTY_THRESHOLD": float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD)),
         "OPENROUTER_EXPLORATION_ENABLED": bool(settings.get("OPENROUTER_EXPLORATION_ENABLED", False)),
         "OPENROUTER_EXPLORATION_RATE": float(settings.get("OPENROUTER_EXPLORATION_RATE", 0.0) or 0.0),
     }

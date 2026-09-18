@@ -144,8 +144,9 @@ def process_feedback(request: UserFeedbackRequest) -> ProcessedFeedback:
 
     # Compute reward
     latency = request.latency_s if request.latency_s is not None else 1.0
-    cost = request.cost if request.cost is not None else 0.001
-    reward = compute_reward(request.model, blended_quality, latency, cost)
+    # ``request.cost`` é o custo total da resposta original (USD), sem contagem de
+    # tokens: não dá para convertê-lo em USD/1k, então o termo de custo fica neutro.
+    reward = compute_reward(request.model, blended_quality, latency, None, modality=request.modality)
 
     # Update bandit with feedback-adjusted quality
     try:

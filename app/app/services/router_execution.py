@@ -612,10 +612,14 @@ async def route_and_answer_internal_impl(
         "load_time_s": load_time_s,
         "estimated_cost_usd": total_cost,
         "cost_per_1k": total_cost,
+        # Custo de caixa (sem a ocupação local imputada): base de orçamento/cobrança.
+        "cash_cost_usd": float(meta_safe.get("cash_cost_usd", total_cost) or 0.0),
         "metadata": {
             "raw_payload": meta_safe.get("raw_payload"),
             "prompt_tokens": p_tok,
             "completion_tokens": c_tok,
+            "cash_cost_usd": meta_safe.get("cash_cost_usd", total_cost),
+            "imputed_cost_usd": meta_safe.get("imputed_cost_usd", 0.0),
             "load_time": load_time_s,
             "uncertainty_score": uncertainty_score,
             "citations": retrieval_bundle.get("citations", []),

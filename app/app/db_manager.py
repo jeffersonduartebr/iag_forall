@@ -193,7 +193,9 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "score_after": "FLOAT",
             "event_type": "VARCHAR(50)",
             "modality": "VARCHAR(32) DEFAULT 'text'",
-            "image_hash": "VARCHAR(128) NULL"
+            "image_hash": "VARCHAR(128) NULL",
+            # Notas por dimensão da rubrica (clareza, acurácia, alinhamento) em JSON.
+            "rubric_json": "TEXT NULL"
         }
     },
 

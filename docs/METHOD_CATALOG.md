@@ -333,36 +333,6 @@ Resumo do arquivo: health.py — Deep Health Checks for All Dependencies
 - Classe `ComponentHealth` (`app/app/health.py:76`): Classe `ComponentHealth`: organiza responsabilidades de health.
   - `ComponentHealth.to_dict(self)` (`app/app/health.py:84`): Executa to dict.
 
-## `app/app/judges/heuristic.py`
-
-Resumo do arquivo: Módulo principal: descreve responsabilidades e integrações deste arquivo.
-
-### Funções de módulo
-
-- `_len_norm(t)` (`app/app/judges/heuristic.py:3`): Executa len norm.
-- `score_coherence(q, a)` (`app/app/judges/heuristic.py:11`): Executa score coherence.
-- `score_task_fit(q, a)` (`app/app/judges/heuristic.py:18`): Executa score task fit.
-- `score_helpfulness(q, a)` (`app/app/judges/heuristic.py:25`): Executa score helpfulness.
-
-## `app/app/judges/judge.py`
-
-Resumo do arquivo: Módulo principal: descreve responsabilidades e integrações deste arquivo.
-
-### Funções de módulo
-
-- `judge_answer(query, answer, use_rag)` (`app/app/judges/judge.py:9`): Executa judge answer.
-- `_heuristic_task(judge_id, fn, q, a)` (`app/app/judges/judge.py:32`): Executa heuristic task.
-
-## `app/app/judges/llm.py`
-
-Resumo do arquivo: Módulo principal: descreve responsabilidades e integrações deste arquivo.
-
-### Funções de módulo
-
-- `_build_prompt(user_q, assistant_a, use_rag)` (`app/app/judges/llm.py:15`): Executa build prompt.
-- `_score_sync(user_q, assistant_a, judge_id, use_rag)` (`app/app/judges/llm.py:31`): Executa score sync.
-- `score(user_q, assistant_a, idx)` (`app/app/judges/llm.py:48`): Executa score.
-
 ## `app/app/judges.py`
 
 Resumo do arquivo: judges.py (VERSÃO FINAL: Binary Verdict + Tie-Breaker Meta-Judge)

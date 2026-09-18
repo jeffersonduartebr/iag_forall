@@ -20,6 +20,7 @@ from typing import Dict, List
 
 # Importa helpers do bandits.py
 from app.bandits import get_snapshot, sample_metrics_from_snapshot
+from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.model_registry import is_vision_only_model, model_supports_vision
 from app.reliability import get_cascade_detector, get_circuit_breaker_manager
 from app.settings_dynamic import settings
@@ -100,7 +101,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     sampled_qs = sample_metrics_from_snapshot(snapshot)
 
     # Limiar dinâmico definido pelo NSGA-II
-    uq_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
+    uq_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD))
 
     is_high_uncertainty = uncertainty_score > uq_threshold
 

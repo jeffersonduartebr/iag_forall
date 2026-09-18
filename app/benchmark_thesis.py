@@ -221,6 +221,15 @@ def load_datasets():
 # ==============================================================================
 # 🌊 FRUGAL GPT
 # ==============================================================================
+def _inference_cost(meta: dict) -> float:
+    """Custo de inferência de uma chamada direta ao provider: caixa + ocupação local imputada.
+
+    O roteador já reporta esse total em ``cost_per_1k``; os baselines que chamam o
+    provider diretamente precisam somar ``cost_imputed_usd`` para ficarem comparáveis.
+    """
+    return float(meta.get("cost_per_1k", 0.0) or 0.0) + float(meta.get("cost_imputed_usd", 0.0) or 0.0)
+
+
 async def run_frugal_cascade(query: str):
     """Run frugal cascade.
 
@@ -240,13 +249,13 @@ This function coordinates the main execution path for that step."""
     if score_local >= 8.0:
         return {
             "answer": ans_local, "model": "FrugalGPT (Local)",
-            "cost": meta_local.get("cost_per_1k", 0.0),
+            "cost": _inference_cost(meta_local),
             "latency": time.time() - start_t, "load_time": meta_local.get("load_time", 0.0)
         }
     
     await limiter_sota.wait()
     ans_sota, meta_sota = await call_model(MODEL_SOTA, query, max_tokens=512, temperature=0.1)
-    total_cost = meta_local.get("cost_per_1k", 0.0) + meta_sota.get("cost_per_1k", 0.0)
+    total_cost = _inference_cost(meta_local) + _inference_cost(meta_sota)
     
     return {
         "answer": ans_sota, "model": "FrugalGPT (SOTA)",
@@ -315,7 +324,7 @@ async def evaluate_interaction(mode_label: str, task: dict, run_id: int):
             if "gpt" in target: await limiter_sota.wait()
             answer, meta = await call_model(target, query, max_tokens=512, temperature=0.1)
             model_used = target
-            cost = meta.get("cost_per_1k", 0.0)
+            cost = _inference_cost(meta)
             load_time = meta.get("load_time", 0.0)
             if cost <= 1e-6 and "gpt" in target: cost = estimate_fallback_cost(query, answer)
 
@@ -323,7 +332,7 @@ async def evaluate_interaction(mode_label: str, task: dict, run_id: int):
             await limiter_sota.wait()
             answer, meta = await call_model(MODEL_SOTA, query, max_tokens=512, temperature=0.1)
             model_used = MODEL_SOTA
-            cost = meta.get("cost_per_1k", 0.0)
+            cost = _inference_cost(meta)
             if cost <= 1e-6: cost = estimate_fallback_cost(query, answer)
             uncertainty = await asyncio.to_thread(get_uncertainty_score, query, "text")
 
@@ -331,7 +340,7 @@ async def evaluate_interaction(mode_label: str, task: dict, run_id: int):
             model_id = LOCAL_BASELINES[mode_label]
             answer, meta = await call_model(model_id, query, max_tokens=512, temperature=0.1)
             model_used = model_id
-            cost = meta.get("cost_per_1k", 0.0)
+            cost = _inference_cost(meta)
             load_time = meta.get("load_time", 0.0)
             uncertainty = await asyncio.to_thread(get_uncertainty_score, query, "text")
             

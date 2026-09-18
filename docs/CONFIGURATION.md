@@ -70,8 +70,28 @@ flowchart TD
 - `REQUEST_TIMEOUT_SECONDS`, `REQUEST_DEDUP_ENABLED`
 - `BANDIT_EPSILON`
 - `NSGA_W_QUALITY`, `NSGA_W_LATENCY`, `NSGA_W_COST`, `NSGA_W_ALIGNMENT`
+- `UNCERTAINTY_THRESHOLD` (padrão `0.45`, fonte única em `config/constants.py`): acima dele a consulta é tratada como fora da região de competência. Os ajustadores online o movem em [0,20; 0,80], exceto sob política congelada.
+- `REWARD_COST_BASELINE_PER_1K` (padrão `0.007` USD/1k): C_base do termo de custo da recompensa. Recalibrar com `services.reward.calibrate_cost_baseline` quando o pool de candidatos ou seus preços mudarem.
+- `REWARD_WEIGHT_MIN_SHARE` (padrão `0.05`): parcela mínima de cada objetivo nos pesos da recompensa publicados pelo NSGA-II (`nsga:reward_weights:<modalidade>`).
+- `JUDGE_SCORING_MODE`: `rubric` (padrão: clareza, acurácia e alinhamento pedagógico, 0–10, por dois juízes) ou `binary` (CORRECT/INCORRECT, para benchmarks com gabarito).
+- `JUDGE_RUBRIC_WEIGHTS` (padrão `{"clareza":0.3,"acuracia":0.5,"alinhamento":0.2}`), `JUDGE_RUBRIC_DISAGREEMENT` (padrão `3.0`: diferença em Q a partir da qual o meta-juiz desempata pela mediana).
 - `CANDIDATE_MODELS_LIST`, `CANDIDATE_VISION_MODELS_LIST`, `CANDIDATE_MULTIMODAL_MODELS_LIST`
 - `CANDIDATE_TOOL_MODELS_LIST`: modelos habilitados para tool/function calling. Quando há `tools` na requisição, o roteador restringe a seleção a modelos com suporte (esta lista, ou capacidade inferida via registry/`supported_parameters` do OpenRouter). Sem nenhum candidato capaz → HTTP 422.
+
+## Custo imputado da inferência local
+Modelos locais não geram cobrança por token, mas ocupam o equipamento. O custo de inferência (EMA, NSGA-II, recompensa, `query_log.estimated_cost_usd`) soma ao custo de caixa o tempo de ocupação imputado:
+
+```
+taxa_USD/h = LOCAL_COST_USD_PER_HOUR (se > 0)
+           = LOCAL_COST_HW_PRICE_USD / (LOCAL_COST_HW_LIFETIME_YEARS * 8760 * LOCAL_COST_HW_UTILIZATION)
+             + (LOCAL_COST_POWER_W / 1000) * LOCAL_COST_ENERGY_USD_PER_KWH
+C_local    = (t_ocupação_s / 3600) * taxa_USD/h / LOCAL_COST_PARALLEL_SLOTS
+```
+
+- `t_ocupação` vem de `total_duration` do Ollama (tempo de relógio em streams).
+- `LOCAL_COST_IMPUTATION_ENABLED=0` desliga a imputação.
+- O orçamento/cobrança por tenant usa somente o custo de caixa (`cash_cost_usd`).
+- Os valores padrão de hardware/energia são provisórios: confirme preço, consumo sob carga e tarifa antes de experimentos.
 
 ## Resiliência
 - `CIRCUIT_BREAKER_FAIL_MAX`, `CIRCUIT_BREAKER_RESET_TIMEOUT`

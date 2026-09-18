@@ -39,6 +39,10 @@ from app.services.bandit_centroids import (
     nearest_centroid_from_array,
     normalize_centroid_vec,
 )
+
+# Recompensa acoplada ao NSGA-II: implementação em app.services.reward, reexportada
+# aqui para os chamadores atuais (router_core, user_feedback, governança, tools).
+from app.services.reward import compute_reward  # noqa: F401
 from app.settings_dynamic import settings
 from app.utils.redis_async_ops import redis_get_str, redis_hgetall_map
 from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
@@ -980,80 +984,6 @@ def bandit_update(
     # Ele espera que o snapshot (stats) esteja disponível.
     # O Redis já foi atualizado acima via _set_ctx_stats, então está ok.
 
-
-# ============================================================
-# Recompensa NSGA-II aware
-# ============================================================
-
-def _load_nsga_weights() -> Tuple[float, float, float]:
-    """
-    Lê pesos NSGA-II de Redis (nsga:weights) ou usa defaults.
-    Formato esperado:
-      {"quality": 0.55, "latency": 0.30, "cost": 0.15}
-    """
-    w_q, w_l, w_c = 0.55, 0.30, 0.15
-    rds = _get_rds()
-    if not rds:
-        return w_q, w_l, w_c
-    try:
-        raw = rds.get("nsga:weights")
-        if not raw:
-            return w_q, w_l, w_c
-        obj = json.loads(raw)
-        if not isinstance(obj, dict):
-            return w_q, w_l, w_c
-        w_q = float(obj.get("quality", w_q))
-        w_l = float(obj.get("latency", w_l))
-        w_c = float(obj.get("cost", w_c))
-        total = w_q + w_l + w_c
-        if total <= 0:
-            return 0.55, 0.30, 0.15
-        w_q, w_l, w_c = w_q / total, w_l / total, w_c / total
-        return w_q, w_l, w_c
-    except Exception as e:
-        logger.warning(f"[bandit] Falha ao carregar nsga:weights: {e}")
-        return w_q, w_l, w_c
-
-
-def compute_reward(
-    model: str,
-    quality: float,
-    latency_s: float,
-    cost_per_1k: Optional[float] = None,
-) -> float:
-    """
-    Converte métricas em recompensa [0..1] com pesos NSGA-II dinâmicos.
-
-    - quality  ∈ [0..10] → normalizado [0..1]
-    - latência: logística com x0=20s (quanto menor melhor)
-    - custo: penaliza custos acima de baseline; bonifica próximos ao local
-    """
-    try:
-        w_q, w_l, w_c = _load_nsga_weights()
-
-        # qualidade
-        q = max(0.0, min(10.0, float(quality))) / 10.0
-
-        # latência (logística invertida)
-        L, k, x0 = 1.0, 0.12, 20.0
-        lat_score = L / (1.0 + math.exp(k * (latency_s - x0)))
-        lat_score = max(0.0, min(1.0, lat_score))
-
-        # custo
-        cost_score = 1.0
-        if cost_per_1k is not None:
-            baseline = 0.12
-            ratio = float(cost_per_1k) / baseline if baseline > 0 else 1.0
-            # >1 significa mais caro que baseline
-            cost_score = 1.0 / (1.0 + max(0.0, ratio - 1.0))
-            cost_score = max(0.3, min(1.0, cost_score))
-
-        reward = w_q * q + w_l * lat_score + w_c * cost_score
-        reward = max(0.0, min(1.0, float(reward)))
-        return reward
-    except Exception as e:
-        logger.warning(f"[bandit] Falha em compute_reward: {e}")
-        return 0.0
 
 # ============================================================
 # Helpers para UQ e Router Strategy (Compatibilidade)

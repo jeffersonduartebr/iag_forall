@@ -9,9 +9,11 @@ from typing import Any, Dict, Tuple
 
 from sqlalchemy import text
 
+from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.db import get_engine
 from app.settings_dynamic import settings
 
+from .frozen_policy import is_frozen_policy_active
 from .nsga_metrics import NSGA_UQ_THRESH
 
 logger = logging.getLogger("nsga-updater")
@@ -27,8 +29,11 @@ def _db_engine():
 def tune_uncertainty_threshold(current_efficiency: float) -> float:
     """Execute the tune uncertainty threshold routine.
 
-    This helper encapsulates one focused step used by the surrounding workflow."""
-    current_thresh = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
+    This helper encapsulates one focused step used by the surrounding workflow.
+    Under frozen policy the threshold is left untouched so eval runs stay reproducible."""
+    current_thresh = float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD))
+    if is_frozen_policy_active():
+        return current_thresh
 
     if current_efficiency < 2.0:
         new_thresh = max(0.20, current_thresh - 0.05)
@@ -151,7 +156,7 @@ def tune_risk_factors() -> Dict[str, Any]:
         sota_high_uq = []
         local_high_uq = []
         local_low_uq = []
-        uq_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
+        uq_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD))
 
         for row in rows:
             model = row[0]
@@ -277,6 +282,8 @@ def calibrate_uncertainty_threshold() -> Dict[str, Any]:
     """
     if not settings.UQ_CALIBRATION_ENABLED:
         return {"status": "disabled"}
+    if is_frozen_policy_active():
+        return {"status": "frozen"}
 
     result: dict[str, Any] = {"old_threshold": None, "new_threshold": None, "metrics": {}}
 
@@ -300,7 +307,7 @@ def calibrate_uncertainty_threshold() -> Dict[str, Any]:
         if len(rows) < 100:
             return {"status": "insufficient_data", "count": len(rows)}
 
-        current_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", 0.45))
+        current_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD))
         result["old_threshold"] = current_threshold
 
         high_uq_qualities = []

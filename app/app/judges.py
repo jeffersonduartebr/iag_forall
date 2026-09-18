@@ -2,16 +2,22 @@
 # Objective: Application runtime code for judges.
 """Evaluate router answers with heuristic and model-based judges.
 
-The current judge pipeline is optimized for operational scoring rather than
-academic benchmarking. It uses binary verdicts, a short-lived verdict cache,
-adaptive judge selection, and a meta-judge that only runs when primary judges
-disagree. This keeps the quality signal useful while limiting cost and latency.
+Two LLM scoring modes are available (``JUDGE_SCORING_MODE``):
+
+- ``rubric`` (default): two judges rate clarity, conceptual accuracy and
+  pedagogical alignment on 0-10 (``services.judge_rubric``); Q is the weighted
+  mean and a meta-judge breaks large disagreements by per-dimension median.
+- ``binary``: CORRECT/INCORRECT verdicts with a binary meta-judge, kept for
+  reference-guided benchmarks with ground truth.
+
+Both use a short-lived verdict cache and adaptive judge selection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import random
 import re
@@ -29,6 +35,14 @@ from .db import get_engine
 from .embeddings import embed_text
 from .model_registry import filter_configured_model_names, is_model_configured
 from .providers_async import call_model
+from .services.judge_rubric import (
+    build_rubric_prompt,
+    judge_scoring_mode,
+    parse_rubric_weights,
+    rate_with_rubric,
+    score_with_rubric,
+    weighted_quality,
+)
 from .settings_dynamic import settings
 from .vectorstore import query_embedding
 
@@ -55,7 +69,7 @@ class VerdictCache:
         self.maxsize = maxsize
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
-        self._data: "OrderedDict[str, Tuple[float, float]]" = OrderedDict()  # key -> (score, timestamp)
+        self._data: "OrderedDict[str, Tuple[Any, float]]" = OrderedDict()  # key -> (payload, timestamp)
         self._hits = 0
         self._misses = 0
 
@@ -64,8 +78,8 @@ class VerdictCache:
         payload = f"{query}|{answer[:500]}".encode("utf-8", errors="ignore")
         return hashlib.sha256(payload).hexdigest()
 
-    def get(self, query: str, answer: str) -> Optional[float]:
-        """Return a cached verdict score when the query/answer pair is still fresh."""
+    def get(self, query: str, answer: str) -> Optional[Any]:
+        """Return a cached verdict payload when the query/answer pair is still fresh."""
         key = self._make_key(query, answer)
         now = time.time()
         with self._lock:
@@ -81,8 +95,8 @@ class VerdictCache:
             self._hits += 1
             return score
 
-    def set(self, query: str, answer: str, score: float) -> None:
-        """Store one normalized verdict score in the cache."""
+    def set(self, query: str, answer: str, score: Any) -> None:
+        """Store one verdict payload (binary score or rubric result) in the cache."""
         key = self._make_key(query, answer)
         now = time.time()
         with self._lock:
@@ -104,6 +118,7 @@ class VerdictCache:
 
 
 _verdict_cache = VerdictCache()
+_rubric_cache = VerdictCache()  # payloads da rubrica (dict), separados dos vereditos binários
 
 
 def get_verdict_cache_stats() -> Dict[str, Any]:
@@ -453,31 +468,40 @@ def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitne
     except Exception as exc:
         logger.warning("[Judges] persist metrics fail: %s", exc)
 
-def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=None):
-    """Persist one raw judge evaluation event for audit and analysis."""
+def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=None, rubric=None):
+    """Persist one raw judge evaluation event for audit and analysis.
+
+    ``rubric`` (per-dimension scores) is stored in ``judge_logs.rubric_json``.
+    """
     try:
         q_short = query[:2000] if query else ""
         a_short = answer[:4000] if answer else ""
+        params = {
+            "q": q_short,
+            "a": a_short,
+            "jm": judge_model,
+            "sc": score,
+            "mod": modality,
+            "ih": image_hash,
+        }
+        if rubric is None:
+            sql = """
+                INSERT INTO judge_logs
+                (query, answer, judge_model, score_before, score_after,
+                 event_type, modality, image_hash, created_at)
+                VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, NOW())
+            """
+        else:
+            sql = """
+                INSERT INTO judge_logs
+                (query, answer, judge_model, score_before, score_after,
+                 event_type, modality, image_hash, rubric_json, created_at)
+                VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, :rubric, NOW())
+            """
+            params["rubric"] = json.dumps(rubric, ensure_ascii=False)
 
         with _get_judge_engine().begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO judge_logs
-                    (query, answer, judge_model, score_before, score_after,
-                     event_type, modality, image_hash, created_at)
-                    VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, NOW())
-                    """
-                ),
-                {
-                    "q": q_short,
-                    "a": a_short,
-                    "jm": judge_model,
-                    "sc": score,
-                    "mod": modality,
-                    "ih": image_hash
-                },
-            )
+            conn.execute(text(sql), params)
     except Exception as exc:
         logger.warning("[Judges] persist log fail: %s", exc)
 
@@ -750,6 +774,51 @@ CORRECT ou INCORRECT
 
 
 # ============================================================
+# 📐 Rubrica de 3 dimensões (clareza, acurácia, alinhamento)
+# ============================================================
+
+async def _llm_rubric_score(query, answer, use_rag, modality, image_b64, reference=None) -> Optional[Dict[str, Any]]:
+    """Score one answer on the three-dimension rubric with two judges.
+
+    Orchestration (failed judges dropped, meta-judge median on disagreement) lives
+    in ``services.judge_rubric.score_with_rubric``. Returns ``None`` when no judge
+    produced a valid rating.
+    """
+    cached = _rubric_cache.get(query, answer)
+    if cached is not None:
+        return cached
+
+    ctx = await get_rag_context(query) if use_rag else ""
+    img_desc = await _describe_image_if_needed(image_b64, modality)
+    prompt = build_rubric_prompt(query, answer, reference=reference, rag_context=ctx, image_description=img_desc)
+    try:
+        weights = parse_rubric_weights(settings.get("JUDGE_RUBRIC_WEIGHTS", None))
+    except Exception:
+        weights = parse_rubric_weights(None)
+
+    def _record(model: str, ratings: Dict[str, float], meta: Dict[str, Any]) -> None:
+        q01 = weighted_quality(ratings, weights) / 10.0
+        lat = float(meta.get("latency", 2.0) or 2.0)
+        fitness = q01 * 0.7 + (1.0 - min(lat, 10.0) / 10.0) * 0.3
+        cost = float(meta.get("cost_per_1k", 0.0) or 0.0)
+        _persist_judge_metrics(judge_model=model, score=q01, latency=lat, cost=cost, consistency=1.0, fitness=fitness)
+        _persist_judge_log(query, answer, model, q01 * 10.0, modality, rubric=ratings)
+
+    selected = _choose_two(_resolve_judge_models(), _load_judge_stats(CONSIST_WINDOW_MIN))
+    payload = await score_with_rubric(
+        [sj.model for sj in selected],
+        lambda model: rate_with_rubric(call_model, model, prompt, TEMP_JUDGE, MAX_TOKENS_JUDGE),
+        weights,
+        meta_model=_resolve_meta_judge_model,
+        disagreement=_safe_setting_float("JUDGE_RUBRIC_DISAGREEMENT", 3.0),
+        on_rating=_record,
+    )
+    if payload is not None:
+        _rubric_cache.set(query, answer, payload)
+    return payload
+
+
+# ============================================================
 # 🌐 API pública
 # ============================================================
 
@@ -777,7 +846,9 @@ async def judge_answer(
 
     The function can emit heuristic-only, LLM-only, or hybrid outputs depending
     on runtime settings. Every returned item contains a ``judge_id`` and a
-    normalized ``score`` in the 0-1 range used by the router.
+    normalized ``score`` in the 0-1 range used by the router. In rubric mode the
+    LLM item (``llm_rubric``) also carries ``dimensions`` and ``dispersion``; if
+    every LLM judge fails in ``llm`` mode the item is ``heuristic_fallback``.
     """
     if not answer or not isinstance(answer, str):
         return [{"judge_id": "heuristic", "score": 0.0}]
@@ -790,7 +861,28 @@ async def judge_answer(
         base = heuristic_score(answer)
         results.append({"judge_id": "heuristic", "score": round(base, 3)})
 
-    if mode in ("llm", "hybrid"):
+    if mode in ("llm", "hybrid") and judge_scoring_mode(settings) == "rubric":
+        rubric = await _llm_rubric_score(
+            query=query,
+            answer=answer,
+            use_rag=use_rag,
+            modality=modality,
+            image_b64=image_b64,
+            reference=reference,
+        )
+        if rubric is not None:
+            results.append({
+                "judge_id": "llm_rubric",
+                "score": round(rubric["quality"] / 10.0, 3),
+                "dimensions": rubric["dimensions"],
+                "dispersion": rubric["dispersion"],
+                "n_judges": rubric["n_judges"],
+                "judges": rubric.get("judges", []),
+            })
+        elif mode == "llm":
+            # Nenhum juiz LLM respondeu: aproximação heurística, sinalizada como tal.
+            results.append({"judge_id": "heuristic_fallback", "score": round(heuristic_score(answer), 3)})
+    elif mode in ("llm", "hybrid"):
         score_llm = await llm_based_score(
             query=query,
             answer=answer,

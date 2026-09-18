@@ -12,6 +12,9 @@ import pytest
 
 from app import judges
 
+# Estes testes exercitam o caminho binário (CORRECT/INCORRECT); a rubrica é o padrão.
+_BINARY_GET = lambda key, default=None: {"JUDGE_SCORING_MODE": "binary"}.get(key, default)  # noqa: E731
+
 
 def test_verdict_cache_and_helpers():
     """Testa verdict cache and helpers."""
@@ -115,7 +118,7 @@ async def test_llm_pair_score_and_judge_answer_modes(monkeypatch):
     judges._verdict_cache = judges.VerdictCache()
     monkeypatch.setattr(judges, "_load_judge_stats", lambda w: {})
     monkeypatch.setattr(judges, "_choose_two", lambda models, stats: [judges.SelectedJudge("j1", 1.0), judges.SelectedJudge("j2", 1.0)])
-    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_MODELS=["j1", "j2"], JUDGES_MODE="hybrid"))
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_MODELS=["j1", "j2"], JUDGES_MODE="hybrid", get=_BINARY_GET))
 
     calls = {"n": 0}
 
@@ -170,7 +173,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     out = await judges.judge_answer("q", "a")
     assert len(out) == 2
 
-    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGES_MODE="heuristic"))
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGES_MODE="heuristic", get=_BINARY_GET))
     out2 = await judges.judge_answer("q", "a")
     assert len(out2) == 1 and out2[0]["judge_id"] == "heuristic"
 
@@ -308,7 +311,7 @@ async def test_describe_image_and_llm_pair_edge_cases(monkeypatch):
     judges._verdict_cache = judges.VerdictCache()
     monkeypatch.setattr(judges, "_load_judge_stats", lambda w: {})
     monkeypatch.setattr(judges, "_choose_two", lambda models, stats: [judges.SelectedJudge("j1", 1.0)])
-    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_MODELS=["j1"], JUDGES_MODE="llm"))
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_MODELS=["j1"], JUDGES_MODE="llm", get=_BINARY_GET))
     async def _get_rag_context(_q):
         return ""
 
@@ -334,7 +337,7 @@ async def test_describe_image_and_llm_pair_edge_cases(monkeypatch):
     async def _llm_fail(**kwargs):
         raise RuntimeError("llm fail")
 
-    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGES_MODE="llm"))
+    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGES_MODE="llm", get=_BINARY_GET))
     monkeypatch.setattr(judges, "llm_based_score", _llm_fail)
     with pytest.raises(RuntimeError, match="llm fail"):
         await judges.judge_answer("q", "a")

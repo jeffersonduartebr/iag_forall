@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+from .reward import cost_per_1k_from_total
+
 
 async def process_background_feedback_impl(
     *,
@@ -102,6 +104,7 @@ async def process_background_feedback_impl(
             except Exception:
                 pass
 
+        judge_rubric = None
         if should_judge:
             try:
                 deps["logger"].info(
@@ -111,10 +114,19 @@ async def process_background_feedback_impl(
                 valid_scores = [score["score"] for score in judge_scores if "score" in score]
                 final_quality = round((float(np.mean(valid_scores)) if valid_scores else 5.0) * 10.0, 2)
                 quality_source = "judge"
-                is_correct_label = final_quality >= 7.0
-                predictor.learn(query_embedding, is_correct_label)
-                predictor.record_outcome(predicted_error_prob, not is_correct_label)
-                predictor.save()
+                if judge_scores and all(s.get("judge_id") == "heuristic_fallback" for s in judge_scores):
+                    # Nenhum juiz LLM respondeu: medição grosseira, sinalizada e fora do preditor.
+                    quality_source = "heuristic_fallback"
+                rubric_entry = next((s for s in judge_scores if s.get("judge_id") == "llm_rubric"), None)
+                if rubric_entry is not None:
+                    judge_rubric = {
+                        k: rubric_entry.get(k) for k in ("score", "dimensions", "dispersion", "n_judges", "judges")
+                    }
+                if quality_source == "judge":
+                    is_correct_label = final_quality >= 7.0
+                    predictor.learn(query_embedding, is_correct_label)
+                    predictor.record_outcome(predicted_error_prob, not is_correct_label)
+                    predictor.save()
             except Exception:
                 final_quality = 5.0
                 quality_source = "fallback_default"
@@ -129,7 +141,13 @@ async def process_background_feedback_impl(
             final_quality = max(0.0, min(10.0, model_stats.get("mean", 0.5) * 10.0))
 
         try:
-            reward = deps["compute_reward"](chosen_model, final_quality, latency_s, cost_val)
+            reward = deps["compute_reward"](
+                chosen_model,
+                final_quality,
+                latency_s,
+                cost_per_1k_from_total(cost_val, prompt_tokens, completion_tokens),
+                modality=modality,
+            )
         except Exception:
             reward = 0.0
 
@@ -240,6 +258,9 @@ async def process_background_feedback_impl(
                 deps["ROUTER_LOCAL_USAGE_RATIO"].set(1.0)
         except Exception:
             pass
+
+        if judge_rubric is not None and isinstance(raw_payload, dict):
+            raw_payload = {**raw_payload, "judge_rubric": judge_rubric}
 
         try:
             deps["insert_query_log"](

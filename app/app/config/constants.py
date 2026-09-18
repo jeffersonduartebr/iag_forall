@@ -177,6 +177,16 @@ OLLAMA_GPU_INDEX: int = int(os.getenv("OLLAMA_GPU_INDEX", "0"))
 OLLAMA_PULL_TIMEOUT: int = int(os.getenv("OLLAMA_PULL_TIMEOUT", "900"))
 
 # ==============================================================================
+# Uncertainty Quantification Constants
+# ==============================================================================
+
+# Epistemic-uncertainty threshold tau_uq (thesis eq. ``eq:incerteza``): u(q) above
+# it modulates routing risk. Single source of truth for the catalog default and
+# every code fallback; online tuners may move the live value within [0.20, 0.80]
+# except under frozen policy.
+DEFAULT_UNCERTAINTY_THRESHOLD: float = 0.45
+
+# ==============================================================================
 # Judge Constants
 # ==============================================================================
 

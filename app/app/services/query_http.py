@@ -315,6 +315,13 @@ def _record_stream_side_effects(
         cost = float(get_model_cost(model, int(p_tok or 0), int(c_tok or 0)) or 0.0)
     except Exception:
         cost = 0.0
+    # Custo de inferência: caixa + ocupação imputada (streams locais usam o tempo de relógio).
+    try:
+        from ..utils.pricing import impute_local_cost, is_local_model
+
+        inference_cost = cost + (impute_local_cost(latency) if is_local_model(model) else 0.0)
+    except Exception:
+        inference_cost = cost
     try:
         from ..services.governance_runtime import schedule_runtime_usage
 
@@ -338,7 +345,7 @@ def _record_stream_side_effects(
             chosen_model=model,
             modality="text",
             latency_s=latency,
-            cost_val=cost,
+            cost_val=inference_cost,
             image_b64=None,
             raw_payload={"streamed": True},
             prompt_tokens=int(p_tok or 0),

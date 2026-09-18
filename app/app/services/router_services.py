@@ -85,8 +85,9 @@ def parse_meta_cost(
 
     Returns:
         tuple[int, int, float, float, dict[str, Any]]: Prompt tokens, completion
-        tokens, total estimated cost, model load time in seconds, and a sanitized
-        metadata dictionary safe for downstream consumers.
+        tokens, total inference cost (cash + imputed local occupancy), model load
+        time in seconds, and a sanitized metadata dictionary (with
+        ``cash_cost_usd`` and ``imputed_cost_usd``) safe for downstream consumers.
     """
     p_tok = 0
     c_tok = 0
@@ -105,6 +106,16 @@ def parse_meta_cost(
                 total_cost = float(cost_lookup(chosen_model, p_tok, c_tok))
             except Exception:
                 total_cost = 0.0
+
+        # Custo de inferência = caixa + ocupação imputada do equipamento local. O
+        # valor de caixa segue separado para orçamento/cobrança por tenant.
+        try:
+            imputed = max(0.0, float(meta.get("cost_imputed_usd", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            imputed = 0.0
+        meta["cash_cost_usd"] = total_cost
+        meta["imputed_cost_usd"] = imputed
+        total_cost += imputed
 
     meta_safe = meta if isinstance(meta, dict) else {}
     return p_tok, c_tok, total_cost, load_time_s, meta_safe

@@ -25,6 +25,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
+
 logger = logging.getLogger(__name__)
 
 # In-memory fallback store used when Redis is unavailable (also exercised by tests).
@@ -286,7 +288,7 @@ def suggest_escalation(
         return None
 
     risk = get_cluster_risk(cluster_id)
-    uq_threshold = _cfg_float("UNCERTAINTY_THRESHOLD", 0.7)
+    uq_threshold = _cfg_float("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD)
     high_uq = uncertainty is not None and float(uncertainty) >= uq_threshold
     if not (risk.get("high_risk") or high_uq):
         return None

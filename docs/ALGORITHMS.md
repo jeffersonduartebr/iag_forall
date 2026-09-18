@@ -110,6 +110,27 @@ Resumo:
 2. Atualiza estatísticas históricas e bandit.
 3. Ajusta comportamento futuro do roteador.
 
+## 8. Juízes (rubrica de três dimensões)
+Arquivos: `app/app/judges.py`, `app/app/services/judge_rubric.py`
+
+1. Dois juízes pontuam, de 0 a 10, clareza, acurácia conceitual e alinhamento pedagógico.
+2. `Q = Σ w_i·d_i / Σ w_i` (padrão 0,3 / 0,5 / 0,2); o desvio entre juízes por dimensão é registrado como concordância.
+3. Se os dois divergem em mais de `JUDGE_RUBRIC_DISAGREEMENT` pontos de Q, o meta-juiz também pontua e cada dimensão fica com a mediana.
+4. Juiz que falha ou devolve saída ilegível é descartado (nunca vira nota 0). Se todos falham, usa-se a heurística marcada como `heuristic_fallback`.
+5. `JUDGE_SCORING_MODE=binary` mantém o veredito CORRECT/INCORRECT para benchmarks com gabarito.
+
+## 9. Recompensa acoplada ao NSGA-II
+Arquivos: `app/app/services/reward.py`, `app/app/nsga_weights_updater.py`
+
+```
+r = w_q·Q/10 + w_l·1/(1+e^{k(L−x0)}) + w_c·max(0,3; 1/(1+max(0, C/C_base − 1)))
+```
+
+- `k = 0,12`, `x0 = 20 s`, `C` em USD/1k tokens (custo de inferência, incluindo a ocupação local imputada), `C_base = REWARD_COST_BASELINE_PER_1K`.
+- A cada ciclo, o NSGA-II publica `nsga:reward_weights:<modalidade>` com as parcelas `(W_Q·q̄, W_L·l̄, W_C·c̄)` normalizadas, no ponto de operação do portfólio escolhido. Os `NSGA_W_*` estão em escalas brutas; as parcelas os tornam adimensionais.
+- Sem pesos publicados, usa 0,55/0,30/0,15 e incrementa `reward_weights_source_total{source="default"}`.
+- Sob política congelada, o NSGA-II não publica pesos nem ajusta `UNCERTAINTY_THRESHOLD`.
+
 ## Limitações atuais
 1. Heurísticas dependem da qualidade dos dados históricos.
 2. Mudanças drásticas de carga podem exigir recalibração manual.

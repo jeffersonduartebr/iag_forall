@@ -119,6 +119,8 @@ def record_tool_turn(
     cost_val: float = 0.0,
     query: str = "",
     conversation_depth: int = 0,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
 ) -> float:
     """Emit tool-call metrics and feed a well-formedness reward to the bandit.
 
@@ -140,9 +142,16 @@ def record_tool_turn(
 
     try:
         from app.bandits import bandit_update, compute_reward
+        from app.services.reward import cost_per_1k_from_total
 
         final_quality = round(quality * 10.0, 2)  # compute_reward espera quality em [0..10]
-        reward = compute_reward(chosen_model, final_quality, float(latency_s or 0.0), float(cost_val or 0.0))
+        reward = compute_reward(
+            chosen_model,
+            final_quality,
+            float(latency_s or 0.0),
+            cost_per_1k_from_total(cost_val, prompt_tokens, completion_tokens),
+            modality=modality,
+        )
         bandit_update(model=chosen_model, query=query, reward=reward, modality=modality)
     except Exception as exc:
         logger.warning("[tool-obs] bandit reward for tool turn failed: %s", exc)

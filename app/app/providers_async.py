@@ -102,6 +102,7 @@ def _build_response_meta(result: "LLMResponse") -> Dict[str, Any]:
         "latency": result.latency,
         "load_time": result.load_time,
         "cost_per_1k": result.cost,
+        "cost_imputed_usd": result.cost_imputed,
         "quality": heuristic_quality_estimate(result.text),
         "raw_payload": result.raw_payload,
         "image_output_b64": None,

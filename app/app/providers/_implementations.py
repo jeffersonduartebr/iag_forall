@@ -22,6 +22,7 @@ from pydantic import BaseModel
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
 from app.observability import logger as structlog_logger
+from app.utils.pricing import impute_local_cost
 
 from ._infra import (
     COMMON_RETRY_STRATEGY,
@@ -69,7 +70,8 @@ class LLMResponse(BaseModel):
     text: str
     latency: float
     load_time: float = 0.0
-    cost: float
+    cost: float  # custo de caixa (cobrança do provedor)
+    cost_imputed: float = 0.0  # custo imputado da ocupação do equipamento local
     prompt_tokens: int
     completion_tokens: int
     model_used: str
@@ -667,6 +669,9 @@ class OllamaProvider(BaseProvider):
             c_tok = data.get("eval_count", 0)
             cost = get_model_cost(model, p_tok, c_tok)
             latency = time.time() - start
+            # Ocupação do equipamento: total_duration do Ollama (ns), senão o tempo de relógio.
+            occupancy_s = float(data.get("total_duration", 0) or 0) / 1_000_000_000.0 or latency
+            cost_imputed = impute_local_cost(occupancy_s)
 
             self._record_metrics(model, latency, cost, True)
             self._record_generation_metrics(model, c_tok, latency)
@@ -686,6 +691,7 @@ class OllamaProvider(BaseProvider):
                 latency=latency,
                 load_time=load_sec,
                 cost=cost,
+                cost_imputed=cost_imputed,
                 prompt_tokens=p_tok,
                 completion_tokens=c_tok,
                 model_used=model,

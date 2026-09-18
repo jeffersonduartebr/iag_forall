@@ -25,7 +25,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import REGISTRY, generate_latest
 from sqlalchemy import text
 
+from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.db import get_engine
+from app.services.frozen_policy import is_frozen_policy_active
 from app.services.nsga_metrics import (
     JUDGE_FEEDBACK_ERROR_RATE,
     JUDGE_FEEDBACK_PROXY_TOTAL,
@@ -41,6 +43,7 @@ from app.services.nsga_tuning import (
     tune_risk_factors,
     tune_uncertainty_threshold,
 )
+from app.services.reward import DEFAULT_MIN_SHARE, derive_reward_weights, publish_reward_weights
 from app.settings_dynamic import settings
 
 # ============================================================
@@ -426,6 +429,37 @@ def persist_results(modality: str, weights: Dict[str, float]):
         logger.warning(f"[NSGA] Falha Redis: {e}")
 
 
+def publish_reward_shares(modality: str, sys_metrics: Tuple[float, float, float]) -> None:
+    """Publish the reward weights derived from this cycle (see ``services.reward``).
+
+    ``NSGA_W_*`` live on raw scales, so they are converted into the share each
+    objective contributes to the routing score at the portfolio chosen by the
+    NSGA-II. Skipped under frozen policy so eval runs keep a fixed reward.
+    """
+    if is_frozen_policy_active():
+        logger.info(f"[NSGA] Política congelada: pesos da recompensa ({modality}) mantidos.")
+        return
+    sys_lat, sys_cst, sys_qlt = sys_metrics
+    try:
+        min_share = float(settings.get("REWARD_WEIGHT_MIN_SHARE", DEFAULT_MIN_SHARE))
+    except (TypeError, ValueError):
+        min_share = DEFAULT_MIN_SHARE
+    weights = derive_reward_weights(
+        settings.NSGA_W_QUALITY,
+        settings.NSGA_W_LATENCY,
+        settings.NSGA_W_COST,
+        sys_qlt,
+        sys_lat,
+        sys_cst,
+        min_share=min_share,
+    )
+    snapshot = {"quality": sys_qlt, "latency_s": sys_lat, "cost_usd": sys_cst}
+    if publish_reward_weights(redis_client, modality, weights, snapshot):
+        logger.info(
+            f"[NSGA] Pesos da recompensa ({modality}): q={weights[0]:.3f} l={weights[1]:.3f} c={weights[2]:.3f}"
+        )
+
+
 # ============================================================
 # 7.1 Judge Feedback Integration (Phase 3.3)
 # ============================================================
@@ -537,6 +571,9 @@ def run_optimization_cycle(modality: str):
         # Also tune based on judge feedback
         tune_weights_from_judge_feedback()
 
+    # Recompensa do bandit: publicada após os ajustes globais, para refletir os NSGA_W_* vigentes.
+    publish_reward_shares(modality, sys_metrics)
+
     NSGA_RUNS.labels(modality=modality).inc()
     NSGA_LAST_TS.labels(modality=modality).set(time.time())
 
@@ -603,7 +640,7 @@ def calibration_status():
             "adapt_enabled": settings.RISK_FACTOR_ADAPT_ENABLED,
         },
         "uncertainty": {
-            "threshold": float(settings.get("UNCERTAINTY_THRESHOLD", 0.45)),
+            "threshold": float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD)),
             "calibration_enabled": settings.UQ_CALIBRATION_ENABLED,
         },
         "cache": {

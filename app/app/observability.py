@@ -308,6 +308,18 @@ BANDIT_REWARD = Histogram(
     "Recompensa observada pelo bandit",
     registry=registry,
 )
+REWARD_WEIGHT = Gauge(
+    "reward_weight",
+    "Peso vigente de cada objetivo na recompensa do bandit",
+    ["objective", "modality"],
+    registry=registry,
+)
+REWARD_WEIGHTS_SOURCE = Counter(
+    "reward_weights_source_total",
+    "Origem dos pesos usados na recompensa (nsga = publicado pelo ciclo, default = fallback)",
+    ["source"],
+    registry=registry,
+)
 
 # ------------------------------------------------------------
 # 5. L1 SEMANTIC CACHE
