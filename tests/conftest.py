@@ -74,6 +74,9 @@ def mock_dependencies(monkeypatch):
         cold_contexts.clear()
     except Exception:
         pass
+    judges_module = sys.modules.get("app.judges")
+    if judges_module is not None:
+        judges_module._judge_stats_cache.clear()
 
     mock_engine = _make_mock_db_engine()
     try:

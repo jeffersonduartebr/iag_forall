@@ -252,14 +252,16 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
             return _C()
 
-    monkeypatch.setattr(judges, "_get_judge_engine", lambda: _Engine())
-    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_CALIBRATION_ENABLED=False))
+    from app.services import judge_calibration
+
+    monkeypatch.setattr(judge_calibration, "_get_engine", lambda: _Engine())
+    monkeypatch.setattr(judge_calibration, "settings", SimpleNamespace(JUDGE_CALIBRATION_ENABLED=False))
     judges.record_judge_calibration("j1", "q", 8.0)
     judges.update_calibration_cache_status("q")
     assert judges.calibrate_judges()["status"] == "disabled"
 
     monkeypatch.setattr(
-        judges,
+        judge_calibration,
         "settings",
         SimpleNamespace(JUDGE_CALIBRATION_ENABLED=True, JUDGE_CACHE_AGREEMENT_TARGET=0.9),
     )
@@ -284,13 +286,19 @@ def test_judge_stats_persistence_and_calibration_failures(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(judges, "_get_judge_engine", lambda: SimpleNamespace(begin=lambda: _BrokenCtx(), connect=lambda: _BrokenCtx()))
+    from app.services import judge_calibration
+
+    broken_engine = SimpleNamespace(begin=lambda: _BrokenCtx(), connect=lambda: _BrokenCtx())
+    monkeypatch.setattr(judges, "_get_judge_engine", lambda: broken_engine)
+    monkeypatch.setattr(judge_calibration, "_get_engine", lambda: broken_engine)
     assert judges._load_judge_stats(10) == {}
     judges._ensure_judge_calibration_table()
     judges._persist_judge_metrics("j1", 0.8, 1.0, 0.01, 1.0, 0.9)
     judges._persist_judge_log("q", "a", "j1", 8.0, "text")
 
-    monkeypatch.setattr(judges, "settings", SimpleNamespace(JUDGE_CALIBRATION_ENABLED=True, JUDGE_CACHE_AGREEMENT_TARGET=0.9))
+    monkeypatch.setattr(
+        judge_calibration, "settings", SimpleNamespace(JUDGE_CALIBRATION_ENABLED=True, JUDGE_CACHE_AGREEMENT_TARGET=0.9)
+    )
     judges.record_judge_calibration("j1", "q", 7.0)
     judges.update_calibration_cache_status("q")
     assert judges.get_judge_calibration_metrics() == {}
@@ -364,3 +372,19 @@ def test_judge_runtime_model_resolution(monkeypatch):
     assert judges._resolve_meta_judge_model() == "ollama/phi4:latest"
     assert judges._resolve_image_desc_model() == "ollama/qwen3-vl:8b"
     assert judges._resolve_judge_models() == ["ollama/phi4:latest"]
+
+
+def test_judge_stats_are_cached_for_a_minute(monkeypatch):
+    """A agregação de estatísticas dos juízes roda no máximo uma vez por minuto."""
+    calls = []
+    now = [1000.0]
+    monkeypatch.setattr(judges, "_load_judge_stats", lambda window: calls.append(window) or {"j1": "stats"})
+    monkeypatch.setattr(judges.time, "monotonic", lambda: now[0])
+    judges._judge_stats_cache.clear()
+
+    assert judges._load_judge_stats_cached(180) == {"j1": "stats"}
+    judges._load_judge_stats_cached(180)
+    assert calls == [180]
+    now[0] += 61
+    judges._load_judge_stats_cached(180)
+    assert calls == [180, 180]
