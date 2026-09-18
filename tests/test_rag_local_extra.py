@@ -272,3 +272,36 @@ async def test_build_retrieval_bundle_drops_weak_context_under_quality_floor(mon
     assert bundle["grounded"] is False
     assert bundle["retrieval_skipped_reason"] == "insufficient_context_quality"
     assert bundle["augmented_prompt"] == "Explique a norma."
+
+
+@pytest.mark.asyncio
+async def test_dense_and_sparse_retrieval_run_concurrently(monkeypatch):
+    """A busca densa só termina se o BM25 começar enquanto ela espera (execução paralela)."""
+    import asyncio
+
+    from app import rag_local
+
+    loop = asyncio.get_running_loop()
+    sparse_started = asyncio.Event()
+
+    class _Sparse:
+        def search(self, query, top_k):
+            loop.call_soon_threadsafe(sparse_started.set)
+            return [("d2", 1.0)]
+
+        def get_text(self, doc_id):
+            return "texto do bm25"
+
+    async def _embedding(query, mode, image_b64):
+        await asyncio.wait_for(sparse_started.wait(), timeout=2.0)
+        return [0.1, 0.2, 0.3]
+
+    async def _query_embedding(**kwargs):
+        return {"ids": [["d1"]], "documents": [["texto denso"]], "metadatas": [[{}]], "distances": [[0.2]]}
+
+    monkeypatch.setattr(rag_local, "sparse_index", _Sparse())
+    monkeypatch.setattr(rag_local, "_compute_embedding", _embedding)
+    monkeypatch.setattr(rag_local, "query_embedding", _query_embedding)
+
+    bundle = await rag_local.build_retrieval_bundle("pergunta", rerank_enabled=False)
+    assert "texto denso" in bundle["context"] and "texto do bm25" in bundle["context"]

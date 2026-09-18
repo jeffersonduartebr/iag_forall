@@ -315,6 +315,68 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     return str(bundle.get("augmented_prompt") or bundle.get("query") or "")
 
 
+SearchHits = Tuple[List[str], Dict[str, str], Dict[str, Dict[str, Any]]]
+
+
+async def _dense_search(
+    query: str, rag_mode: str, image_b64: Optional[str], collection_modality: str, n_results: int
+) -> SearchHits:
+    """Vector search: ``(ids em ordem, id -> texto, id -> metadados)``; vazio em falha."""
+    ids: List[str] = []
+    docs_map: Dict[str, str] = {}
+    meta_map: Dict[str, Dict[str, Any]] = {}
+    emb = await _compute_embedding(query, rag_mode, image_b64)
+    if emb is None:
+        return ids, docs_map, meta_map
+    try:
+        res = await query_embedding(modality=collection_modality, embedding=emb, n_results=n_results)
+        if res and res.get("ids"):
+            ids = res["ids"][0]
+            docs = res["documents"][0]
+            metadatas = (res.get("metadatas") or [[]])[0]
+            for i, doc_id in enumerate(ids):
+                docs_map[doc_id] = docs[i]
+                meta_map[doc_id] = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
+            _observe_top_similarity(res, rag_mode)
+    except Exception as e:
+        logger.warning(f"[rag_local] Erro Vector Search: {e}")
+    return ids, docs_map, meta_map
+
+
+def _observe_top_similarity(res: Dict[str, Any], rag_mode: str) -> None:
+    try:
+        distances = (res.get("distances") or [[]])[0]
+        if distances and RETRIEVAL_SCORE:
+            RETRIEVAL_SCORE.labels(modality=rag_mode).observe(max(0.0, min(1.0, 1.0 - float(distances[0]))))
+    except Exception:
+        pass
+
+
+def _bm25_hits(query: str, top_k: int) -> SearchHits:
+    """BM25 search plus text lookup, run entirely in a worker thread."""
+    ids: List[str] = []
+    docs_map: Dict[str, str] = {}
+    meta_map: Dict[str, Dict[str, Any]] = {}
+    for doc_id, _score in sparse_index.search(query, top_k=top_k):
+        ids.append(doc_id)
+        text = sparse_index.get_text(doc_id)
+        if text:
+            docs_map[doc_id] = text
+            meta_map[doc_id] = {"source": "bm25"}
+    return ids, docs_map, meta_map
+
+
+async def _sparse_search(query: str, top_k: int) -> SearchHits:
+    """Sparse (BM25) search; only meaningful with textual query. Empty on failure."""
+    if not query:
+        return [], {}, {}
+    try:
+        return await asyncio.to_thread(_bm25_hits, query, top_k)
+    except Exception as e:
+        logger.warning(f"[rag_local] Erro BM25 Search: {e}")
+        return [], {}, {}
+
+
 async def build_retrieval_bundle(
     query: str,
     modality: str = "text",
@@ -346,58 +408,13 @@ async def build_retrieval_bundle(
     dense_k = _get_int_setting("RAG_LIGHT_VECTOR_TOP_K", 6) if retrieval_mode == "light_retrieval" else 20
     sparse_k = _get_int_setting("RAG_LIGHT_SPARSE_TOP_K", 6) if retrieval_mode == "light_retrieval" else 20
 
-    # --- 1. Busca Vetorial (Dense Retrieval) ---
-    emb = await _compute_embedding(query, rag_mode, image_b64)
-    vector_doc_ids = []
-    vector_docs_map = {} # ID -> Texto
-    vector_meta_map: Dict[str, Dict[str, Any]] = {}
-
-    if emb is not None:
-        try:
-            # Busca mais candidatos (Top-20) para fusão
-            res = await query_embedding(
-                modality=target_collection_modality,
-                embedding=emb,
-                n_results=dense_k
-            )
-            if res and res.get("ids"):
-                ids = res["ids"][0]
-                docs = res["documents"][0]
-                metadatas = (res.get("metadatas") or [[]])[0]
-                vector_doc_ids = ids
-                for i, doc_id in enumerate(ids):
-                    vector_docs_map[doc_id] = docs[i]
-                    vector_meta_map[doc_id] = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
-                try:
-                    distances = (res.get("distances") or [[]])[0]
-                    if distances:
-                        top_similarity = max(0.0, min(1.0, 1.0 - float(distances[0])))
-                        if RETRIEVAL_SCORE:
-                            RETRIEVAL_SCORE.labels(modality=rag_mode).observe(top_similarity)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"[rag_local] Erro Vector Search: {e}")
-
-    # --- 2. Busca por Palavras-Chave (Sparse Retrieval - BM25) ---
-    bm25_doc_ids = []
-    bm25_docs_map = {}
-    bm25_meta_map: Dict[str, Dict[str, Any]] = {}
-
-    # Só faz sentido BM25 se houver query textual
-    if query:
-        try:
-            # Busca Top-20 no BM25
-            bm25_res = await asyncio.to_thread(sparse_index.search, query, top_k=sparse_k)
-            bm25_doc_ids = [item[0] for item in bm25_res]
-            for doc_id, _ in bm25_res:
-                # Recupera o texto do índice esparso
-                text = sparse_index.get_text(doc_id)
-                if text:
-                    bm25_docs_map[doc_id] = text
-                    bm25_meta_map[doc_id] = {"source": "bm25"}
-        except Exception as e:
-            logger.warning(f"[rag_local] Erro BM25 Search: {e}")
+    # --- 1+2. Busca vetorial (densa) e BM25 (esparsa) em paralelo ---
+    (vector_doc_ids, vector_docs_map, vector_meta_map), (bm25_doc_ids, bm25_docs_map, bm25_meta_map) = (
+        await asyncio.gather(
+            _dense_search(query, rag_mode, image_b64, target_collection_modality, dense_k),
+            _sparse_search(query, sparse_k),
+        )
+    )
 
     # --- 3. Fusão Híbrida (RRF) ---
     merged_ids = reciprocal_rank_fusion(vector_doc_ids, bm25_doc_ids)
