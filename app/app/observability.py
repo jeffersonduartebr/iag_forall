@@ -308,6 +308,18 @@ BANDIT_REWARD = Histogram(
     "Recompensa observada pelo bandit",
     registry=registry,
 )
+BACKGROUND_TASKS_DROPPED = Counter(
+    "background_tasks_dropped_total",
+    "Tarefas de segundo plano descartadas por limite de concorrência",
+    ["name"],
+    registry=registry,
+)
+BACKGROUND_TASK_ERRORS = Counter(
+    "background_task_errors_total",
+    "Tarefas de segundo plano que terminaram com exceção",
+    ["name"],
+    registry=registry,
+)
 REWARD_WEIGHT = Gauge(
     "reward_weight",
     "Peso vigente de cada objetivo na recompensa do bandit",

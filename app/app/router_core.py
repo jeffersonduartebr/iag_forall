@@ -127,6 +127,7 @@ from .services.router_strategy_weights import (
     get_dynamic_strategy_weights_async,
 )
 from .settings_dynamic import settings, update_db_pool_metrics
+from .utils.background import spawn as spawn_background
 
 # --- Novos Módulos de Inteligência e Precisão ---
 from .utils.pricing import get_model_cost
@@ -469,6 +470,7 @@ def _build_route_deps() -> Dict[str, Any]:
     """Shared dependency map for router execution."""
     return {
         "asyncio": asyncio,
+        "spawn_background": spawn_background,
         "settings": settings,
         "normalize_modality": normalize_modality,
         "_dep_cache_breaker": _dep_cache_breaker,
@@ -597,6 +599,7 @@ async def process_background_feedback(
             "_get_ctx_stats": _get_ctx_stats,
             "get_predictor": get_predictor,
             "asyncio": asyncio,
+            "spawn_background": spawn_background,
             "random": random,
             "embed_text": embed_text,
             "compute_judge_probability": compute_judge_probability,

@@ -7,6 +7,8 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
+from ..utils.background import spawn
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +41,6 @@ def schedule_query_job_webhook(
         "error": error,
     }
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_post_webhook(url, payload))
+        spawn(_post_webhook(url, payload), name="job_webhook", limit=64)
     except RuntimeError:
         asyncio.run(_post_webhook(url, payload))

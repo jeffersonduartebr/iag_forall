@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from .reward import cost_per_1k_from_total
+from .router_services import spawn_via_deps
 
 
 async def process_background_feedback_impl(
@@ -225,8 +226,10 @@ async def process_background_feedback_impl(
                     "updates": prev.get("updates", 0) + 1,
                 }
             state["EMA_HISTORY"].set(key, new_entry)
-            deps["asyncio"].create_task(
-                deps["asyncio"].to_thread(deps["_persist_ema"], modality, chosen_model, new_entry)
+            spawn_via_deps(
+                deps,
+                deps["asyncio"].to_thread(deps["_persist_ema"], modality, chosen_model, new_entry),
+                name="ema_persist",
             )
         except Exception as exc:
             deps["logger"].warning(f"[Background] EMA update failed: {exc}")

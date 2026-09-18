@@ -35,6 +35,7 @@ from ..schemas import (
     TenantBudgetUpdateRequest,
 )
 from ..services.governance_runtime import invalidate_runtime_policy_cache_async
+from ..utils.background import spawn
 
 router = APIRouter()
 
@@ -225,8 +226,7 @@ def activate_policy(
     if not activate_policy_version(version):
         raise HTTPException(status_code=404, detail=f"Policy not found: {version}")
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(invalidate_runtime_policy_cache_async())
+        spawn(invalidate_runtime_policy_cache_async(), name="policy_cache_invalidate")
     except RuntimeError:
         asyncio.run(invalidate_runtime_policy_cache_async())
     except Exception:

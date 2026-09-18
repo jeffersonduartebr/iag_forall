@@ -113,6 +113,8 @@ from .services.query_runtime import (  # noqa: F401  (re-export p/ query_http/te
 )
 from .services.tenant_context import bind_tenant_to_request
 from .settings_dynamic import settings, start_reload_listener, stop_reload_listener, validate_critical_settings
+from .utils.background import drain as drain_background
+from .utils.background import spawn as spawn_background
 from .utils.executors import get_cpu_executor, shutdown_cpu_executor
 from .utils.redis_client import close_redis, get_redis
 from .vectorstore import add_document as vs_add_document
@@ -443,8 +445,8 @@ async def startup_event():
     log_process_file_descriptor_limit("startup")
     await start_provider_runtime_services()
 
-    # Start periodic cleanup task for rate limiting
-    asyncio.create_task(rate_limit_cleanup())
+    # Start periodic cleanup task for rate limiting (daemon: cancelled on shutdown)
+    spawn_background(rate_limit_cleanup(), name="rate_limit_cleanup", daemon=True)
 
     async def _bg():
         """Perform deferred warmup work after the HTTP server is accepting traffic.
@@ -507,7 +509,7 @@ async def startup_event():
         except Exception as e:
             logger.exception(f"[warmup] Erro crítico: {e}")
 
-    asyncio.create_task(_bg())
+    spawn_background(_bg(), name="warmup")
 
 
 async def shutdown_event():
@@ -519,6 +521,11 @@ async def shutdown_event():
     prevent the remaining cleanup actions from running.
     """
     logger.info("[shutdown] Iniciando shutdown gracioso...")
+    try:
+        # Tarefas de segundo plano rastreadas (uso de tenant, EMA, webhooks...) antes de fechar clientes.
+        await drain_background(timeout=5.0)
+    except Exception as e:
+        logger.warning(f"[shutdown] Erro ao drenar tarefas de segundo plano: {e}")
 
     # Close HTTP connection pool
     try:

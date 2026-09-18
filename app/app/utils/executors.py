@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 _cpu_executor: Optional[ThreadPoolExecutor] = None
+_background_executor: Optional[ThreadPoolExecutor] = None
 _lock = threading.Lock()
 
 
@@ -65,9 +66,36 @@ async def run_cpu_bound(fn: Callable[..., _T], *args: Any) -> _T:
     return await loop.run_in_executor(get_cpu_executor(), functools.partial(fn, *args))
 
 
+def get_background_executor() -> ThreadPoolExecutor:
+    """Small pool for best-effort learning work (e.g. centroid updates).
+
+    Keeps per-request background jobs off both the default I/O executor and the
+    embedding pool. Size: ``BACKGROUND_THREADS`` env, default 2.
+    """
+    global _background_executor
+    if _background_executor is None:
+        with _lock:
+            if _background_executor is None:
+                try:
+                    workers = max(1, int(os.getenv("BACKGROUND_THREADS", "2")))
+                except ValueError:
+                    workers = 2
+                _background_executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bg-learn")
+    return _background_executor
+
+
+async def run_background(fn: Callable[..., _T], *args: Any) -> _T:
+    """Run a blocking callable on the background learning pool."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(get_background_executor(), functools.partial(fn, *args))
+
+
 def shutdown_cpu_executor() -> None:
     """Tear down the CPU pool (used on app shutdown / test isolation)."""
-    global _cpu_executor
+    global _cpu_executor, _background_executor
     if _cpu_executor is not None:
         _cpu_executor.shutdown(wait=False)
         _cpu_executor = None
+    if _background_executor is not None:
+        _background_executor.shutdown(wait=False)
+        _background_executor = None

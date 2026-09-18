@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any, Callable, Tuple, cast
 
 import pybreaker
 
 from ..observability import DEPENDENCY_CIRCUIT_STATE, DEPENDENCY_FAILURES
+from ..utils.background import spawn
 from ..utils.redis_async_ops import redis_hgetall_map, redis_pipeline_execute
 from ..utils.redis_client import ensure_redis_connected, get_redis_async_safe
 
@@ -70,8 +70,11 @@ def error_budget_window(settings_getter: Callable[[str, object], object]) -> Tup
 def record_request_outcome(*, settings_getter: Callable[[str, object], object], success: bool) -> None:
     """Record one success/failure sample into the rolling error budget."""
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(record_request_outcome_async(settings_getter=settings_getter, success=success))
+        spawn(
+            record_request_outcome_async(settings_getter=settings_getter, success=success),
+            name="error_budget",
+            limit=256,
+        )
     except RuntimeError:
         _record_request_outcome_sync(settings_getter=settings_getter, success=success)
 

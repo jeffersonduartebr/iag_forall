@@ -45,6 +45,8 @@ from app.services.bandit_centroids import (
 # aqui para os chamadores atuais (router_core, user_feedback, governança, tools).
 from app.services.reward import compute_reward  # noqa: F401
 from app.settings_dynamic import settings
+from app.utils.background import spawn
+from app.utils.executors import run_background
 from app.utils.redis_async_ops import redis_get_str, redis_hgetall_map
 from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
 
@@ -103,6 +105,8 @@ CENTROIDS_DIM = _safe_setting_int("CENTROIDS_DIM", 768)
 CENTROIDS_LEARN_RATE = _safe_setting_float("CENTROIDS_LEARN_RATE", 0.15)
 CENTROIDS_MIN_SIM_CREATE = _safe_setting_float("CENTROIDS_MIN_SIM_CREATE", 0.35)
 CENTROIDS_MIN_RECORDS_FOR_TRAIN = _safe_setting_int("CENTROIDS_MIN_RECORDS_FOR_TRAIN", 50)
+# Atualizações de centróide em voo (pool de segundo plano); acima disso são descartadas.
+CENTROID_LEARNING_MAX_INFLIGHT = _safe_setting_int("CENTROID_LEARNING_MAX_INFLIGHT", 8)
 
 # Meta-Bandit: estratégias
 META_STRATEGIES = ["epsilon_greedy", "ucb1", "thompson"]
@@ -746,10 +750,18 @@ async def _meta_choose_strategy_async() -> str:
 
 
 def _schedule_centroid_learning(query: str) -> None:
-    """Queue centroid online learning without blocking model selection."""
+    """Queue centroid online learning without blocking model selection.
+
+    Runs on the small background pool (not the default executor shared with
+    the hot path). Under saturation new updates are dropped and counted in
+    ``background_tasks_dropped_total{name="centroid_learning"}``.
+    """
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(asyncio.to_thread(centroids_online_update, query))
+        spawn(
+            run_background(centroids_online_update, query),
+            name="centroid_learning",
+            limit=CENTROID_LEARNING_MAX_INFLIGHT,
+        )
     except RuntimeError:
         centroids_online_update(query)
 

@@ -166,3 +166,16 @@ def compute_judge_probability(
         prob_judge *= 0.1
 
     return max(min_sample_rate, prob_judge)
+
+
+def spawn_via_deps(deps: Dict[str, Any], coro: Any, *, name: str, limit: Optional[int] = None) -> Any:
+    """Schedule background work through the injected spawner (tracked, bounded).
+
+    ``router_core`` injects ``utils.background.spawn`` as ``spawn_background``;
+    dependency dicts without it (legacy callers, unit tests) fall back to
+    ``deps["asyncio"].create_task``.
+    """
+    spawner = deps.get("spawn_background")
+    if spawner is None:
+        return deps["asyncio"].create_task(coro)
+    return spawner(coro, name=name, limit=limit)

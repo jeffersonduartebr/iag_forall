@@ -9,6 +9,7 @@ from typing import Any, Dict
 from app.model_registry import filter_configured_model_names, filter_tool_capable_model_names
 from app.native_tools import filter_native_tool_capable_model_names, split_tools
 from app.services.adversarial_governance import advgov_escalate
+from app.services.router_services import spawn_via_deps
 
 
 def _deadline_remaining_seconds(runtime_hints: Dict[str, Any] | None) -> float:
@@ -356,8 +357,11 @@ async def route_and_answer_internal_impl(
     deps["logger"].info(f"[router] Model: {chosen} | UQ: {uncertainty_score:.2f} | exploration={exploration_mode}")
 
     if chosen.startswith("ollama/") and not deps["is_ollama_model_verified"](chosen.replace("ollama/", "")):
-        deps["asyncio"].create_task(
-            deps["asyncio"].to_thread(deps["_ensure_ollama_model"], chosen.replace("ollama/", ""))
+        spawn_via_deps(
+            deps,
+            deps["asyncio"].to_thread(deps["_ensure_ollama_model"], chosen.replace("ollama/", "")),
+            name="ollama_ensure_model",
+            limit=2,
         )
 
     # Follow-up multi-turn (messages) é a fonte da verdade: não há "query" única

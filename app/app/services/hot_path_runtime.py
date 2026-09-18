@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from ..guardrails import GuardrailDecision, check_input_guardrails
 from ..roadmap_features import BudgetCheck, check_tenant_budget, get_active_policy, record_tenant_usage
 from ..router_strategy import choose_top2_models
+from ..utils.background import spawn
 from ..utils.redis_async_ops import redis_get_str, redis_set_str
 
 logger = logging.getLogger(__name__)
@@ -85,28 +86,12 @@ def schedule_tenant_usage(
     requests: int = 1,
 ) -> None:
     """Persist tenant usage without blocking the response path."""
+    usage = {"cost_usd": cost_usd, "tokens_in": tokens_in, "tokens_out": tokens_out, "requests": requests}
     try:
-        loop = asyncio.get_running_loop()
+        # Dado de cobrança: sem limite de descarte, mas rastreado e drenado no shutdown.
+        spawn(asyncio.to_thread(record_tenant_usage, tenant_id, **usage), name="tenant_usage")
     except RuntimeError:
-        record_tenant_usage(
-            tenant_id,
-            cost_usd=cost_usd,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            requests=requests,
-        )
-        return
-
-    loop.create_task(
-        asyncio.to_thread(
-            record_tenant_usage,
-            tenant_id,
-            cost_usd=cost_usd,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            requests=requests,
-        )
-    )
+        record_tenant_usage(tenant_id, **usage)
 
 
 async def invalidate_active_policy_cache_async() -> None:

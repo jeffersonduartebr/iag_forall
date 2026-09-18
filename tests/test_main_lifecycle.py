@@ -152,7 +152,7 @@ async def test_startup_event_executes_warmup_and_shutdown(monkeypatch):
 
     coros = []
 
-    def _create_task(coro):
+    def _spawn(coro, **_kwargs):
         coros.append(coro)
         return SimpleNamespace()
 
@@ -162,7 +162,7 @@ async def test_startup_event_executes_warmup_and_shutdown(monkeypatch):
     monkeypatch.setattr(main, "start_reload_listener", lambda: None)
     monkeypatch.setattr(main, "start_background_services", lambda: None)
     monkeypatch.setattr(main, "rate_limit_cleanup", _cleanup)
-    monkeypatch.setattr(main.asyncio, "create_task", _create_task)
+    monkeypatch.setattr(main, "spawn_background", _spawn)
     monkeypatch.setattr(main, "get_redis", lambda: None)
     monkeypatch.setattr(main, "_ensure_model_metrics_table", lambda: None)
     monkeypatch.setattr(main, "init_vectorstore", lambda: None)
