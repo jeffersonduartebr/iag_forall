@@ -12,7 +12,6 @@ Testes para validar as otimizações de performance implementadas:
 """
 
 import threading
-import time
 
 import numpy as np
 import pytest
@@ -56,10 +55,12 @@ class TestEMAHistoryCache:
         assert cache.get(("text", "model_2")) is not None
         assert cache.get(("text", "model_3")) is not None
 
-    def test_ema_cache_ttl_expiration(self):
+    def test_ema_cache_ttl_expiration(self, fake_clock):
         """Testa expiração por TTL."""
         from app.router_core import EMAHistoryCache
+        from app.services import router_state
 
+        clock = fake_clock(router_state)
         cache = EMAHistoryCache(maxsize=10, ttl_s=1)  # TTL de 1 segundo
 
         key = ("text", "model_a")
@@ -69,7 +70,7 @@ class TestEMAHistoryCache:
         assert cache.get(key) is not None
 
         # Após TTL, deve expirar
-        time.sleep(1.1)
+        clock.advance(1.1)
         assert cache.get(key) is None
 
     def test_ema_cache_size_tracking(self):
@@ -83,10 +84,12 @@ class TestEMAHistoryCache:
 
         assert cache.size() == 50
 
-    def test_ema_cache_cleanup_expired(self):
+    def test_ema_cache_cleanup_expired(self, fake_clock):
         """Testa cleanup de entradas expiradas."""
         from app.router_core import EMAHistoryCache
+        from app.services import router_state
 
+        clock = fake_clock(router_state)
         cache = EMAHistoryCache(maxsize=100, ttl_s=1)
 
         for i in range(10):
@@ -94,7 +97,7 @@ class TestEMAHistoryCache:
 
         assert cache.size() == 10
 
-        time.sleep(1.1)
+        clock.advance(1.1)
         removed = cache.cleanup_expired()
 
         assert removed == 10
@@ -137,16 +140,19 @@ class TestEmbeddingL1Cache:
         stats = cache.stats()
         assert stats["hits"] == 1
 
-    def test_embedding_cache_ttl(self):
+    def test_embedding_cache_ttl(self, fake_clock):
         """Testa TTL do cache de embeddings."""
         from app.embeddings import EmbeddingL1Cache
 
+        from app import embeddings
+
+        clock = fake_clock(embeddings)
         cache = EmbeddingL1Cache(maxsize=100, ttl_s=1)
 
         cache.set("key1", [1.0, 2.0])
         assert cache.get("key1") is not None
 
-        time.sleep(1.1)
+        clock.advance(1.1)
         assert cache.get("key1") is None
 
 

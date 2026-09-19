@@ -37,17 +37,18 @@ class TestLRUCache:
         assert cache.get("key3") == "value3"  # Still there
         assert cache.get("key4") == "value4"  # Newly added
 
-    def test_cache_ttl_expiry(self):
+    def test_cache_ttl_expiry(self, fake_clock):
         """Test TTL expiry."""
-        import time
+        import app.settings_dynamic as settings_dynamic
 
+        clock = fake_clock(settings_dynamic)
         cache = LRUCache(maxsize=10, ttl_s=1)  # 1 second TTL
 
         cache.set("key1", "value1")
         assert cache.get("key1") == "value1"
 
-        # Wait for TTL to expire
-        time.sleep(1.5)
+        # TTL expira sem espera real
+        clock.advance(1.5)
 
         assert cache.get("key1") is None
 

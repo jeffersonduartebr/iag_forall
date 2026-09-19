@@ -6,7 +6,6 @@ handling for the corresponding runtime component.
 """
 
 
-import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -40,8 +39,11 @@ class TestL1Cache:
 
         assert result is None
 
-    def test_l1_cache_respects_ttl(self):
+    def test_l1_cache_respects_ttl(self, fake_clock):
         """L1 cache should expire entries after TTL."""
+        from app import semantic_cache
+
+        clock = fake_clock(semantic_cache)
         cache = L1Cache(maxsize=10, ttl_seconds=1)
 
         cache.store("key1", {"value": "test"})
@@ -49,8 +51,8 @@ class TestL1Cache:
         # Should be available immediately
         assert cache.get("key1") is not None
 
-        # Wait for TTL to expire
-        time.sleep(1.1)
+        # TTL expira sem espera real
+        clock.advance(1.1)
 
         # Should be expired now
         assert cache.get("key1") is None

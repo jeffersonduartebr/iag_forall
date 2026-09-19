@@ -8,6 +8,7 @@ current runtime architecture and operational documentation.
 
 import os
 import sys
+import time as _time_module
 from unittest.mock import MagicMock
 
 import pytest
@@ -62,6 +63,42 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "integration: tests that require external services or credentials")
     config.addinivalue_line("markers", "slow: long-running tests")
     config.addinivalue_line("markers", "contract: OpenAPI contract fuzzing (schemathesis)")
+
+class FakeClock:
+    """Stand-in for the ``time`` module: ``time()``/``monotonic()`` only move on ``advance()``."""
+
+    def __init__(self, start: float = 1_000_000.0):
+        self.now = start
+
+    def time(self) -> float:
+        return self.now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(_time_module, name)
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    """``clock = fake_clock(module, ...)`` swaps the ``time`` module those modules see.
+
+    TTL/window tests advance the clock instead of sleeping, so they are fast and
+    deterministic. Only the given modules are affected (not pytest or asyncio).
+    """
+    clock = FakeClock()
+
+    def install(*modules):
+        for module in modules:
+            monkeypatch.setattr(module, "time", clock)
+        return clock
+
+    return install
+
 
 @pytest.fixture
 def fake_redis_server():

@@ -127,9 +127,12 @@ class TestRateLimitChaos:
             assert limited
 
     @pytest.mark.asyncio
-    async def test_rate_limit_window_expiry(self):
+    async def test_rate_limit_window_expiry(self, fake_clock):
         """Rate limit should reset after window expires."""
+        from app.middleware import rate_limit
         from app.middleware.rate_limit import RateLimitStore
+
+        clock = fake_clock(rate_limit)
 
         store = RateLimitStore()
         client_ip = "192.168.1.101"
@@ -143,8 +146,8 @@ class TestRateLimitChaos:
         # Should be limited
         assert await store.is_rate_limited(client_ip, max_requests, window)
 
-        # Wait for window to expire
-        await asyncio.sleep(1.1)
+        # Janela expira sem espera real
+        clock.advance(1.1)
 
         # Should be allowed again
         assert not await store.is_rate_limited(client_ip, max_requests, window)
@@ -492,19 +495,19 @@ class TestMemoryPressureChaos:
         assert len(cache._cache) <= 5
 
     @pytest.mark.asyncio
-    async def test_deduplicator_cleanup(self):
+    async def test_deduplicator_cleanup(self, fake_clock):
         """Deduplicator should clean up stale requests."""
         from app.reliability import RequestDeduplicator
 
+        from app import reliability
+
+        clock = fake_clock(reliability)
         dedup = RequestDeduplicator()
         dedup._ttl_seconds = 1  # Short TTL for testing
+        release = asyncio.Event()
 
-        # Add some in-flight requests
         async def slow_op():
-            """Execute the slow op routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            await asyncio.sleep(2)
+            await release.wait()
             return "done"
 
         # Start a request but don't await
@@ -516,11 +519,12 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             )
         )
 
-        # Wait for TTL to expire
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(0)  # registra a requisição em andamento
+        assert len(dedup._in_flight) == 1
+        clock.advance(1.5)  # TTL expira sem espera real
 
-        # Cleanup
         await dedup.cleanup_stale()
+        assert len(dedup._in_flight) == 0
 
         # Cancel the task
         task.cancel()
