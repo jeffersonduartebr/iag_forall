@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import judges
+from app.services import judge_context
 
 # Estes testes exercitam o caminho binário (CORRECT/INCORRECT); a rubrica é o padrão.
 _BINARY_GET = lambda key, default=None: {"JUDGE_SCORING_MODE": "binary"}.get(key, default)  # noqa: E731
@@ -40,15 +41,17 @@ def test_verdict_cache_and_helpers():
 
 def test_choose_two_and_extract_verdict(monkeypatch):
     """Testa choose two and extract verdict."""
+    from app.services import judge_selection
+
     models = ["m1", "m2", "m3"]
     stats = {"m1": judges.JudgeStats("m1", fitness=0.9), "m2": judges.JudgeStats("m2", fitness=0.8)}
 
-    monkeypatch.setattr(judges.random, "random", lambda: 0.99)
+    monkeypatch.setattr(judge_selection.random, "random", lambda: 0.99)
     chosen = judges._choose_two(models, stats)
     assert len(chosen) == 2
 
-    monkeypatch.setattr(judges.random, "random", lambda: 0.0)
-    monkeypatch.setattr(judges.random, "sample", lambda v, k=2: v[:2])
+    monkeypatch.setattr(judge_selection.random, "random", lambda: 0.0)
+    monkeypatch.setattr(judge_selection.random, "sample", lambda v, k=2: v[:2])
     chosen2 = judges._choose_two(models, stats)
     assert len(chosen2) == 2
 
@@ -61,7 +64,7 @@ def test_choose_two_and_extract_verdict(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_rag_context_describe_and_meta(monkeypatch):
     """Testa get rag context describe and meta."""
-    monkeypatch.setattr(judges, "embed_text", lambda q: [0.1])
+    monkeypatch.setattr(judge_context, "embed_text", lambda q: [0.1])
 
     async def _query_embedding(coll, vec, n_results=5):
         """Execute the query embedding routine.
@@ -69,8 +72,8 @@ async def test_get_rag_context_describe_and_meta(monkeypatch):
 This helper encapsulates one focused step used by the surrounding workflow."""
         return {"documents": [["doc1", "doc2"]]}
 
-    monkeypatch.setattr(judges, "query_embedding", _query_embedding)
-    monkeypatch.setattr(judges, "settings", SimpleNamespace(get=lambda k, d=None: "knowledge_base"))
+    monkeypatch.setattr(judge_context, "query_embedding", _query_embedding)
+    monkeypatch.setattr(judge_context, "settings", SimpleNamespace(get=lambda k, d=None: "knowledge_base"))
     ctx = await judges.get_rag_context("q", n_results=2, max_chars=5)
     assert isinstance(ctx, str)
 
@@ -80,11 +83,11 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 This helper encapsulates one focused step used by the surrounding workflow."""
         return "descrição curta", {}
 
-    monkeypatch.setattr(judges, "call_model", _call_model)
-    monkeypatch.setattr(judges, "IMAGE_DESC_MODEL_HINT", "ollama/qwen3-vl:8b")
-    monkeypatch.setattr(judges, "VISION_VLM_CANDIDATES", ["ollama/qwen3-vl:8b"])
-    monkeypatch.setattr(judges, "MULTIMODAL_VLM_CANDIDATES", [])
-    monkeypatch.setattr(judges, "filter_configured_model_names", lambda models: list(models))
+    monkeypatch.setattr(judge_context, "call_model", _call_model)
+    monkeypatch.setattr(judge_context, "IMAGE_DESC_MODEL_HINT", "ollama/qwen3-vl:8b")
+    monkeypatch.setattr(judge_context, "VISION_VLM_CANDIDATES", ["ollama/qwen3-vl:8b"])
+    monkeypatch.setattr(judge_context, "MULTIMODAL_VLM_CANDIDATES", [])
+    monkeypatch.setattr(judge_context, "filter_configured_model_names", lambda models: list(models))
     desc = await judges._describe_image_if_needed("img", "vision")
     assert desc == "descrição curta"
 
@@ -95,17 +98,17 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         return "<verdict>CORRECT</verdict>", {}
 
     monkeypatch.setattr(judges, "call_model", _meta)
-    monkeypatch.setattr(judges, "is_model_configured", lambda model: True)
+    monkeypatch.setattr(judge_context, "is_model_configured", lambda model: True)
     m = await judges._meta_evaluate_binary("q", "a", [("j1", 0.0), ("j2", 10.0)], "prompt", reference=None)
     assert m == 10.0
 
     async def _query_empty(coll, vec, n_results=5):
         return {}
 
-    monkeypatch.setattr(judges, "query_embedding", _query_empty)
+    monkeypatch.setattr(judge_context, "query_embedding", _query_empty)
     assert await judges.get_rag_context("q") == ""
 
-    monkeypatch.setattr(judges, "embed_text", lambda q: (_ for _ in ()).throw(RuntimeError("embed fail")))
+    monkeypatch.setattr(judge_context, "embed_text", lambda q: (_ for _ in ()).throw(RuntimeError("embed fail")))
     assert await judges.get_rag_context("q") == ""
 
     monkeypatch.setattr(judges, "call_model", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("meta fail")))
@@ -309,10 +312,10 @@ def test_judge_stats_persistence_and_calibration_failures(monkeypatch):
 @pytest.mark.asyncio
 async def test_describe_image_and_llm_pair_edge_cases(monkeypatch):
     """Judge helpers should handle empty candidate sets, single-judge results, and heuristic failures."""
-    monkeypatch.setattr(judges, "IMAGE_DESC_MODEL_HINT", "ollama/qwen3-vl:8b")
-    monkeypatch.setattr(judges, "VISION_VLM_CANDIDATES", [])
-    monkeypatch.setattr(judges, "MULTIMODAL_VLM_CANDIDATES", [])
-    monkeypatch.setattr(judges, "is_model_configured", lambda model: False)
+    monkeypatch.setattr(judge_context, "IMAGE_DESC_MODEL_HINT", "ollama/qwen3-vl:8b")
+    monkeypatch.setattr(judge_context, "VISION_VLM_CANDIDATES", [])
+    monkeypatch.setattr(judge_context, "MULTIMODAL_VLM_CANDIDATES", [])
+    monkeypatch.setattr(judge_context, "is_model_configured", lambda model: False)
     assert await judges._describe_image_if_needed("img", "vision") == ""
     assert judges.heuristic_score(None) == 0.0
 
@@ -353,25 +356,25 @@ async def test_describe_image_and_llm_pair_edge_cases(monkeypatch):
 
 def test_judge_runtime_model_resolution(monkeypatch):
     """Testa resolução de modelos de juiz com fallback local."""
-    monkeypatch.setattr(judges, "META_JUDGE_HINT", "openai/gpt-5.1")
-    monkeypatch.setattr(judges, "IMAGE_DESC_MODEL_HINT", "openai/gpt-4o-mini")
-    monkeypatch.setattr(judges, "VISION_VLM_CANDIDATES", ["ollama/qwen3-vl:8b"])
-    monkeypatch.setattr(judges, "MULTIMODAL_VLM_CANDIDATES", [])
+    monkeypatch.setattr(judge_context, "META_JUDGE_HINT", "openai/gpt-5.1")
+    monkeypatch.setattr(judge_context, "IMAGE_DESC_MODEL_HINT", "openai/gpt-4o-mini")
+    monkeypatch.setattr(judge_context, "VISION_VLM_CANDIDATES", ["ollama/qwen3-vl:8b"])
+    monkeypatch.setattr(judge_context, "MULTIMODAL_VLM_CANDIDATES", [])
     monkeypatch.setattr(
-        judges,
+        judge_context,
         "settings",
         SimpleNamespace(JUDGE_MODELS=["openai/gpt-5.1"], JUDGES_LOCAL_MODEL="ollama/phi4:latest"),
     )
     monkeypatch.setattr(
-        judges,
+        judge_context,
         "filter_configured_model_names",
         lambda models: [model for model in models if model.startswith("ollama/")],
     )
-    monkeypatch.setattr(judges, "is_model_configured", lambda model: model.startswith("ollama/"))
+    monkeypatch.setattr(judge_context, "is_model_configured", lambda model: model.startswith("ollama/"))
 
-    assert judges._resolve_meta_judge_model() == "ollama/phi4:latest"
-    assert judges._resolve_image_desc_model() == "ollama/qwen3-vl:8b"
-    assert judges._resolve_judge_models() == ["ollama/phi4:latest"]
+    assert judge_context._resolve_meta_judge_model() == "ollama/phi4:latest"
+    assert judge_context._resolve_image_desc_model() == "ollama/qwen3-vl:8b"
+    assert judge_context._resolve_judge_models() == ["ollama/phi4:latest"]
 
 
 def test_judge_stats_are_cached_for_a_minute(monkeypatch):

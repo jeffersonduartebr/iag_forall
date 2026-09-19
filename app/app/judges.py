@@ -16,25 +16,18 @@ Both use a short-lived verdict cache and adaptive judge selection.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
-import random
 import re
-import statistics
-import threading
 import time
-from collections import OrderedDict
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 
 from .db import get_engine
-from .embeddings import embed_text
-from .model_registry import filter_configured_model_names, is_model_configured
 from .providers_async import call_model
+from .services.judge_cache import VERDICT_CACHE_SIZE, VERDICT_CACHE_TTL_S, VerdictCache  # noqa: F401
 from .services.judge_calibration import (  # noqa: F401  (API pública reexportada)
     JUDGE_CALIBRATION_DDL,
     _ensure_judge_calibration_table,
@@ -42,6 +35,19 @@ from .services.judge_calibration import (  # noqa: F401  (API pública reexporta
     get_judge_calibration_metrics,
     record_judge_calibration,
     update_calibration_cache_status,
+)
+from .services.judge_context import (  # noqa: F401  (reexportados; chamadores resolvem por este módulo)
+    IMAGE_DESC_MODEL_HINT,
+    META_JUDGE_HINT,
+    MULTIMODAL_VLM_CANDIDATES,
+    VISION_VLM_CANDIDATES,
+    _configured_local_fallback,
+    _describe_image_if_needed,
+    _image_hash_from_b64,
+    _resolve_image_desc_model,
+    _resolve_judge_models,
+    _resolve_meta_judge_model,
+    get_rag_context,
 )
 from .services.judge_rubric import (
     build_rubric_prompt,
@@ -51,8 +57,18 @@ from .services.judge_rubric import (
     score_with_rubric,
     weighted_quality,
 )
+from .services.judge_selection import (  # noqa: F401  (reexportados)
+    EPSILON_RANDOM,
+    MIN_FITNESS,
+    W_FIT,
+    W_QC,
+    JudgeStats,
+    SelectedJudge,
+    _adaptive_threshold,
+    _choose_two,
+    _score_candidate,
+)
 from .settings_dynamic import settings
-from .vectorstore import query_embedding
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -65,64 +81,8 @@ if not logger.handlers:
 # ============================================================
 # 🚀 JUDGE VERDICT CACHE (Performance Optimization)
 # ============================================================
-VERDICT_CACHE_SIZE = 10000  # Optimized for high-capacity environment (64GB RAM) - ~10MB memory
-VERDICT_CACHE_TTL_S = 300  # 5 minutos
 
 
-class VerdictCache:
-    """Store recently computed judge verdicts for repeated query/answer pairs."""
-
-    def __init__(self, maxsize: int = VERDICT_CACHE_SIZE, ttl_s: int = VERDICT_CACHE_TTL_S):
-        """Create a bounded verdict cache with TTL-based expiration."""
-        self.maxsize = maxsize
-        self.ttl_s = ttl_s
-        self._lock = threading.Lock()
-        self._data: "OrderedDict[str, Tuple[Any, float]]" = OrderedDict()  # key -> (payload, timestamp)
-        self._hits = 0
-        self._misses = 0
-
-    def _make_key(self, query: str, answer: str) -> str:
-        """Gera chave de cache baseada em hash(query + answer[:500])."""
-        payload = f"{query}|{answer[:500]}".encode("utf-8", errors="ignore")
-        return hashlib.sha256(payload).hexdigest()
-
-    def get(self, query: str, answer: str) -> Optional[Any]:
-        """Return a cached verdict payload when the query/answer pair is still fresh."""
-        key = self._make_key(query, answer)
-        now = time.time()
-        with self._lock:
-            if key not in self._data:
-                self._misses += 1
-                return None
-            score, ts = self._data[key]
-            if self.ttl_s > 0 and (now - ts) > self.ttl_s:
-                del self._data[key]
-                self._misses += 1
-                return None
-            self._data.move_to_end(key)
-            self._hits += 1
-            return score
-
-    def set(self, query: str, answer: str, score: Any) -> None:
-        """Store one verdict payload (binary score or rubric result) in the cache."""
-        key = self._make_key(query, answer)
-        now = time.time()
-        with self._lock:
-            if key in self._data:
-                self._data.move_to_end(key)
-            self._data[key] = (score, now)
-            while len(self._data) > self.maxsize:
-                self._data.popitem(last=False)
-
-    def stats(self) -> Dict[str, Any]:
-        """Return cache hit, miss, and occupancy statistics."""
-        total = self._hits + self._misses
-        return {
-            "hits": self._hits,
-            "misses": self._misses,
-            "hit_rate": self._hits / total if total > 0 else 0.0,
-            "size": len(self._data),
-        }
 
 
 _verdict_cache = VerdictCache()
@@ -163,119 +123,40 @@ def _safe_setting_int(key: str, default: int) -> int:
 
 
 ALPHA_DECAY = _safe_setting_float("JUDGES_FITNESS_DECAY", 0.90)
-MIN_FITNESS = _safe_setting_float("JUDGES_MIN_FITNESS", 0.30)
 CONSIST_WINDOW_MIN = _safe_setting_int("JUDGES_WINDOW_MIN", 180)
 
 # Meta-Juiz preferencial (deve ser um modelo forte)
-META_JUDGE_HINT = str(settings.get("META_JUDGE_PREF", "ollama/phi4:latest"))
 
 # Aumentado para permitir CoT (Raciocínio)
 MAX_TOKENS_JUDGE = 512
 TEMP_JUDGE = 0.0 # Temperatura zero para determinismo máximo
 
-W_FIT = _safe_setting_float("JUDGES_WEIGHT_FITNESS", 0.6)
-W_QC = _safe_setting_float("JUDGES_WEIGHT_QC", 0.4)
-EPSILON_RANDOM = _safe_setting_float("JUDGES_EPSILON", 0.10)
-
-IMAGE_DESC_MODEL_HINT = str(settings.get("IMAGE_DESC_MODEL", "ollama/qwen3-vl:8b"))
-
-VISION_VLM_CANDIDATES: List[str] = list(
-    getattr(settings, "CANDIDATE_VISION_MODELS_LIST", [])
-)
-MULTIMODAL_VLM_CANDIDATES: List[str] = list(
-    getattr(settings, "CANDIDATE_MULTIMODAL_MODELS_LIST", [])
-)
 
 
-def _configured_local_fallback() -> str:
-    """Return a stable local fallback model for judge-related paths."""
-    preferred = [
-        getattr(settings, "JUDGES_LOCAL_MODEL", None),
-        "ollama/phi4:latest",
-        "ollama/qwen3:14b",
-        "ollama/gemma3:4b",
-    ]
-    candidates = [model for model in preferred if isinstance(model, str) and model]
-    filtered = filter_configured_model_names(candidates)
-    return filtered[0] if filtered else "ollama/phi4:latest"
 
 
-def _resolve_meta_judge_model() -> str:
-    """Resolve the configured meta-judge model with a local fallback."""
-    if is_model_configured(META_JUDGE_HINT):
-        return META_JUDGE_HINT
-    return _configured_local_fallback()
 
 
-def _resolve_image_desc_model() -> str:
-    """Resolve the configured vision model with a local fallback."""
-    candidates = []
-    if IMAGE_DESC_MODEL_HINT:
-        candidates.append(IMAGE_DESC_MODEL_HINT)
-    candidates.extend(VISION_VLM_CANDIDATES)
-    candidates.extend(MULTIMODAL_VLM_CANDIDATES)
-    filtered = filter_configured_model_names(
-        [model for model in candidates if isinstance(model, str) and model]
-    )
-    return filtered[0] if filtered else "ollama/qwen3-vl:8b"
 
 
-def _resolve_judge_models() -> List[str]:
-    """Resolve judge models to the subset configured for the current environment."""
-    configured = filter_configured_model_names(
-        [model for model in (getattr(settings, "JUDGE_MODELS", []) or []) if isinstance(model, str) and model]
-    )
-    return configured or [_configured_local_fallback()]
+
+
 
 
 # ============================================================
 # 📊 Estruturas auxiliares
 # ============================================================
 
-@dataclass
-class JudgeStats:
-    """Represent `JudgeStats` within this module.
-
-The class groups the state and behavior required for JudgeStats."""
-    model: str
-    avg_score: float = 0.7
-    avg_latency: float = 2.0
-    avg_cost: float = 0.001
-    consistency: float = 0.8
-    fitness: float = 0.5
 
 
-@dataclass
-class SelectedJudge:
-    """Represent `SelectedJudge` within this module.
-
-The class groups the state and behavior required for SelectedJudge."""
-    model: str
-    weight: float
 
 
 # ============================================================
 # 🧱 Utilitários
 # ============================================================
 
-def _adaptive_threshold(values: Sequence[float], base: float) -> float:
-    """Derive a selection threshold from recent judge fitness values."""
-    if not values:
-        return base
-    median_val = statistics.median(values)
-    return max(base, min(0.9, median_val * 0.6))
 
 
-def _image_hash_from_b64(image_b64: Optional[str]) -> Optional[str]:
-    """Return a stable image hash used for judge logging and deduplication."""
-    if not image_b64:
-        return None
-    try:
-        h = hashlib.sha256()
-        h.update(image_b64.encode("utf-8", errors="ignore"))
-        return h.hexdigest()
-    except Exception:
-        return None
 
 
 # ============================================================
@@ -355,69 +236,14 @@ def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
 # 🔢 Seleção adaptativa de juízes
 # ============================================================
 
-def _score_candidate(s: JudgeStats) -> float:
-    """Compute a composite score used to rank candidate judge models."""
-    qc = s.avg_score / max(s.avg_cost, 1e-6)
-    qc_norm = min(10.0, 1.0 + qc ** 0.25)
-    return max(0.0, W_FIT * s.fitness + W_QC * (qc_norm / 10.0))
 
 
-def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[SelectedJudge]:
-    """Select two judges using fitness filtering and weighted randomization."""
-    fitness_vals = [stats.get(m, JudgeStats(m)).fitness for m in models]
-    thr = _adaptive_threshold(fitness_vals, MIN_FITNESS)
-    valid = [m for m in models if stats.get(m, JudgeStats(m)).fitness >= thr]
-
-    if len(valid) < 2:
-        valid = models[:]
-
-    if random.random() < EPSILON_RANDOM and len(valid) >= 2:
-        picks = random.sample(valid, k=2)
-        return [SelectedJudge(p, 1.0) for p in picks]
-
-    scored = [(m, _score_candidate(stats.get(m, JudgeStats(m)))) for m in valid]
-    total = sum(w for _, w in scored) or 1.0
-
-    weights = [(m, w / total) for m, w in scored]
-
-    def pick(wlist):
-        """Draw one model from a normalized weight list."""
-        r = random.random()
-        acc = 0.0
-        for name, w in wlist:
-            acc += w
-            if r <= acc:
-                return name
-        return wlist[-1][0]
-
-    first = pick(weights)
-    rest = [(m, w) for m, w in weights if m != first]
-    second = pick(rest) if rest else first
-
-    return [SelectedJudge(first, 1.0), SelectedJudge(second, 1.0)]
 
 
 # ============================================================
 # 🔎 RAG para juízes
 # ============================================================
 
-async def get_rag_context(query: str, n_results: int = 5, max_chars: int = 1500) -> str:
-    """Retrieve a compact RAG context block to assist judge prompts."""
-    try:
-        vec = await asyncio.to_thread(embed_text, query)
-        coll = settings.get("RAG_COLLECTION_NAME", "knowledge_base")
-
-        results = await query_embedding(coll, vec, n_results=n_results)
-        if not results or "documents" not in results:
-            return ""
-
-        docs = results["documents"][0]
-        ctx = "\n\n".join(docs).strip()
-
-        return (ctx[:max_chars] + "...") if len(ctx) > max_chars else ctx
-    except Exception as exc:
-        logger.warning("[Judges] RAG error: %s", exc)
-        return ""
 
 
 # ============================================================
@@ -506,45 +332,6 @@ def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=N
 # 🖼️ Descrição automática da imagem para juízes
 # ============================================================
 
-async def _describe_image_if_needed(image_b64: Optional[str], modality: str) -> str:
-    """Generate a short technical image description for judge prompts when needed."""
-    if not image_b64:
-        return ""
-
-    candidates = []
-    image_desc_model = _resolve_image_desc_model()
-    if image_desc_model:
-        candidates.append(image_desc_model)
-    candidates.extend(VISION_VLM_CANDIDATES)
-    candidates.extend(MULTIMODAL_VLM_CANDIDATES)
-
-    seen = set()
-    ordered = []
-    for m in candidates:
-        if m and m not in seen:
-            seen.add(m)
-            ordered.append(m)
-
-    prompt = (
-        "Descreva tecnicamente o conteúdo da imagem fornecida. "
-        "Use poucas frases, sem especulação."
-    )
-
-    for model_name in ordered:
-        try:
-            text_out, _ = await call_model(
-                model=model_name,
-                prompt=prompt,
-                image_b64=image_b64,
-                temperature=0.1,
-                max_tokens=128,
-            )
-            if isinstance(text_out, str) and text_out.strip():
-                return text_out.strip()
-        except Exception:
-            pass
-
-    return ""
 
 
 # ============================================================
