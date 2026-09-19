@@ -51,7 +51,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(uq, "get_redis", lambda: _R2())
     monkeypatch.setattr(uq, "embed_text", lambda t: [1.0, 0.0, 0.0])
     score = uq.get_uncertainty_score("hello", modality="text")
-    assert 0.0 <= score <= 1.0
+    assert score == pytest.approx(0.0)  # consulta idêntica ao único centróide
 
     monkeypatch.setattr(uq, "embed_text", lambda t: [0.0, 0.0, 0.0])
     assert uq.get_uncertainty_score("hello", modality="text") == 1.0
@@ -187,7 +187,7 @@ def test_online_predictor_metrics_and_calibration(monkeypatch, tmp_path):
 
     emb = [0.1] * 8
     prob = p.predict_error_probability(emb)
-    assert 0.0 <= prob <= 1.0
+    assert prob == 0.5  # modelo sem treino: probabilidade neutra
     p.learn(emb, is_correct=True)
     p.record_outcome(0.7, actual_error=True)
     p.record_outcome(0.1, actual_error=False)

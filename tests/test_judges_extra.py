@@ -160,7 +160,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(judges, "_meta_evaluate_binary", _meta)
 
     s1 = await judges.llm_based_score("q", "a", False, "text", None)
-    assert 0.0 <= s1 <= 1.0
+    assert s1 == 1.0  # meta-juiz (10/10) decide o conflito
     s2 = await judges.llm_based_score("q", "a", False, "text", None)
     assert s2 == s1  # cached
     assert calls["n"] == 2

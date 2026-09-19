@@ -16,7 +16,7 @@ from app import judges
 async def test_heuristic_score_valid():
     """Avalia se o score heurístico retorna dentro do intervalo esperado."""
     score = judges.heuristic_score("Esta é uma resposta com pontuação final.")
-    assert 0.0 <= score <= 1.0
+    assert score == pytest.approx(0.48)
 
 
 @pytest.mark.asyncio
@@ -34,25 +34,30 @@ async def test_judge_answer_empty_response():
     assert result[0]["score"] == 0.0
 
 
+@pytest.mark.parametrize(
+    ("judge_output", "expected"),
+    [
+        ("<reasoning>ok</reasoning><verdict>CORRECT</verdict>", 1.0),
+        ("<verdict>INCORRECT</verdict>", 0.0),
+        ("Nota 9", 0.0),  # juiz binário sem veredito reconhecível conta como INCORRECT
+    ],
+)
 @pytest.mark.asyncio
-async def test_llm_based_score_mock(monkeypatch):
-    """Substitui o modelo real por mock e verifica conversão do score."""
-    async def fake_call_model(*args, **kwargs):
-        """Execute the fake call model routine.
+async def test_llm_based_score_mock(monkeypatch, judge_output, expected):
+    """Substitui o modelo real por mock e verifica a conversão do veredito binário."""
 
-This helper encapsulates one focused step used by the surrounding workflow."""
-        return "Nota 9", {}
+    async def fake_call_model(*args, **kwargs):
+        return judge_output, {}
 
     monkeypatch.setattr(judges, "call_model", fake_call_model)
-    # Use the correct function signature with all required arguments
     score = await judges.llm_based_score(
-        query="Pergunta",
+        query=f"Pergunta {judge_output}",  # chave distinta: não reaproveita o cache de vereditos
         answer="Resposta",
         use_rag=False,
         modality="text",
-        image_b64=None
+        image_b64=None,
     )
-    assert 0.0 <= score <= 1.0
+    assert score == expected
 
 
 def test_parse_score_from_text():

@@ -226,8 +226,11 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert source == "nsga"
 
     monkeypatch.setattr(reward, "load_reward_weights", lambda modality="text": ((0.6, 0.3, 0.1), "nsga"))
+    monkeypatch.setattr(reward, "_setting_float", lambda key, default: default)
     r = bandits.compute_reward("m1", quality=8.0, latency_s=1.0, cost_per_1k=0.1)
-    assert 0.0 <= r <= 1.0
+    # 0,6*0,8 + 0,3*latency_score(1 s) + 0,1*piso de custo (0,1 USD/1k >> C_base 0,007)
+    assert r == pytest.approx(0.6 * 0.8 + 0.3 * reward.latency_score(1.0) + 0.1 * reward.COST_SCORE_FLOOR)
+    assert r == pytest.approx(0.78216, abs=1e-5)
 
     def _boom(modality="text"):
         """Simulate a failure while loading reward weights."""

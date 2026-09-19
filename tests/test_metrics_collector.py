@@ -8,6 +8,8 @@ handling for the corresponding runtime component.
 
 from types import SimpleNamespace
 
+import pytest
+
 from app import metrics_collector as mc
 
 
@@ -78,7 +80,7 @@ def test_ensure_table_and_persist_sample_success(monkeypatch):
     assert params["latms"] == 1500.0
     assert params["vis"] == 1
     assert params["gen"] == 3
-    assert 0.0 <= params["fit"] <= 1.0
+    assert params["fit"] == pytest.approx(0.81875)
 
 
 def test_persist_sample_swallows_exceptions(monkeypatch):
