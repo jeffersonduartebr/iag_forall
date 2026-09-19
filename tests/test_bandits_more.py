@@ -239,12 +239,12 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
 def test_centroids_online_update_and_label(monkeypatch):
     """Testa centroids online update and label."""
-    from app import bandits
+    from app.services import centroid_store as cs
 
-    monkeypatch.setattr(bandits, "_acquire_lock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(bandits, "_release_lock", lambda *args, **kwargs: None)
-    monkeypatch.setattr(bandits, "embed_text", lambda q: np.ones(4, dtype=np.float32))
-    monkeypatch.setattr(bandits, "CENTROIDS_DIM", 4)
+    monkeypatch.setattr(cs, "_acquire_lock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(cs, "_release_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cs, "embed_text", lambda q: np.ones(4, dtype=np.float32))
+    monkeypatch.setattr(cs, "CENTROIDS_DIM", 4)
 
     saved = {}
 
@@ -254,27 +254,27 @@ def test_centroids_online_update_and_label(monkeypatch):
 This helper encapsulates one focused step used by the surrounding workflow."""
         saved["cents"] = c
 
-    monkeypatch.setattr(bandits, "_save_centroids", _save)
-    monkeypatch.setattr(bandits, "_load_centroids", lambda update_matrix_cache=True: [])
-    cid = bandits.centroids_online_update("hello")
+    monkeypatch.setattr(cs, "_save_centroids", _save)
+    monkeypatch.setattr(cs, "_load_centroids", lambda update_matrix_cache=True: [])
+    cid = cs.centroids_online_update("hello")
     assert cid == 0
     assert saved["cents"][0]["id"] == 0
 
     now = int(__import__("time").time())
     cents = [{"id": 7, "vec": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), "count": 1, "last": now}]
-    monkeypatch.setattr(bandits, "_load_centroids", lambda update_matrix_cache=True: cents)
-    monkeypatch.setattr(bandits, "_nearest_centroid_vec", lambda v, c: (0, 0.99))
-    cid = bandits.centroids_online_update("hello")
+    monkeypatch.setattr(cs, "_load_centroids", lambda update_matrix_cache=True: cents)
+    monkeypatch.setattr(cs, "_nearest_centroid_vec", lambda v, c: (0, 0.99))
+    cid = cs.centroids_online_update("hello")
     assert cid == 7
 
     from app.services.bandit_centroids import CentroidMatrix
 
-    monkeypatch.setattr(bandits, "_get_rds", lambda: object())
+    monkeypatch.setattr(cs, "_get_rds", lambda: object())
     monkeypatch.setattr(
-        bandits,
+        cs,
         "load_centroid_matrix",
         lambda rds, key, meta, dim: CentroidMatrix(np.array([[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]), [3, 7]),
     )
-    monkeypatch.setattr(bandits, "embed_text", lambda q: np.array([0.9, 0.1, 0.0, 0.0], dtype=np.float32))
-    label = bandits._nearest_centroid_label("hello")
+    monkeypatch.setattr(cs, "embed_text", lambda q: np.array([0.9, 0.1, 0.0, 0.0], dtype=np.float32))
+    label = cs._nearest_centroid_label("hello")
     assert label == "semctx:7"

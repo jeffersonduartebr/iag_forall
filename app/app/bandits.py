@@ -16,18 +16,14 @@ maintenance, context aggregation, and policy-combination helpers.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import random  # noqa: F401  (usado via patch em app.bandits.random.random nos testes)
-import threading
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
 from app.db import get_engine
-from app.embeddings import embed_text
 from app.observability import (
     BANDIT_REWARD,
     BANDIT_SELECT,
@@ -35,9 +31,6 @@ from app.observability import (
 )
 from app.services import bandit_policy
 from app.services.bandit_centroids import (
-    load_centroid_matrix,
-    nearest_centroid_from_array,
-    normalize_centroid_vec,
     reset_centroid_matrix_cache,
 )
 from app.services.bandit_stats_store import (
@@ -48,6 +41,30 @@ from app.services.bandit_stats_store import (
     sanitize_model_stats,
     serialize_model_stats,
     upsert_stats_db,
+)
+
+# Centróides semânticos (Redis, lock, aprendizado online): services.centroid_store.
+from app.services.centroid_store import (  # noqa: F401  (reexportados: pontos de uso e testes)
+    CENTROIDS_DIM,
+    CENTROIDS_K,
+    CENTROIDS_LEARN_RATE,
+    CENTROIDS_MIN_SIM_CREATE,
+    R_CENTROIDS,
+    R_CENTROIDS_LOCK,
+    R_CENTROIDS_META,
+    CentroidMatrixCache,
+    _acquire_lock,
+    _centroid_matrix_cache,
+    _cosine,
+    _ensure_dim,
+    _load_centroids,
+    _nearest_centroid_label,
+    _nearest_centroid_vec,
+    _new_centroid_id,
+    _release_lock,
+    _save_centroids,
+    _unit,
+    centroids_online_update,
 )
 
 # Recompensa acoplada ao NSGA-II: implementação em app.services.reward, reexportada
@@ -83,9 +100,6 @@ def _get_rds():
 # Redis Keys (ajustadas)
 R_CTX_PREFIX = "meta:bandit:ctx"                  # por contexto → stats
 R_META_STRATEGY = "meta:bandit:strategy"          # qual estratégia meta-bandit venceu
-R_CENTROIDS = "meta:bandit:centroids"             # lista completa de centróides (UQ)
-R_CENTROIDS_META = "meta:bandit:centroids:meta"
-R_CENTROIDS_LOCK = "meta:bandit:centroids:lock"
 R_CLUSTERING_MODEL = "meta:bandit:cluster:model"  # clustering automático
 R_CLUSTERING_LOCK = "meta:bandit:cluster:lock"
 
@@ -109,10 +123,6 @@ def _safe_setting_int(key: str, default: int) -> int:
 
 
 DEFAULT_EPSILON = _safe_setting_float("BANDIT_EPSILON", 0.12)
-CENTROIDS_K = _safe_setting_int("CENTROIDS_K", 20)
-CENTROIDS_DIM = _safe_setting_int("CENTROIDS_DIM", 768)
-CENTROIDS_LEARN_RATE = _safe_setting_float("CENTROIDS_LEARN_RATE", 0.15)
-CENTROIDS_MIN_SIM_CREATE = _safe_setting_float("CENTROIDS_MIN_SIM_CREATE", 0.35)
 CENTROIDS_MIN_RECORDS_FOR_TRAIN = _safe_setting_int("CENTROIDS_MIN_RECORDS_FOR_TRAIN", 50)
 # Atualizações de centróide em voo (pool de segundo plano); acima disso são descartadas.
 CENTROID_LEARNING_MAX_INFLIGHT = _safe_setting_int("CENTROID_LEARNING_MAX_INFLIGHT", 8)
@@ -120,310 +130,9 @@ CENTROID_LEARNING_MAX_INFLIGHT = _safe_setting_int("CENTROID_LEARNING_MAX_INFLIG
 # Meta-Bandit: estratégias
 META_STRATEGIES = ["epsilon_greedy", "ucb1", "thompson"]
 
-# ============================================================
-# Utils NumPy
-# ============================================================
-def _unit(v: np.ndarray) -> np.ndarray:
-    """Return a normalized vector, preserving zero vectors unchanged."""
-    n = np.linalg.norm(v)
-    return v if n == 0 else v / n
-
-
-def _cosine(a: np.ndarray, b: np.ndarray) -> float:
-    """Compute cosine similarity between two vectors safely."""
-    denom = np.linalg.norm(a) * np.linalg.norm(b)
-    if denom == 0:
-        return 0.0
-    return float(np.dot(a, b) / denom)
-
-
-def _ensure_dim(v: np.ndarray) -> np.ndarray:
-    """Project a vector to the configured centroid dimensionality."""
-    return normalize_centroid_vec(v, CENTROIDS_DIM)
-
-
 # Sanitização das estatísticas: ver services.bandit_stats_store.sanitize_model_stats.
 _sanitize_model_stats = sanitize_model_stats
 
-
-# ============================================================
-# Pre-computed Centroid Matrix Cache (Performance Optimization)
-# ============================================================
-class CentroidMatrixCache:
-    """Cache a dense centroid matrix for fast nearest-neighbor lookup.
-
-    Centroid search is a hot path during routing. Precomputing the stacked
-    matrix avoids repeated array construction and enables a single vectorized dot
-    product for nearest-centroid selection.
-    """
-
-    def __init__(self):
-        """Initialize the centroid cache with no precomputed matrix."""
-        self._lock = threading.Lock()
-        self._matrix: Optional[np.ndarray] = None  # (K, D)
-        self._ids: List[int] = []
-        self._version: int = 0
-        self._last_update: float = 0.0
-
-    def update(self, cents: List[dict]) -> None:
-        """Atualiza a matriz cache com os centróides atuais."""
-        if not cents:
-            with self._lock:
-                self._matrix = None
-                self._ids = []
-                self._version += 1
-            return
-
-        with self._lock:
-            self._matrix = np.stack([c["vec"] for c in cents], axis=0).astype(np.float32)
-            self._ids = [c["id"] for c in cents]
-            self._version += 1
-            self._last_update = time.time()
-
-    def nearest(self, v: np.ndarray) -> Tuple[Optional[int], float, int]:
-        """
-        Busca o centróide mais próximo usando a matriz pré-computada.
-        Retorna: (índice no array original, similaridade, centroid_id)
-        """
-        with self._lock:
-            if self._matrix is None or len(self._ids) == 0:
-                return None, 0.0, -1
-
-            # Produto escalar vetorizado (unit vectors → cosine)
-            sims = self._matrix @ v
-            idx = int(np.argmax(sims))
-            return idx, float(sims[idx]), self._ids[idx]
-
-    def is_stale(self, max_age_s: float = 60.0) -> bool:
-        """Verifica se o cache está desatualizado."""
-        return time.time() - self._last_update > max_age_s
-
-
-_centroid_matrix_cache = CentroidMatrixCache()
-
-# ============================================================
-# Centróides semânticos (NumPy vetorizado) + clustering dinâmico
-# ============================================================
-
-def _acquire_lock(key: str, ttl: int = 10) -> bool:
-    """Acquire a short-lived Redis lock for centroid mutation."""
-    rds = _get_rds()
-    if not rds:
-        return False
-    try:
-        return bool(rds.set(key, "1", nx=True, ex=ttl))
-    except Exception:
-        return False
-
-
-def _release_lock(key: str) -> None:
-    """Release a Redis lock previously acquired for centroid mutation."""
-    rds = _get_rds()
-    if not rds:
-        return
-    try:
-        rds.delete(key)
-    except Exception:
-        pass
-
-
-def _load_centroids(update_matrix_cache: bool = True) -> List[dict]:
-    """
-    Carrega centróides de Redis:
-    [
-      {"id": int, "vec": np.ndarray(D,), "count": int, "last": int}
-    ]
-    """
-    rds = _get_rds()
-    if not rds:
-        return []
-    try:
-        raw = rds.get(R_CENTROIDS)
-        if not raw:
-            return []
-        arr = json.loads(raw)
-        cents: List[dict] = []
-        for it in arr:
-            if not isinstance(it, dict):
-                continue
-            if "id" not in it or "vec" not in it:
-                continue
-            vec = np.array(it["vec"], dtype=np.float32)
-            vec = _ensure_dim(vec)
-            cnt = int(it.get("count", 0))
-            last = int(it.get("last", int(time.time())))
-            cents.append({"id": int(it["id"]), "vec": vec, "count": cnt, "last": last})
-
-        # Update the pre-computed matrix cache
-        if update_matrix_cache and cents:
-            _centroid_matrix_cache.update(cents)
-
-        return cents
-    except Exception as e:
-        logger.warning(f"[centroids] Falha ao carregar: {e}")
-        return []
-
-
-def _save_centroids(cents: List[dict]) -> None:
-    """
-    Persiste centróides com reinicialização automática de degenerados.
-    """
-    rds = _get_rds()
-    if not rds:
-        return
-    serial = []
-    normalized_cents = []
-    now_ts = int(time.time())
-
-    for it in cents:
-        vec = np.array(it["vec"], dtype=np.float32).reshape(-1)
-        # reinicialização de degenerados
-        if not np.isfinite(vec).all() or np.linalg.norm(vec) < 1e-4:
-            vec = np.random.normal(size=(CENTROIDS_DIM,)).astype(np.float32)
-            vec = _unit(vec)
-            cnt = 0
-        else:
-            vec = _unit(vec)
-            cnt = int(it.get("count", 0))
-
-        serial.append(
-            {
-                "id": int(it["id"]),
-                "vec": vec.tolist(),
-                "count": cnt,
-                "last": int(it.get("last", now_ts)),
-            }
-        )
-        normalized_cents.append({"id": int(it["id"]), "vec": vec, "count": cnt, "last": int(it.get("last", now_ts))})
-
-    try:
-        pipe = rds.pipeline()
-        pipe.set(R_CENTROIDS, json.dumps(serial))
-        pipe.hset(
-            R_CENTROIDS_META,
-            mapping={
-                "updated_at": str(now_ts),
-                "k": str(CENTROIDS_K),
-                "dim": str(CENTROIDS_DIM),
-                "count": str(len(serial)),
-            },
-        )
-        # Revisão monotônica: leitores (incerteza, rótulo de contexto) só reprocessam o JSON quando muda.
-        pipe.hincrby(R_CENTROIDS_META, "rev", 1)
-        pipe.execute()
-
-        # Update the pre-computed matrix cache
-        _centroid_matrix_cache.update(normalized_cents)
-
-    except Exception as e:
-        logger.warning(f"[centroids] Falha ao salvar: {e}")
-
-
-def _new_centroid_id(cents: List[dict]) -> int:
-    """Return the first unused integer identifier for a new centroid."""
-    used = {c["id"] for c in cents}
-    cid = 0
-    while cid in used:
-        cid += 1
-    return cid
-
-
-def _nearest_centroid_vec(
-    v: np.ndarray, cents: List[dict], use_cache: bool = True
-) -> Tuple[Optional[int], float]:
-    """
-    Versão vetorizada: empilha centróides e faz produto escalar.
-    Assumimos vetores unitários.
-
-    Se use_cache=True e o cache da matriz está atualizado, usa o cache.
-    """
-    if not cents:
-        return None, 0.0
-
-    # Try to use pre-computed matrix cache for faster lookup
-    if use_cache and not _centroid_matrix_cache.is_stale(max_age_s=120.0):
-        idx, sim, _ = _centroid_matrix_cache.nearest(v)
-        if idx is not None:
-            return idx, sim
-
-    # Fallback: compute on-the-fly
-    return nearest_centroid_from_array(v, cents)
-
-
-def centroids_online_update(query_text: str) -> Optional[int]:
-    """
-    Update semantic centroids online using the current query embedding.
-
-    The procedure either creates a new centroid for sufficiently novel queries or
-    nudges the nearest existing centroid toward the new embedding using an
-    exponential moving update. Returning ``None`` means the update failed or was
-    skipped because another process already holds the mutation lock.
-    """
-    try:
-        v = embed_text(query_text)
-        if not isinstance(v, np.ndarray):
-            v = np.array(v, dtype=np.float32)
-        v = _ensure_dim(v)
-    except Exception as e:
-        logger.debug(f"[centroids] Falha ao gerar embedding: {e}")
-        return None
-
-    if not _acquire_lock(R_CENTROIDS_LOCK, ttl=5):
-        return None
-
-    try:
-        cents = _load_centroids()
-        if not cents:
-            cid = 0
-            cents = [{"id": cid, "vec": v, "count": 1, "last": int(time.time())}]
-            _save_centroids(cents)
-            return cid
-
-        idx, sim = _nearest_centroid_vec(v, cents)
-
-        if (idx is None) or (sim < CENTROIDS_MIN_SIM_CREATE and len(cents) < CENTROIDS_K):
-            cid = _new_centroid_id(cents)
-            cents.append(
-                {"id": cid, "vec": v, "count": 1, "last": int(time.time())}
-            )
-            _save_centroids(cents)
-            return cid
-
-        # Update exponencial no centróide existente
-        c = cents[idx]
-        new_vec = (1.0 - CENTROIDS_LEARN_RATE) * c["vec"] + CENTROIDS_LEARN_RATE * v
-        new_vec = _unit(new_vec.astype(np.float32))
-        c["vec"] = new_vec
-        c["count"] = int(c.get("count", 0)) + 1
-        c["last"] = int(time.time())
-        _save_centroids(cents)
-        return c["id"]
-    finally:
-        _release_lock(R_CENTROIDS_LOCK)
-
-
-def _nearest_centroid_label(query_text: str) -> Optional[str]:
-    """
-    Return a read-only semantic context label for the nearest known centroid.
-
-    Unlike ``centroids_online_update()``, this helper never mutates centroid
-    state. It exists for logging, inspection, and other non-learning paths.
-    """
-    rds = _get_rds()
-    if not rds:
-        return None
-    try:
-        centroids = load_centroid_matrix(rds, R_CENTROIDS, R_CENTROIDS_META, CENTROIDS_DIM)
-        if centroids is None:
-            return None
-        v = embed_text(query_text)
-        if not isinstance(v, np.ndarray):
-            v = np.array(v, dtype=np.float32)
-        v = _ensure_dim(v)
-        idx = int(np.argmax(centroids.matrix @ v))
-    except Exception:
-        return None
-    return f"semctx:{centroids.ids[idx]}"
 
 # ============================================================
 # Contextos automáticos via clustering dinâmico

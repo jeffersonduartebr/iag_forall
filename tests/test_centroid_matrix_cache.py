@@ -87,11 +87,11 @@ def test_uncertainty_cold_start_skips_embedding(monkeypatch):
 
 
 def test_save_centroids_bumps_revision(monkeypatch):
-    from app import bandits
+    from app.services import centroid_store as cs
 
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr(bandits, "_get_rds", lambda: server)
-    vec = np.ones(bandits.CENTROIDS_DIM, dtype=np.float32)
-    bandits._save_centroids([{"id": 0, "vec": vec, "count": 1, "last": 0}])
-    bandits._save_centroids([{"id": 0, "vec": vec, "count": 2, "last": 0}])
-    assert server.hget(bandits.R_CENTROIDS_META, "rev") == b"2"
+    monkeypatch.setattr(cs, "_get_rds", lambda: server)
+    vec = np.ones(cs.CENTROIDS_DIM, dtype=np.float32)
+    cs._save_centroids([{"id": 0, "vec": vec, "count": 1, "last": 0}])
+    cs._save_centroids([{"id": 0, "vec": vec, "count": 2, "last": 0}])
+    assert server.hget(cs.R_CENTROIDS_META, "rev") == b"2"
