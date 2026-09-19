@@ -127,41 +127,42 @@ init_db_tables()
 # ============================================================
 # 1. Carregamento de Modelos
 # ============================================================
-def load_candidate_models(modality: str) -> List[str]:
-    # 1. Redis
-    """Load candidate models.
+_SETTINGS_CANDIDATES = {
+    "text": "CANDIDATE_MODELS_LIST",
+    "vision": "CANDIDATE_VISION_MODELS_LIST",
+    "multimodal": "CANDIDATE_MULTIMODAL_MODELS_LIST",
+}
+_FALLBACK_CANDIDATES = {
+    "text": ("ollama/phi4:latest", "ollama/mistral:7b"),
+    "vision": ("ollama/llava:7b", "ollama/moondream:latest"),
+    "multimodal": ("ollama/llava:7b", "ollama/moondream:latest"),
+}
 
-    The function reads the current representation from its backing store or runtime source."""
+
+def _candidates_from_redis(modality: str) -> List[str]:
     try:
-        if redis_client:
-            raw = redis_client.get(REDIS_KEY_CANDIDATES.get(modality, ""))
-            if raw:
-                data = json.loads(raw)
-                if isinstance(data, list) and data:
-                    return [str(x) for x in data]
+        raw = redis_client.get(REDIS_KEY_CANDIDATES.get(modality, "")) if redis_client else None
+        data = json.loads(raw) if raw else None
     except Exception:
-        pass
+        return []
+    return [str(x) for x in data] if isinstance(data, list) else []
 
-    # 2. Settings
-    if modality == "text":
-        candidates = settings.CANDIDATE_MODELS_LIST
-    elif modality == "vision":
-        candidates = settings.CANDIDATE_VISION_MODELS_LIST
-    elif modality == "multimodal":
-        candidates = settings.CANDIDATE_MULTIMODAL_MODELS_LIST
-    else:
-        candidates = []
 
+def load_candidate_models(modality: str) -> List[str]:
+    """Candidate models for one modality: Redis override, then settings, then a local fallback.
+
+    Duplicates are dropped keeping the configured order, so the NSGA-II
+    genome maps to the same models in every process.
+    """
+    cached = _candidates_from_redis(modality)
+    if cached:
+        return cached
+    setting = _SETTINGS_CANDIDATES.get(modality)
+    candidates = getattr(settings, setting) if setting else []
     if candidates:
-        return list(set([c for c in candidates if c]))
-
-    # 3. Fallback de Segurança
+        return list(dict.fromkeys(c for c in candidates if c))
     logger.warning(f"[NSGA] ⚠️ Nenhum modelo encontrado para '{modality}'. Usando fallback.")
-    if modality == "text":
-        return ["ollama/phi4:latest", "ollama/mistral:7b"]
-    elif modality in ("vision", "multimodal"):
-        return ["ollama/llava:7b", "ollama/moondream:latest"]
-    return []
+    return list(_FALLBACK_CANDIDATES.get(modality, ()))
 
 
 # ============================================================

@@ -59,6 +59,29 @@ def tune_uncertainty_threshold(current_efficiency: float) -> float:
 # ============================================================
 # 6. Ajuste Dinâmico de Pesos Globais (Strategy Tuning) - NOVO
 # ============================================================
+_WEIGHT_LABELS = {"NSGA_W_LATENCY": "Lat", "NSGA_W_QUALITY": "Qual", "NSGA_W_COST": "Cost"}
+
+
+def propose_strategy_weights(
+    sys_metrics: Tuple[float, float, float], w_quality: float, w_latency: float, w_cost: float
+) -> Dict[str, Tuple[float, float]]:
+    """P-controller on the portfolio metrics: ``setting -> (old, new)`` for the weights that move.
+
+    Latency target < 3 s (relaxed below 1 s), quality > 7, cost < 0.01 USD/request.
+    """
+    sys_lat, sys_cst, sys_qlt = sys_metrics
+    proposals: Dict[str, Tuple[float, float]] = {}
+    if sys_lat > 3.0:
+        proposals["NSGA_W_LATENCY"] = (w_latency, min(2.0, w_latency + 0.1))
+    elif sys_lat < 1.0:
+        proposals["NSGA_W_LATENCY"] = (w_latency, max(0.1, w_latency - 0.05))
+    if sys_qlt < 7.0:
+        proposals["NSGA_W_QUALITY"] = (w_quality, min(5.0, w_quality + 0.2))
+    if sys_cst > 0.01:
+        proposals["NSGA_W_COST"] = (w_cost, min(100.0, w_cost + 5.0))
+    return {key: (old, new) for key, (old, new) in proposals.items() if new != old}
+
+
 def tune_global_strategy_weights(sys_metrics: Tuple[float, float, float]):
     """
     Ajusta os pesos globais (NSGA_W_QUALITY, etc.) baseado no desempenho
@@ -67,48 +90,12 @@ def tune_global_strategy_weights(sys_metrics: Tuple[float, float, float]):
     Se o sistema ideal encontrado ainda é lento, aumentamos a penalidade de latência.
     Se a qualidade está baixa, aumentamos o peso da qualidade.
     """
-    sys_lat, sys_cst, sys_qlt = sys_metrics
-
-    # Lê valores atuais
-    w_qual = settings.NSGA_W_QUALITY
-    w_lat = settings.NSGA_W_LATENCY
-    w_cost = settings.NSGA_W_COST
-
-    changes = []
-
-    # --- Lógica de Controle (P-Controller simples) ---
-
-    # 1. Controle de Latência (Target: < 3.0s)
-    if sys_lat > 3.0:
-        # Sistema lento -> Aumenta importância da latência
-        new_w_lat = min(2.0, w_lat + 0.1)
-        if new_w_lat != w_lat:
-            settings.set("NSGA_W_LATENCY", str(round(new_w_lat, 2)), actor="nsga-updater")
-            changes.append(f"Lat {w_lat}->{new_w_lat:.2f}")
-    elif sys_lat < 1.0:
-        # Sistema muito rápido -> Relaxa latência para ganhar qualidade
-        new_w_lat = max(0.1, w_lat - 0.05)
-        if new_w_lat != w_lat:
-            settings.set("NSGA_W_LATENCY", str(round(new_w_lat, 2)), actor="nsga-updater")
-            changes.append(f"Lat {w_lat}->{new_w_lat:.2f}")
-
-    # 2. Controle de Qualidade (Target: > 7.0)
-    if sys_qlt < 7.0:
-        # Qualidade baixa -> Aumenta importância da qualidade
-        new_w_qual = min(5.0, w_qual + 0.2)
-        if new_w_qual != w_qual:
-            settings.set("NSGA_W_QUALITY", str(round(new_w_qual, 2)), actor="nsga-updater")
-            changes.append(f"Qual {w_qual}->{new_w_qual:.2f}")
-
-    # 3. Controle de Custo (Target: < $0.01/req)
-    if sys_cst > 0.01:
-        new_w_cost = min(100.0, w_cost + 5.0)
-        if new_w_cost != w_cost:
-            settings.set("NSGA_W_COST", str(round(new_w_cost, 2)), actor="nsga-updater")
-            changes.append(f"Cost {w_cost}->{new_w_cost:.2f}")
-
+    changes = propose_strategy_weights(sys_metrics, settings.NSGA_W_QUALITY, settings.NSGA_W_LATENCY, settings.NSGA_W_COST)
+    for key, (_old, new) in changes.items():
+        settings.set(key, str(round(new, 2)), actor="nsga-updater")
     if changes:
-        logger.info(f"[Strategy-Tuning] Ajustes aplicados: {', '.join(changes)}")
+        applied = ", ".join(f"{_WEIGHT_LABELS[key]} {old}->{new:.2f}" for key, (old, new) in changes.items())
+        logger.info(f"[Strategy-Tuning] Ajustes aplicados: {applied}")
 
 
 # ============================================================
@@ -247,6 +234,36 @@ def tune_risk_factors() -> Dict[str, Any]:
 # ============================================================
 # 6.2 UQ Calibration Against Actual Errors (Phase 5 - Improvement 4)
 # ============================================================
+def split_by_uncertainty(rows: List[Any], threshold: float) -> Tuple[List[float], List[float]]:
+    """Qualities of ``(model, quality, uq)`` rows above / at-or-below the uncertainty threshold."""
+    high: List[float] = []
+    low: List[float] = []
+    for _model, quality, uq in rows:
+        (high if (float(uq) if uq else 0.5) > threshold else low).append(float(quality) if quality else 5.0)
+    return high, low
+
+
+def decide_threshold(current: float, quality_gap: float, gap_relax: float, gap_tighten: float) -> Tuple[float, str]:
+    """Relax when high-UQ answers are barely worse, tighten when they are much worse (bounds 0.20-0.80)."""
+    if quality_gap < gap_relax:
+        return min(0.80, current + 0.05), "RELAX"
+    if quality_gap > gap_tighten:
+        return max(0.20, current - 0.05), "TIGHTEN"
+    return current, "KEEP"
+
+
+def _publish_uq_metrics(avg_high: float, avg_low: float, quality_gap: float) -> None:
+    try:
+        from app.observability import UQ_HIGH_AVG_QUALITY, UQ_LOW_AVG_QUALITY, UQ_VS_ERROR_CORRELATION
+
+        UQ_HIGH_AVG_QUALITY.set(avg_high)
+        UQ_LOW_AVG_QUALITY.set(avg_low)
+        # Aproximação da correlação: gap de qualidade normalizado
+        UQ_VS_ERROR_CORRELATION.set(min(1.0, max(-1.0, quality_gap / 5.0)))
+    except Exception:
+        pass
+
+
 def calibrate_uncertainty_threshold() -> Dict[str, Any]:
     """
     Calibrate uncertainty threshold based on actual quality outcomes.
@@ -262,105 +279,40 @@ def calibrate_uncertainty_threshold() -> Dict[str, Any]:
         return {"status": "disabled"}
     if is_frozen_policy_active():
         return {"status": "frozen"}
-
-    result: dict[str, Any] = {"old_threshold": None, "new_threshold": None, "metrics": {}}
-
     try:
-        with _db_engine().connect() as conn:
-            # Query data grouped by UQ level
-            rows = conn.execute(
-                text("""
-                    SELECT
-                        quality,
-                        JSON_EXTRACT(raw_payload, '$.uncertainty_score') as uq_score
-                    FROM query_log
-                    WHERE created_at > NOW() - INTERVAL 24 HOUR
-                    AND quality IS NOT NULL
-                    AND raw_payload IS NOT NULL
-                    AND JSON_EXTRACT(raw_payload, '$.uncertainty_score') IS NOT NULL
-                    LIMIT 5000
-                """)
-            ).fetchall()
-
+        rows = _recent_quality_rows()
         if len(rows) < 100:
             return {"status": "insufficient_data", "count": len(rows)}
+        current = float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD))
+        high, low = split_by_uncertainty(rows, current)
+        if len(high) < _MIN_BUCKET_SAMPLES or len(low) < _MIN_BUCKET_SAMPLES:
+            return {"status": "insufficient_split", "high_count": len(high), "low_count": len(low)}
 
-        current_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD))
-        result["old_threshold"] = current_threshold
-
-        high_uq_qualities = []
-        low_uq_qualities = []
-
-        for row in rows:
-            quality = float(row[0]) if row[0] else 5.0
-            uq_score = float(row[1]) if row[1] else 0.5
-
-            if uq_score > current_threshold:
-                high_uq_qualities.append(quality)
-            else:
-                low_uq_qualities.append(quality)
-
-        if len(high_uq_qualities) < 20 or len(low_uq_qualities) < 20:
-            return {
-                "status": "insufficient_split",
-                "high_count": len(high_uq_qualities),
-                "low_count": len(low_uq_qualities),
-            }
-
-        avg_quality_high = sum(high_uq_qualities) / len(high_uq_qualities)
-        avg_quality_low = sum(low_uq_qualities) / len(low_uq_qualities)
-        quality_gap = avg_quality_low - avg_quality_high
-
-        result["metrics"] = {
-            "high_uq_count": len(high_uq_qualities),
-            "low_uq_count": len(low_uq_qualities),
-            "avg_quality_high_uq": avg_quality_high,
-            "avg_quality_low_uq": avg_quality_low,
-            "quality_gap": quality_gap,
-        }
-
-        # Update Prometheus metrics
-        try:
-            from app.observability import UQ_HIGH_AVG_QUALITY, UQ_LOW_AVG_QUALITY, UQ_VS_ERROR_CORRELATION
-
-            UQ_HIGH_AVG_QUALITY.set(avg_quality_high)
-            UQ_LOW_AVG_QUALITY.set(avg_quality_low)
-            # Correlation approximation: quality_gap normalized
-            correlation_approx = min(1.0, max(-1.0, quality_gap / 5.0))
-            UQ_VS_ERROR_CORRELATION.set(correlation_approx)
-        except Exception:
-            pass
-
-        # Threshold adjustment logic
-        gap_relax = settings.UQ_QUALITY_GAP_RELAX
-        gap_tighten = settings.UQ_QUALITY_GAP_TIGHTEN
-
-        if quality_gap < gap_relax:
-            # High-UQ queries aren't much worse -> relax threshold
-            new_threshold = min(0.80, current_threshold + 0.05)
-            action = "RELAX"
-        elif quality_gap > gap_tighten:
-            # High-UQ queries are much worse -> tighten threshold
-            new_threshold = max(0.20, current_threshold - 0.05)
-            action = "TIGHTEN"
-        else:
-            new_threshold = current_threshold
-            action = "KEEP"
-
-        result["new_threshold"] = new_threshold
-        result["action"] = action
-
+        avg_high, avg_low = _mean(high), _mean(low)
+        quality_gap = avg_low - avg_high
+        _publish_uq_metrics(avg_high, avg_low, quality_gap)
+        new_threshold, action = decide_threshold(
+            current, quality_gap, settings.UQ_QUALITY_GAP_RELAX, settings.UQ_QUALITY_GAP_TIGHTEN
+        )
         if action != "KEEP":
             settings.set("UNCERTAINTY_THRESHOLD", str(round(new_threshold, 2)), actor="uq-calibrator")
             NSGA_UQ_THRESH.set(new_threshold)
             logger.info(
-                f"[UQ-Calibration] {action}: threshold {current_threshold:.2f} -> {new_threshold:.2f} "
-                f"(gap={quality_gap:.2f})"
+                f"[UQ-Calibration] {action}: threshold {current:.2f} -> {new_threshold:.2f} (gap={quality_gap:.2f})"
             )
-
-        result["status"] = "ok"
-        return result
-
+        return {
+            "old_threshold": current,
+            "new_threshold": new_threshold,
+            "action": action,
+            "metrics": {
+                "high_uq_count": len(high),
+                "low_uq_count": len(low),
+                "avg_quality_high_uq": avg_high,
+                "avg_quality_low_uq": avg_low,
+                "quality_gap": quality_gap,
+            },
+            "status": "ok",
+        }
     except Exception as e:
         logger.warning(f"[UQ-Calibration] Failed: {e}")
         return {"status": "error", "error": str(e)}
