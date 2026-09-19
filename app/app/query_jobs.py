@@ -364,6 +364,51 @@ def update_query_job_record(job_id: str, **fields: Any) -> None:
     redis_client.setex(_job_key(job_id), ttl, _json_dumps(payload))
 
 
+def _job_timings(payload: Dict[str, Any]) -> tuple[float, float]:
+    """Queue wait and execution time (s) of a finished job; missing stamps collapse to zero."""
+    finished_at = float(payload["finished_at"])
+    started_at = float(payload.get("started_at") or payload.get("created_at") or finished_at)
+    created_at = float(payload.get("created_at") or started_at)
+    return max(0.0, started_at - created_at), max(0.0, finished_at - started_at)
+
+
+def _payload_pending_identity(payload: Dict[str, Any]) -> str:
+    """Identity whose pending counter this job incremented at enqueue time."""
+    return (
+        str(payload.get("pending_identity") or "").strip()
+        or ((payload.get("request") or {}).get("tenant_id") or "").strip()
+        or "ip:unknown"
+    )
+
+
+def _observe_finished_job(status: QueryJobStatus, wait_seconds: float, execution_seconds: float) -> None:
+    try:
+        QUERY_JOB_QUEUE_SIZE.dec()
+        QUERY_JOB_WAIT_SECONDS.observe(wait_seconds)
+        QUERY_JOB_EXECUTION_SECONDS.observe(execution_seconds)
+        if status == QueryJobStatus.COMPLETED:
+            QUERY_JOBS_COMPLETED.inc()
+        elif status == QueryJobStatus.FAILED:
+            QUERY_JOBS_FAILED.inc()
+    except Exception:
+        pass
+
+
+def _notify_job_webhook(job_id: str, payload: Dict[str, Any], status: QueryJobStatus, result: Any, error: Any) -> None:
+    try:
+        from .services.query_webhooks import schedule_query_job_webhook
+
+        schedule_query_job_webhook(
+            webhook_url=(payload.get("request") or {}).get("webhook_url"),
+            job_id=job_id,
+            status=status.value,
+            result=result,
+            error=error,
+        )
+    except Exception:
+        pass
+
+
 def finalize_query_job(job_id: str, *, status: QueryJobStatus, result: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None) -> None:
     """Persist the terminal state of one queued query job and decrement tenant pending count."""
     redis_client = _get_job_store()
@@ -379,43 +424,13 @@ def finalize_query_job(job_id: str, *, status: QueryJobStatus, result: Optional[
         payload["result"] = result
     if error is not None:
         payload["error"] = error
-    ttl = max(1, int(redis_client.ttl(_job_key(job_id)) or _job_ttl_seconds()))
-    started_at = float(payload.get("started_at") or payload.get("created_at") or payload["finished_at"])
-    created_at = float(payload.get("created_at") or started_at)
-    wait_seconds = max(0.0, started_at - created_at)
-    execution_seconds = max(0.0, float(payload["finished_at"]) - started_at)
+    remaining = int(redis_client.ttl(_job_key(job_id)) or 0)
+    ttl = remaining if remaining > 0 else _job_ttl_seconds()  # -1 (sem TTL) / -2 não viram 1 s
+    pending_key = _tenant_pending_key(_payload_pending_identity(payload))
     pipe = redis_client.pipeline()
     pipe.setex(_job_key(job_id), ttl, _json_dumps(payload))
-    tenant_identity = (
-        str(payload.get("pending_identity") or "").strip()
-        or ((payload.get("request") or {}).get("tenant_id") or "").strip()
-        or "ip:unknown"
-    )
-    pending_key = _tenant_pending_key(tenant_identity)
     pipe.decr(pending_key)
     pipe.expire(pending_key, ttl)
     pipe.execute()
-    try:
-        QUERY_JOB_QUEUE_SIZE.dec()
-        QUERY_JOB_WAIT_SECONDS.observe(wait_seconds)
-        QUERY_JOB_EXECUTION_SECONDS.observe(execution_seconds)
-        if status == QueryJobStatus.COMPLETED:
-            QUERY_JOBS_COMPLETED.inc()
-        elif status == QueryJobStatus.FAILED:
-            QUERY_JOBS_FAILED.inc()
-    except Exception:
-        pass
-
-    try:
-        from .services.query_webhooks import schedule_query_job_webhook
-
-        request_data = payload.get("request") or {}
-        schedule_query_job_webhook(
-            webhook_url=request_data.get("webhook_url"),
-            job_id=job_id,
-            status=status.value,
-            result=result,
-            error=error,
-        )
-    except Exception:
-        pass
+    _observe_finished_job(status, *_job_timings(payload))
+    _notify_job_webhook(job_id, payload, status, result, error)
