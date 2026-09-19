@@ -1,15 +1,30 @@
 # Objective: Service-layer helpers for router feedback.
-"""Background feedback processing helper for router_core."""
+"""Background feedback processing helper for router_core.
+
+Orchestrates the stages in ``services.feedback_stages``: error-risk estimate,
+judge sampling, quality, reward/bandit update, exploration bookkeeping, EMA,
+semantic cache and query log.
+"""
 
 from __future__ import annotations
 
 import time
 from typing import Any, Dict, Optional
 
-import numpy as np
-
-from .reward import cost_per_1k_from_total
-from .router_services import spawn_via_deps
+from .feedback_stages import (
+    FeedbackRequest,
+    assess_error_risk,
+    decide_judging,
+    judge_quality,
+    maybe_store_cache,
+    observe_backlog_age,
+    persist_log,
+    proxy_quality,
+    record_exploration,
+    update_bandit,
+    update_ema,
+)
+from .router_stages import quietly
 
 
 async def process_background_feedback_impl(
@@ -28,284 +43,31 @@ async def process_background_feedback_impl(
     completion_tokens: int = 0,
 ) -> None:
     """Process feedback using injected router_core dependencies and state."""
-    feedback_start = time.time()
-    raw_payload_dict = raw_payload if isinstance(raw_payload, dict) else {}
-    enqueued_at = raw_payload_dict.get("queue_enqueued_at")
-    if isinstance(enqueued_at, (int, float)):
-        try:
-            deps["FEEDBACK_BACKLOG_AGE"].set(max(0.0, time.time() - float(enqueued_at)))
-        except Exception:
-            pass
-    confidence_score = raw_payload_dict.get("confidence_score")
-    confidence_band = raw_payload_dict.get("confidence_band")
-    grounded = bool(raw_payload_dict.get("grounded"))
-    abstained = bool(raw_payload_dict.get("abstained"))
-    abstain_reason = raw_payload_dict.get("abstain_reason")
-    verification_status = raw_payload_dict.get("verification_status")
-    knowledge_version = raw_payload_dict.get("knowledge_version")
-    review_status = raw_payload_dict.get("review_status")
+    started = time.time()
+    fb = FeedbackRequest(
+        query=query,
+        answer=answer,
+        chosen_model=chosen_model,
+        modality=modality,
+        latency_s=latency_s,
+        cost_val=cost_val,
+        image_b64=image_b64,
+        raw_payload=raw_payload,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+    observe_backlog_age(deps, fb, started)
     try:
-        stats = deps["_get_ctx_stats"]("global")
-        model_stats = stats.get(chosen_model, {})
-        n_samples = model_stats.get("count", 0)
-
-        predictor = deps["get_predictor"](chosen_model)
-        query_embedding = await deps["asyncio"].to_thread(deps["embed_text"], query)
-        predicted_error_prob = predictor.predict_error_probability(query_embedding)
-
-        prob_judge = deps["compute_judge_probability"](
-            n_samples=n_samples,
-            predicted_error_prob=predicted_error_prob,
-            chosen_model=chosen_model,
-            min_sample_rate=deps["settings"].JUDGE_MIN_SAMPLE_RATE,
-        )
-        pending_query_jobs = 0
-        try:
-            pending_query_jobs = max(0, int(deps.get("get_pending_query_jobs_count", lambda: 0)() or 0))
-        except Exception:
-            pending_query_jobs = 0
-        backlog_throttle_threshold = 1
-        try:
-            backlog_throttle_threshold = max(
-                1,
-                int(getattr(deps["settings"], "get", lambda k, d=None: d)("QUERY_JOB_BACKGROUND_THROTTLE_PENDING_THRESHOLD", "1")),
-            )
-        except Exception:
-            backlog_throttle_threshold = 1
-        background_throttle_enabled = str(getattr(deps["settings"], "get", lambda k, d=None: d)("JUDGE_BACKGROUND_THROTTLE_ENABLED", "1")).strip() == "1"
-        if pending_query_jobs >= backlog_throttle_threshold:
-            should_judge = False
-            quality_source = "bandit_proxy"
-            try:
-                deps["BACKGROUND_JUDGE_SKIPPED"].labels(reason="query_backlog").inc()
-                deps["logger"].info(
-                    "[Background] Judge throttled because queued query backlog=%s exceeds threshold=%s",
-                    pending_query_jobs,
-                    backlog_throttle_threshold,
-                )
-            except Exception:
-                pass
-        elif background_throttle_enabled and deps.get("should_throttle_background_judge", lambda: False)():
-            should_judge = False
-            quality_source = "bandit_proxy"
-            try:
-                deps["BACKGROUND_JUDGE_SKIPPED"].labels(reason="provider_pressure").inc()
-                deps["logger"].info("[Background] Judge throttled to preserve interactive Ollama capacity")
-            except Exception:
-                pass
-        else:
-            should_judge = deps["random"].random() < prob_judge
-            quality_source = "bandit_proxy"
-
-        if raw_payload_dict.get("openrouter_exploration"):
-            should_judge = True
-            quality_source = "bandit_proxy"
-            try:
-                deps["logger"].info("[Background] Forcing judge for OpenRouter exploration on %s", chosen_model)
-            except Exception:
-                pass
-
-        judge_rubric = None
-        if should_judge:
-            try:
-                deps["logger"].info(
-                    f"[Background] Sampling Judge for {chosen_model} (p={prob_judge:.2f}, pred_err={predicted_error_prob:.2f})"
-                )
-                judge_scores = await deps["judge_answer"](query, answer)
-                valid_scores = [score["score"] for score in judge_scores if "score" in score]
-                final_quality = round((float(np.mean(valid_scores)) if valid_scores else 5.0) * 10.0, 2)
-                quality_source = "judge"
-                if judge_scores and all(s.get("judge_id") == "heuristic_fallback" for s in judge_scores):
-                    # Nenhum juiz LLM respondeu: medição grosseira, sinalizada e fora do preditor.
-                    quality_source = "heuristic_fallback"
-                rubric_entry = next((s for s in judge_scores if s.get("judge_id") == "llm_rubric"), None)
-                if rubric_entry is not None:
-                    judge_rubric = {
-                        k: rubric_entry.get(k) for k in ("score", "dimensions", "dispersion", "n_judges", "judges")
-                    }
-                if quality_source == "judge":
-                    is_correct_label = final_quality >= 7.0
-                    predictor.learn(query_embedding, is_correct_label)
-                    predictor.record_outcome(predicted_error_prob, not is_correct_label)
-                    predictor.maybe_save()
-            except Exception:
-                final_quality = 5.0
-                quality_source = "fallback_default"
-                try:
-                    deps["FEEDBACK_TASK_FAILURES"].labels(stage="judge").inc()
-                except Exception:
-                    pass
-        else:
-            # The bandit "mean" tracks average reward, not literal quality. We
-            # keep it as a cheap proxy for persistence, but explicitly mark the
-            # source so downstream consumers do not treat it as judged quality.
-            final_quality = max(0.0, min(10.0, model_stats.get("mean", 0.5) * 10.0))
-
-        try:
-            reward = deps["compute_reward"](
-                chosen_model,
-                final_quality,
-                latency_s,
-                cost_per_1k_from_total(cost_val, prompt_tokens, completion_tokens),
-                modality=modality,
-            )
-        except Exception:
-            reward = 0.0
-
-        try:
-            deps["bandit_update"](model=chosen_model, query=query, reward=reward, modality=modality)
-        except Exception as exc:
-            deps["logger"].warning(f"[Background] Bandit fail: {exc}")
-            try:
-                deps["FEEDBACK_TASK_FAILURES"].labels(stage="bandit_update").inc()
-            except Exception:
-                pass
-
-        if raw_payload_dict.get("openrouter_exploration"):
-            record_fn = deps.get("record_openrouter_exploration")
-            if record_fn is not None:
-                try:
-                    exploration_info = raw_payload_dict.get("exploration_info") or {}
-                    success = bool(answer and str(answer).strip())
-                    promotion = await record_fn(
-                        model=chosen_model,
-                        reward=reward,
-                        latency_s=latency_s,
-                        cost_usd=float(cost_val or 0.0),
-                        settings=deps["settings"],
-                        prompt_tokens=int(prompt_tokens or 0),
-                        completion_tokens=int(completion_tokens or 0),
-                        success=success,
-                        judge_quality=final_quality if quality_source == "judge" else None,
-                    )
-                    if promotion and promotion.get("auto_promoted"):
-                        deps["logger"].info(
-                            "[Background] Auto-promoted exploration model %s to candidates",
-                            chosen_model,
-                        )
-                except Exception as exc:
-                    deps["logger"].warning("[Background] OpenRouter exploration record failed: %s", exc)
-
-            shadow_fn = deps.get("maybe_run_shadow_comparison")
-            exploration_info = raw_payload_dict.get("exploration_info") or {}
-            if shadow_fn is not None and exploration_info.get("shadow_compare"):
-                incumbent = exploration_info.get("incumbent_model")
-                try:
-                    await shadow_fn(
-                        query=query,
-                        explored_model=chosen_model,
-                        explored_answer=answer,
-                        explored_quality=final_quality,
-                        explored_latency=latency_s,
-                        explored_cost=float(cost_val or 0.0),
-                        incumbent_model=incumbent,
-                        deps=deps,
-                        settings=deps["settings"],
-                    )
-                except Exception as exc:
-                    deps["logger"].warning("[Background] Shadow comparison failed: %s", exc)
-
-        try:
-            alpha = 0.2
-            key = (modality, chosen_model)
-            prev = state["EMA_HISTORY"].get(key)
-            if prev is None:
-                new_entry = {
-                    "ema_latency": latency_s,
-                    "ema_quality": final_quality,
-                    "ema_cost": cost_val,
-                    "ema_alignment": 1.0,
-                    "updates": 1,
-                }
-            else:
-                new_entry = {
-                    "ema_latency": alpha * latency_s + (1 - alpha) * prev["ema_latency"],
-                    "ema_quality": alpha * final_quality + (1 - alpha) * prev["ema_quality"],
-                    "ema_cost": alpha * cost_val + (1 - alpha) * prev["ema_cost"],
-                    "ema_alignment": prev.get("ema_alignment", 1.0),
-                    "updates": prev.get("updates", 0) + 1,
-                }
-            state["EMA_HISTORY"].set(key, new_entry)
-            spawn_via_deps(
-                deps,
-                deps["asyncio"].to_thread(deps["_persist_ema"], modality, chosen_model, new_entry),
-                name="ema_persist",
-            )
-        except Exception as exc:
-            deps["logger"].warning(f"[Background] EMA update failed: {exc}")
-            try:
-                deps["FEEDBACK_TASK_FAILURES"].labels(stage="ema_update").inc()
-            except Exception:
-                pass
-
-        if final_quality >= 7.0:
-            try:
-                await deps["store_cache"](
-                    query=query,
-                    answer=answer,
-                    modality=modality,
-                    image_b64=image_b64,
-                    model_used=chosen_model,
-                    tenant_id=raw_payload_dict.get("tenant_id"),
-                )
-            except Exception as exc:
-                deps["logger"].warning(f"[Background] Cache store failed: {exc}")
-                try:
-                    deps["FEEDBACK_TASK_FAILURES"].labels(stage="cache_write").inc()
-                except Exception:
-                    pass
-
-        try:
-            deps["ROUTER_QUALITY_AVG"].labels(model=chosen_model).set(final_quality)
-            if "ollama" in chosen_model:
-                deps["ROUTER_LOCAL_USAGE_RATIO"].set(1.0)
-        except Exception:
-            pass
-
-        if judge_rubric is not None and isinstance(raw_payload, dict):
-            raw_payload = {**raw_payload, "judge_rubric": judge_rubric}
-
-        try:
-            deps["insert_query_log"](
-                query_text=query,
-                model=chosen_model,
-                modality=modality,
-                image_provided=bool(image_b64),
-                answer=answer,
-                image_output_b64=None,
-                latency_s=latency_s,
-                estimated_cost_usd=cost_val,
-                quality=final_quality,
-                quality_source=quality_source,
-                judge_sampled=should_judge,
-                predicted_error_prob=float(predicted_error_prob),
-                confidence_score=float(confidence_score) if confidence_score is not None else None,
-                confidence_band=str(confidence_band) if confidence_band else None,
-                abstained=abstained,
-                abstain_reason=str(abstain_reason) if abstain_reason else None,
-                grounded=grounded,
-                verification_status=str(verification_status) if verification_status else None,
-                knowledge_version=str(knowledge_version) if knowledge_version else None,
-                review_status=str(review_status) if review_status else None,
-                reward=reward,
-                context_label="async_processed",
-                tenant_id=raw_payload_dict.get("tenant_id"),
-                raw_payload=raw_payload,
-                query_embedding=query_embedding,
-                answer_embedding=None,
-            )
-        except Exception as exc:
-            deps["logger"].warning(f"[Background] Log fail: {exc}")
-            try:
-                deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc()
-            except Exception:
-                pass
-
-        deps["FEEDBACK_PROCESSING_LATENCY"].observe(time.time() - feedback_start)
+        risk = await assess_error_risk(deps, fb)
+        decision = decide_judging(deps, fb, risk)
+        quality = await judge_quality(deps, fb, risk, decision) if decision.should_judge else proxy_quality(risk)
+        reward = update_bandit(deps, fb, quality)
+        await record_exploration(deps, fb, reward, quality)
+        update_ema(deps, state, fb, quality)
+        await maybe_store_cache(deps, fb, quality)
+        persist_log(deps, fb, quality, decision.should_judge, risk, reward)
     except Exception as exc:
-        deps["FEEDBACK_PROCESSING_LATENCY"].observe(time.time() - feedback_start)
-        try:
-            deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc()
-        except Exception:
-            pass
+        quietly(lambda: deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc())
         deps["logger"].exception(f"[Background] Critical fail: {exc}")
+    finally:
+        deps["FEEDBACK_PROCESSING_LATENCY"].observe(time.time() - started)
