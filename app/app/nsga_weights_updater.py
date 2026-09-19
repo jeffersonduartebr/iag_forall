@@ -12,21 +12,20 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import threading
 import time
 from typing import Any, Dict, List, Tuple
 
 import redis
 import uvicorn
-from deap import algorithms, base, creator, tools
 from fastapi import FastAPI, Path
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import REGISTRY, generate_latest
 from sqlalchemy import text
 
-from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.db import get_engine
+from app.nsga_calibration import calibration_status_payload, run_calibration_cycle  # noqa: F401
+from app.nsga_core import compute_convergence_metrics, run_nsga_optimization  # noqa: F401  (reexportados)
 from app.services.frozen_policy import is_frozen_policy_active
 from app.services.nsga_metrics import (
     JUDGE_FEEDBACK_ERROR_RATE,
@@ -38,9 +37,7 @@ from app.services.nsga_metrics import (
     NSGA_RUNS,
 )
 from app.services.nsga_tuning import (
-    calibrate_uncertainty_threshold,
     tune_global_strategy_weights,
-    tune_risk_factors,
     tune_uncertainty_threshold,
 )
 from app.services.reward import DEFAULT_MIN_SHARE, derive_reward_weights, publish_reward_weights
@@ -246,48 +243,6 @@ def get_efficiency_history(modality: str) -> List[float]:
         return []
 
 
-def compute_convergence_metrics(history: List[float]) -> Dict[str, float]:
-    """
-    Compute convergence metrics from efficiency history.
-
-    Returns:
-        Dict with trend, variance, and health score
-    """
-    if len(history) < 3:
-        return {"trend": 0.0, "variance": 0.0, "health": 1.0}
-
-    import numpy as np
-
-    # Compute variance (lower is better for convergence)
-    variance = float(np.var(history))
-
-    # Compute trend (positive = improving, negative = degrading)
-    # Using simple linear regression slope
-    x = np.arange(len(history))
-    slope = float(np.polyfit(x, history[::-1], 1)[0])  # Reverse because newest is first
-
-    # Compute health score
-    # Health degrades if:
-    # 1. High variance (unstable)
-    # 2. Negative trend (degrading)
-    # 3. Efficiency too low
-
-    avg_efficiency = float(np.mean(history))
-
-    # Health scoring logic
-    if variance > 1.0 or slope < -0.5:
-        health = -1.0  # Stuck or diverging
-    elif variance > 0.5 or slope < -0.1 or avg_efficiency < 1.0:
-        health = 0.0  # Degraded
-    else:
-        health = 1.0  # Healthy
-
-    return {
-        "trend": slope,
-        "variance": variance,
-        "health": health,
-        "avg_efficiency": avg_efficiency,
-    }
 
 
 def check_optimization_health(modality: str, current_efficiency: float) -> Dict[str, Any]:
@@ -331,72 +286,6 @@ def check_optimization_health(modality: str, current_efficiency: float) -> Dict[
 # ============================================================
 # 4. Núcleo NSGA-II (Algoritmo Genético)
 # ============================================================
-def run_nsga_optimization(
-    modality: str, models: List[str], metrics: Dict[str, Dict[str, float]], n_pop=40, n_gen=20
-) -> Tuple[Dict[str, float], float, Tuple[float, float, float]]:
-    """
-    Roda o NSGA-II.
-    Retorna: (pesos_modelos, pontuação_eficiência, (lat_media, cost_medio, qual_media))
-    """
-    n = len(models)
-    if n == 0:
-        return {}, 0.0, (0, 0, 0)
-    if n == 1:
-        return (
-            {models[0]: 1.0},
-            1.0,
-            (metrics[models[0]]["latency"], metrics[models[0]]["cost"], metrics[models[0]]["quality"]),
-        )
-
-    # Limpa classes anteriores
-    if "FitnessMulti" in creator.__dict__:
-        del creator.FitnessMulti
-    if "Individual" in creator.__dict__:
-        del creator.Individual
-
-    # Objetivos fixos para o AG: Min Latency, Min Cost, Max Quality, Max Alignment
-    # Usamos pesos fixos AQUI para encontrar o Pareto Front ideal matemático.
-    # O ajuste dinâmico será feito nos pesos do ROUTER, baseado no resultado daqui.
-    creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -50.0, 2.0, 1.0))
-    creator.create("Individual", list, fitness=creator.FitnessMulti)
-
-    toolbox = base.Toolbox()
-    toolbox.register("attr_float", random.random)
-    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=n)
-    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-
-    def evaluate(individual):
-        """Execute the evaluate routine.
-
-        This helper encapsulates one focused step used by the surrounding workflow."""
-        s = sum(individual) or 1.0
-        w = [x / s for x in individual]
-
-        lat = sum(w[i] * metrics[models[i]]["latency"] for i in range(n))
-        cst = sum(w[i] * metrics[models[i]]["cost"] for i in range(n))
-        qlt = sum(w[i] * metrics[models[i]]["quality"] for i in range(n))
-        aln = sum(w[i] * metrics[models[i]]["alignment"] for i in range(n))
-        return lat, cst, qlt, aln
-
-    toolbox.register("evaluate", evaluate)
-    toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=0.0, up=1.0, eta=20.0)
-    toolbox.register("mutate", tools.mutPolynomialBounded, low=0.0, up=1.0, eta=20.0, indpb=1.0 / n)
-    toolbox.register("select", tools.selNSGA2)
-
-    pop = toolbox.population(n=n_pop)
-    algorithms.eaMuPlusLambda(pop, toolbox, mu=n_pop, lambda_=n_pop, cxpb=0.9, mutpb=0.1, ngen=n_gen, verbose=False)
-
-    best_ind = tools.selBest(pop, 1)[0]
-    s = sum(best_ind) or 1.0
-    norm_weights = [x / s for x in best_ind]
-
-    weights_map = {models[i]: norm_weights[i] for i in range(n)}
-
-    # Métricas do sistema ideal encontrado
-    sys_lat, sys_cst, sys_qlt, _ = evaluate(best_ind)
-    efficiency_score = sys_qlt / max(0.01, sys_lat)
-
-    return weights_map, efficiency_score, (sys_lat, sys_cst, sys_qlt)
 
 
 # Tuning dinâmico extraído para services/nsga_tuning (roadmap #19).
@@ -632,134 +521,7 @@ def trigger_calibration():
 @app.get("/calibration/status")
 def calibration_status():
     """Get current calibration status and metrics."""
-    result = {
-        "risk_factors": {
-            "sota_high_uq": settings.RISK_FACTOR_SOTA_HIGH_UQ,
-            "local_high_uq": settings.RISK_FACTOR_LOCAL_HIGH_UQ,
-            "local_low_uq": settings.RISK_FACTOR_LOCAL_LOW_UQ,
-            "adapt_enabled": settings.RISK_FACTOR_ADAPT_ENABLED,
-        },
-        "uncertainty": {
-            "threshold": float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD)),
-            "calibration_enabled": settings.UQ_CALIBRATION_ENABLED,
-        },
-        "cache": {
-            "threshold": float(settings.get("CACHE_THRESHOLD", 0.92)),
-            "adapt_enabled": settings.CACHE_THRESHOLD_ADAPT_ENABLED,
-            "min": settings.CACHE_THRESHOLD_MIN,
-            "max": settings.CACHE_THRESHOLD_MAX,
-            "target_hit_rate": settings.CACHE_HIT_RATE_TARGET,
-        },
-        "predictor": {
-            "validation_enabled": settings.PREDICTOR_VALIDATION_ENABLED,
-        },
-        "judge": {
-            "calibration_enabled": settings.JUDGE_CALIBRATION_ENABLED,
-            "cache_agreement_target": settings.JUDGE_CACHE_AGREEMENT_TARGET,
-        },
-    }
-
-    # Add predictor metrics if available
-    try:
-        from app.online_predictor import get_all_predictor_metrics
-
-        result["predictor"]["models"] = get_all_predictor_metrics()
-    except Exception:
-        pass
-
-    # Add cache stats
-    try:
-        from app.semantic_cache import get_cache_hit_rate, get_l1_cache_stats
-
-        result["cache"]["l1_stats"] = get_l1_cache_stats()
-        result["cache"]["hit_rate"] = get_cache_hit_rate()
-    except Exception:
-        pass
-
-    # Add judge calibration metrics
-    try:
-        from app.judges import get_judge_calibration_metrics
-
-        result["judge"]["models"] = get_judge_calibration_metrics()
-    except Exception:
-        pass
-
-    return result
-
-
-def run_calibration_cycle():
-    """
-    Run all Phase 5 calibration functions.
-
-    Called after NSGA-II optimization in the background loop.
-    """
-    logger.info("[Calibration] Starting calibration cycle...")
-
-    # 1. Risk Factor Tuning (Improvement 1)
-    try:
-        result = tune_risk_factors()
-        logger.info(f"[Calibration] Risk factors: {result.get('status', 'unknown')}")
-    except Exception as e:
-        logger.warning(f"[Calibration] Risk factor tuning failed: {e}")
-
-    # 2. UQ Calibration (Improvement 4)
-    try:
-        result = calibrate_uncertainty_threshold()
-        logger.info(f"[Calibration] UQ threshold: {result.get('status', 'unknown')}")
-    except Exception as e:
-        logger.warning(f"[Calibration] UQ calibration failed: {e}")
-
-    # 3. Cache Threshold Tuning (Improvement 3)
-    try:
-        import asyncio
-
-        from app.semantic_cache import tune_cache_threshold
-
-        # Run async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(tune_cache_threshold())
-            if result:
-                logger.info(f"[Calibration] Cache threshold adjusted to {result}")
-        finally:
-            loop.close()
-    except Exception as e:
-        logger.warning(f"[Calibration] Cache threshold tuning failed: {e}")
-
-    # 4. Predictor Calibration (Improvement 2)
-    try:
-        from app.online_predictor import calibrate_all_predictors, get_all_predictor_metrics
-
-        calibrate_all_predictors()
-        metrics = get_all_predictor_metrics()
-        for model, m in metrics.items():
-            logger.debug(f"[Calibration] Predictor {model}: brier={m.get('brier_score', 0):.3f}")
-
-        # Update Prometheus metrics
-        try:
-            from app.observability import PREDICTOR_ACCURACY, PREDICTOR_BRIER_SCORE, PREDICTOR_CALIBRATION_TEMP
-
-            for model, m in metrics.items():
-                PREDICTOR_BRIER_SCORE.labels(model=model).set(m.get("brier_score", 0.25))
-                PREDICTOR_ACCURACY.labels(model=model).set(m.get("accuracy", 0.5))
-                PREDICTOR_CALIBRATION_TEMP.labels(model=model).set(m.get("calibration_temp", 1.0))
-        except Exception:
-            pass
-
-    except Exception as e:
-        logger.warning(f"[Calibration] Predictor calibration failed: {e}")
-
-    # 5. Judge Calibration (Improvement 5)
-    try:
-        from app.judges import calibrate_judges
-
-        result = calibrate_judges()
-        logger.info(f"[Calibration] Judge calibration: {result.get('status', 'unknown')}")
-    except Exception as e:
-        logger.warning(f"[Calibration] Judge calibration failed: {e}")
-
-    logger.info("[Calibration] Calibration cycle complete.")
+    return calibration_status_payload()
 
 
 def background_loop():
