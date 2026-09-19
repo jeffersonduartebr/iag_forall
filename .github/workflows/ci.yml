@@ -257,6 +257,7 @@ jobs:
       MYSQL_ROOT_PASSWORD: change-me
       DB_PASS: change-me
       REDIS_PASSWORD: change-me
+      ADMIN_UI_PASSWORD: change-me
       STATE_DIR: /app/state
       PROMETHEUS_MULTIPROC_DIR: /tmp/prom
       CHROMA_PATH: /data/chroma
