@@ -82,12 +82,25 @@ def _get_versioned_collection_name(base_name: str, modality: str) -> str:
 # ============================================================
 # Conexão com ChromaDB
 # ============================================================
+def chroma_client_settings():
+    """Settings for every Chroma client: telemetry off in all processes.
+
+    ``main.py`` disables telemetry through an env var, but only in the API; Celery
+    workers kept it on, and chromadb 0.5.x breaks with current posthog
+    ("capture() takes 1 positional argument but 3 were given"). Clients on the same
+    path must share identical settings, so health checks use this helper too.
+    """
+    from chromadb.config import Settings
+
+    return Settings(anonymized_telemetry=False)
+
+
 def _connect_local():
     """Create the persistent ChromaDB client used by local runtime paths."""
     try:
         os.makedirs(CHROMA_PATH, exist_ok=True)
         logger.info(f"[vectorstore] Inicializando ChromaDB em {CHROMA_PATH}")
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        client = chromadb.PersistentClient(path=CHROMA_PATH, settings=chroma_client_settings())
         logger.info("[vectorstore] Chroma PersistentClient inicializado.")
         return client
     except Exception as e:
@@ -103,7 +116,7 @@ def _connect_remote():
         host = CHROMA_HOST
         port = CHROMA_PORT
         logger.info("[vectorstore] Conectando ChromaDB remoto em %s:%s", host, port)
-        client = chromadb.HttpClient(host=host, port=port)
+        client = chromadb.HttpClient(host=host, port=port, settings=chroma_client_settings())
         client.heartbeat()
         logger.info("[vectorstore] Chroma HttpClient inicializado.")
         return client

@@ -146,7 +146,9 @@ async def check_vectorstore_health() -> ComponentHealth:
         import chromadb
         chroma_path = os.getenv("CHROMA_PERSIST_PATH", os.getenv("CHROMA_PATH", "/data/chroma"))
 
-        client = chromadb.PersistentClient(path=chroma_path)
+        from .vectorstore import chroma_client_settings
+
+        client = chromadb.PersistentClient(path=chroma_path, settings=chroma_client_settings())
         collections = client.list_collections()
         latency_ms = (time.time() - start) * 1000
 

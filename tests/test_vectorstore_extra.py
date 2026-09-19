@@ -50,7 +50,7 @@ def test_connect_local_get_client_and_init_paths(monkeypatch, tmp_path):
     client = _Client()
     monkeypatch.setattr(vs, "CHROMA_PATH", str(tmp_path / "chroma"))
     monkeypatch.setattr(vs.os, "makedirs", lambda path, exist_ok=False: created_paths.append((path, exist_ok)))
-    monkeypatch.setattr(vs.chromadb, "PersistentClient", lambda path: client)
+    monkeypatch.setattr(vs.chromadb, "PersistentClient", lambda path, **kw: client)
     monkeypatch.setattr(vs.logger, "error", lambda msg: logged_errors.append(msg))
     monkeypatch.setattr(vs, "chroma_client", None)
 

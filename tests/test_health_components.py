@@ -53,7 +53,7 @@ async def test_component_health_checks_success_paths(monkeypatch):
     )
 
     fake_chromadb = SimpleNamespace(
-        PersistentClient=lambda path: SimpleNamespace(list_collections=lambda: ["c1", "c2"])
+        PersistentClient=lambda path, **kw: SimpleNamespace(list_collections=lambda: ["c1", "c2"])
     )
     monkeypatch.setitem(sys.modules, "chromadb", fake_chromadb)
 
