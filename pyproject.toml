@@ -28,6 +28,41 @@ ignore = ["E501", "E701", "E731"]
 quote-style = "double"
 indent-style = "space"
 
+[tool.mutmut]
+# Teste de mutação dos núcleos numéricos (recompensa, rubrica, políticas de bandit,
+# preços, estratégia de roteamento). Rodar com `scripts/run_mutation.sh` (monta um
+# workspace com o pacote em src/app: o mutmut só reconhece o prefixo "src." ao
+# derivar o nome do módulo, e os testes importam "app.*"). Lento: na CI roda só por
+# workflow_dispatch/agendamento. Meta: escore de mutação >= 80%.
+source_paths = ["src/app"]
+only_mutate = [
+    "src/app/services/reward.py",
+    "src/app/services/judge_rubric.py",
+    "src/app/services/bandit_policy.py",
+    "src/app/utils/pricing.py",
+    "src/app/router_strategy.py",
+]
+also_copy = ["pytest.ini"]
+# Mensagens de log não são comportamento: mutá-las só gera mutantes equivalentes.
+do_not_mutate_patterns = ["logger\\.(debug|info|warning|error|exception)\\("]
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-q"]
+pytest_add_cli_args_test_selection = [
+    "tests/test_reward_weights.py",
+    "tests/test_properties_scoring.py",
+    "tests/test_properties_routing.py",
+    "tests/test_judge_rubric.py",
+    "tests/test_judge_rubric_exact.py",
+    "tests/test_bandit_policy.py",
+    "tests/test_reward_pricing_exact.py",
+    "tests/test_router_strategy_exact.py",
+    "tests/test_pricing_extra.py",
+    "tests/test_local_cost.py",
+    "tests/test_bandits.py",
+    "tests/test_bandits_more.py",
+    "tests/test_router_strategy.py",
+    "tests/test_router_strategy_extra.py",
+]
+
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true

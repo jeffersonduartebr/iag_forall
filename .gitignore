@@ -35,3 +35,4 @@ tmp_prom/
 coverage.json
 mutants/
 .hypothesis/
+.mutmut-work/
