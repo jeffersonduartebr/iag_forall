@@ -280,3 +280,64 @@ class TestGetABTestManager:
                 manager2 = get_ab_test_manager()
 
                 assert manager1 is manager2
+
+
+class TestExperimentResults:
+    """Results round trip through Redis sorted sets (fakeredis)."""
+
+    @pytest.fixture
+    def manager_with_redis(self):
+        import fakeredis
+
+        rds = fakeredis.FakeRedis()
+        with patch("app.ab_testing.get_redis", return_value=rds), patch("app.ab_testing.settings") as mock_settings:
+            mock_settings.AB_TESTING_ENABLED = True
+            from app.ab_testing import ABTestManager, Experiment
+
+            ABTestManager._instance = None
+            manager = ABTestManager()
+            manager._experiments["e1"] = Experiment.from_dict(
+                {
+                    "id": "e1",
+                    "name": "rota",
+                    "variants": [{"name": "control", "weight": 0.5}, {"name": "treatment", "weight": 0.5}],
+                    "status": "running",
+                }
+            )
+            yield manager, rds
+            ABTestManager._instance = None
+
+    def test_summarize_scores(self):
+        from app.ab_testing import summarize_scores
+
+        assert summarize_scores([]) == {"count": 0}
+        assert summarize_scores([1.0, 2.0, 3.0, 4.0]) == {
+            "count": 4,
+            "mean": 2.5,
+            "std": 1.118,
+            "median": 2.5,
+            "p95": 3.85,
+        }
+
+    def test_results_per_variant_and_metric(self, manager_with_redis):
+        manager, _ = manager_with_redis
+        for value in (7.0, 9.0):
+            manager.record_result("e1", "treatment", "quality", value)
+        manager.record_result("e1", "control", "latency", 1.5)
+
+        out = manager.get_experiment_results("e1")
+        assert out["experiment"]["id"] == "e1"
+        assert out["variants"]["treatment"]["quality"]["mean"] == 8.0
+        assert out["variants"]["treatment"]["latency"] == {"count": 0}
+        assert out["variants"]["control"]["latency"]["count"] == 1
+        assert manager.get_experiment_results("nope") == {"error": "Experiment not found"}
+
+    def test_results_degrade_per_metric_on_redis_errors(self, manager_with_redis):
+        manager, rds = manager_with_redis
+        rds.set("ab:results:e1:control:quality", "not-a-zset")
+        out = manager.get_experiment_results("e1")
+        assert "error" in out["variants"]["control"]["quality"]
+        assert out["variants"]["control"]["cost"] == {"count": 0}
+
+        with patch.object(manager, "_get_redis", return_value=None):
+            assert manager.get_experiment_results("e1")["variants"] == {}

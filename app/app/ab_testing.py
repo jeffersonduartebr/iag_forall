@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 from pydantic import BaseModel, Field
 
 from .observability import AB_EXPERIMENT_ASSIGNMENTS
@@ -35,6 +36,21 @@ logger = logging.getLogger(__name__)
 REDIS_KEY_EXPERIMENTS = "ab:experiments"
 REDIS_KEY_ASSIGNMENTS = "ab:assignments"
 REDIS_KEY_RESULTS = "ab:results"
+_RESULT_METRICS = ("quality", "latency", "cost")
+
+
+def summarize_scores(scores: List[float]) -> Dict[str, Any]:
+    """Count, mean, std, median and p95 of one metric (``{"count": 0}`` when empty)."""
+    if not scores:
+        return {"count": 0}
+    arr = np.asarray(scores, dtype=float)
+    return {
+        "count": len(scores),
+        "mean": round(float(np.mean(arr)), 4),
+        "std": round(float(np.std(arr)), 4),
+        "median": round(float(np.median(arr)), 4),
+        "p95": round(float(np.percentile(arr, 95)), 4),
+    }
 
 
 class ExperimentStatus(str, Enum):
@@ -370,36 +386,20 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         if not rds:
             return results
 
-        metrics = ["quality", "latency", "cost"]
-
         for variant in exp.variants:
-            variant_results: Dict[str, Dict[str, Any]] = {}
-
-            for metric in metrics:
-                try:
-                    key = f"{REDIS_KEY_RESULTS}:{experiment_id}:{variant.name}:{metric}"
-                    values = rds.zrange(key, 0, -1, withscores=True)
-
-                    if values:
-                        scores = [float(v[1]) for v in values]
-                        import numpy as np
-
-                        variant_results[metric] = {
-                            "count": len(scores),
-                            "mean": round(float(np.mean(scores)), 4),
-                            "std": round(float(np.std(scores)), 4),
-                            "median": round(float(np.median(scores)), 4),
-                            "p95": round(float(np.percentile(scores, 95)), 4),
-                        }
-                    else:
-                        variant_results[metric] = {"count": 0}
-                except Exception as e:
-                    logger.warning(f"[ABTesting] Failed to get results for {variant.name}/{metric}: {e}")
-                    variant_results[metric] = {"error": str(e)}
-
-            results["variants"][variant.name] = variant_results
-
+            results["variants"][variant.name] = {
+                metric: self._variant_metric(rds, experiment_id, variant.name, metric) for metric in _RESULT_METRICS
+            }
         return results
+
+    @staticmethod
+    def _variant_metric(rds: Any, experiment_id: str, variant_name: str, metric: str) -> Dict[str, Any]:
+        try:
+            key = f"{REDIS_KEY_RESULTS}:{experiment_id}:{variant_name}:{metric}"
+            return summarize_scores([float(score) for _member, score in rds.zrange(key, 0, -1, withscores=True)])
+        except Exception as e:
+            logger.warning(f"[ABTesting] Failed to get results for {variant_name}/{metric}: {e}")
+            return {"error": str(e)}
 
     def list_experiments(self, status: Optional[ExperimentStatus] = None) -> List[Experiment]:
         """List all experiments, optionally filtered by status."""

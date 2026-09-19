@@ -193,6 +193,31 @@ def _safe_corr(a: np.ndarray, b: np.ndarray) -> float:
     except Exception:
         return 0.0
 
+_NUMERIC_COLUMNS = ("latency_ms", "cost_usd", "quality_score", "fitness", "generation")
+
+
+def _model_correlations(group: pd.DataFrame) -> Dict[str, Any]:
+    """Correlations of one model's samples (see ``compute_correlations``)."""
+    lat = group["latency_ms"].to_numpy(dtype=float)
+    cost = group["cost_usd"].to_numpy(dtype=float)
+    qual = group["quality_score"].to_numpy(dtype=float)
+    fit = group["fitness"].to_numpy(dtype=float)
+    try:
+        with np.errstate(invalid="ignore", divide="ignore"):  # série constante vira NaN, tratado na publicação
+            matrix = np.corrcoef(np.vstack([lat, cost, qual]))
+    except Exception:
+        matrix = np.eye(3)
+    return {
+        "corr_lq": _safe_corr(lat, qual),
+        "corr_cq": _safe_corr(cost, qual),
+        # Proxy simples de "peso combinado" para testar dependência com fitness
+        "corr_fw": _safe_corr(fit, cost + lat + qual),
+        "matrix": matrix,
+        "labels": ["latency", "cost", "quality"],
+        "generation": int(np.nanmax(group["generation"].to_numpy(dtype=float))),
+    }
+
+
 def compute_correlations(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     """
     Calcula correlações por modelo:
@@ -202,51 +227,16 @@ def compute_correlations(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
       - matrix: matriz 3x3 entre (lat, custo, qualidade)
       - generation: geração máxima observada no período
     """
-    results: Dict[str, Dict[str, Any]] = {}
-
     if df.empty:
-        return results
+        return {}
+    df = df.assign(**{col: pd.to_numeric(df[col], errors="coerce") for col in _NUMERIC_COLUMNS})
+    df = df.dropna(subset=list(_NUMERIC_COLUMNS))
+    return {model: _model_correlations(group) for model, group in df.groupby("model") if len(group) >= 3}
 
-    # Assegura tipos numéricos
-    for col in ("latency_ms", "cost_usd", "quality_score", "fitness", "generation"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = df.dropna(subset=["latency_ms", "cost_usd", "quality_score", "fitness", "generation"])
-    if df.empty:
-        return results
-
-    for model, group in df.groupby("model"):
-        if len(group) < 3:
-            continue
-
-        lat = group["latency_ms"].to_numpy(dtype=float)
-        cost = group["cost_usd"].to_numpy(dtype=float)
-        qual = group["quality_score"].to_numpy(dtype=float)
-        fit = group["fitness"].to_numpy(dtype=float)
-
-        corr_lq = _safe_corr(lat, qual)
-        corr_cq = _safe_corr(cost, qual)
-
-        # Proxy simples de "peso combinado" para testar dependência com fitness
-        combo = cost + lat + qual
-        corr_fw = _safe_corr(fit, combo)
-
-        # Matriz 3x3
-        try:
-            matrix = np.corrcoef(np.vstack([lat, cost, qual]))
-        except Exception:
-            matrix = np.eye(3)
-
-        results[model] = {
-            "corr_lq": corr_lq,
-            "corr_cq": corr_cq,
-            "corr_fw": corr_fw,
-            "matrix": matrix,
-            "labels": ["latency", "cost", "quality"],
-            "generation": int(np.nanmax(group["generation"].to_numpy(dtype=float))),
-        }
-
-    return results
+def _r2_mean(data: Dict[str, Any]) -> float:
+    """R² médio simples das três correlações."""
+    return float(np.mean([data["corr_lq"] ** 2, data["corr_cq"] ** 2, data["corr_fw"] ** 2]))
 
 # -----------------------------------------------------------------------------
 # 📈 Métricas Prometheus
@@ -285,9 +275,7 @@ def publish_metrics(corr_data: Dict[str, Dict[str, Any]]) -> None:
         correlation_cost_quality.labels(model=model).set(data["corr_cq"])
         correlation_fitness_weights.labels(model=model).set(data["corr_fw"])
 
-        # R² médio simples das três correlações
-        r2_mean = float(np.mean([data["corr_lq"] ** 2, data["corr_cq"] ** 2, data["corr_fw"] ** 2]))
-        all_r2.append(r2_mean)
+        all_r2.append(_r2_mean(data))
 
         matrix = data["matrix"]
         labels = data["labels"]
@@ -313,7 +301,7 @@ def persist_correlations(corr_data: Dict[str, Dict[str, Any]]) -> None:
 
     rows = []
     for model, data in corr_data.items():
-        r2_mean = float(np.mean([data["corr_lq"] ** 2, data["corr_cq"] ** 2, data["corr_fw"] ** 2]))
+        r2_mean = _r2_mean(data)
         rows.append(
             {
                 "model": model,

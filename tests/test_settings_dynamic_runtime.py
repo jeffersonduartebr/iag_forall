@@ -123,6 +123,42 @@ def test_validate_critical_settings_and_defaults():
     assert "NSGA weights must be non-negative" in errors
 
 
+def test_validate_critical_settings_production_rules():
+    """Production requires auth, credentials and a metrics token, and forbids auto-DDL."""
+    values = {"ENV": "production", "REQUIRE_API_AUTH": "0", "ROADMAP_AUTO_DDL": "true", "MIN_TIMEOUT": "0"}
+    getter_only = SimpleNamespace(get=lambda key, default=None: values.get(key, default))
+    assert sd.validate_critical_settings(getter_only) == [
+        "MIN_TIMEOUT must be > 0",
+        "REQUIRE_API_AUTH must be enabled in production",
+        "production requires API_KEYS or JWT_SECRET",
+        "METRICS_TOKEN must be set in production",
+        "ROADMAP_AUTO_DDL must be disabled in production",
+    ]
+
+    values.update({"REQUIRE_API_AUTH": "yes", "JWT_SECRET": "s", "METRICS_TOKEN": "t", "ROADMAP_AUTO_DDL": "0"})
+    values.update({"MIN_TIMEOUT": "30", "MAX_TIMEOUT": "-1", "NSGA_W_QUALITY": "0", "NSGA_W_LATENCY": "0"})
+    values["NSGA_W_COST"] = "0"
+    assert sd.validate_critical_settings(getter_only) == [
+        "MAX_TIMEOUT must be > 0",
+        "MIN_TIMEOUT must be <= MAX_TIMEOUT",
+        "NSGA weights sum must be > 0",
+    ]
+
+
+def test_read_setting_falls_back_to_default():
+    class Broken:
+        @property
+        def MIN_TIMEOUT(self):
+            raise RuntimeError("redis down")
+
+        def get(self, key, default=None):
+            raise RuntimeError("redis down")
+
+    assert sd._read_setting(Broken(), "MIN_TIMEOUT", 30) == 30
+    assert sd._read_setting(object(), "X", "d") == "d"
+    assert sd.validate_critical_settings(Broken()) == []
+
+
 def test_reload_listener_invalidates_cache_and_stop(monkeypatch):
     """Reload listener should subscribe, invalidate cache on message, and stop cleanly."""
     invalidated = []
