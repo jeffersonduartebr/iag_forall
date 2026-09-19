@@ -32,13 +32,13 @@ _UPSERT_SQL = text(
       (context_label, model, avg_reward, count, var, M2)
     VALUES (:ctx, :model, :avg, :count, :var, :M2)
     ON DUPLICATE KEY UPDATE
-      avg_reward = :avg,
-      count = :count,
-      var = :var,
-      M2 = :M2,
+      avg_reward = VALUES(avg_reward),
+      count = VALUES(count),
+      var = VALUES(var),
+      M2 = VALUES(M2),
       last_update = CURRENT_TIMESTAMP
     """
-)
+)  # executemany: o PyMySQL não substitui parâmetros após VALUES (...); daí VALUES(coluna)
 _SELECT_SQL = text(
     """
     SELECT model, avg_reward, count, var, M2

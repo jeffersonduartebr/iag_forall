@@ -262,7 +262,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         logger.warning(f"[update_nsga] Nenhum peso para persistir modality={modality}.")
         return
 
-    # DB (uma instrução com todos os modelos)
+    # DB (uma instrução com todos os modelos). Em executemany o PyMySQL não substitui parâmetros
+    # depois de VALUES (...), por isso o UPDATE usa VALUES(coluna).
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -271,7 +272,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                     INSERT INTO nsga_weights (modality, model, weight)
                     VALUES (:mod, :model, :w)
                     ON DUPLICATE KEY UPDATE
-                        weight = :w,
+                        weight = VALUES(weight),
                         updated_at = CURRENT_TIMESTAMP;
                     """
                 ),

@@ -256,9 +256,9 @@ _EMA_UPSERT_SQL = text("""
     INSERT INTO ema_history (modality, model, ema_latency, ema_quality, ema_cost, ema_alignment)
     VALUES (:mod, :m, :lat, :q, :c, :align)
     ON DUPLICATE KEY UPDATE
-        ema_latency = :lat, ema_quality = :q, ema_cost = :c,
-        ema_alignment = :align, updated_at = CURRENT_TIMESTAMP
-""")
+        ema_latency = VALUES(ema_latency), ema_quality = VALUES(ema_quality), ema_cost = VALUES(ema_cost),
+        ema_alignment = VALUES(ema_alignment), updated_at = CURRENT_TIMESTAMP
+""")  # executemany: o PyMySQL não substitui parâmetros após VALUES (...); daí VALUES(coluna)
 # Histórico amostrado (1 a cada 10 atualizações) para reduzir escritas.
 _EMA_LOG_SQL = text("""
     INSERT INTO ema_history_log (modality, model, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
