@@ -262,22 +262,21 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         logger.warning(f"[update_nsga] Nenhum peso para persistir modality={modality}.")
         return
 
-    # DB
+    # DB (uma instrução com todos os modelos)
     try:
         with engine.begin() as conn:
-            for model, weight in weights.items():
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO nsga_weights (modality, model, weight)
-                        VALUES (:mod, :model, :w)
-                        ON DUPLICATE KEY UPDATE
-                            weight = :w,
-                            updated_at = CURRENT_TIMESTAMP;
-                        """
-                    ),
-                    dict(mod=modality, model=model, w=float(weight)),
-                )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO nsga_weights (modality, model, weight)
+                    VALUES (:mod, :model, :w)
+                    ON DUPLICATE KEY UPDATE
+                        weight = :w,
+                        updated_at = CURRENT_TIMESTAMP;
+                    """
+                ),
+                [dict(mod=modality, model=model, w=float(weight)) for model, weight in weights.items()],
+            )
         logger.info(f"[update_nsga] Pesos gravados em nsga_weights ({modality}).")
     except SQLAlchemyError as e:
         logger.error(f"[update_nsga] Falha ao gravar pesos DB modality={modality}: {e}")

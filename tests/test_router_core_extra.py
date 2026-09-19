@@ -42,6 +42,47 @@ def test_ema_history_cache_and_batch_queue(monkeypatch):
     assert q.flush() == 0
 
 
+def test_ema_batch_persists_in_two_statements(monkeypatch):
+    """The batch is one executemany upsert plus one executemany for the sampled log."""
+    from contextlib import contextmanager
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    calls = []
+
+    class _Conn:
+        def execute(self, stmt, params):
+            calls.append((str(stmt).split("(")[0].strip(), params))
+
+    @contextmanager
+    def begin():
+        yield _Conn()
+
+    monkeypatch.setattr(rc, "_get_db_engine", lambda: SimpleNamespace(begin=begin))
+    q = rc.EMABatchQueue(max_size=100, flush_interval=3600)
+    items = [
+        (("text", "m1"), {"ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.1, "updates": 3}),
+        (("text", "m2"), {"ema_latency": 2.0, "ema_quality": 6.0, "ema_cost": 0.2, "updates": 20, "ema_alignment": 0.5}),
+    ]
+    assert q._persist_batch(items) == 2
+    (upsert, upsert_rows), (log, log_rows) = calls
+    assert upsert == "INSERT INTO ema_history" and log == "INSERT INTO ema_history_log"
+    assert [r["m"] for r in upsert_rows] == ["m1", "m2"] and upsert_rows[0]["align"] == 1.0
+    assert [(r["m"], r["u"], r["align"]) for r in log_rows] == [("m2", 20, 0.5)]
+
+    calls.clear()
+    assert q._persist_batch(items[:1]) == 1 and len(calls) == 1  # nada amostrado: sem INSERT no log
+    assert q._persist_batch([]) == 0
+
+    @contextmanager
+    def broken():
+        raise SQLAlchemyError("db down")
+        yield
+
+    monkeypatch.setattr(rc, "_get_db_engine", lambda: SimpleNamespace(begin=broken))
+    assert q._persist_batch(items) == 0
+
+
 def test_load_ema_from_db_and_start_stop_services(monkeypatch):
     """Testa load ema from db and start stop services."""
     class _Rows:

@@ -234,53 +234,50 @@ class EMABatchQueue(BaseEMABatchQueue):
         EMA_BATCH_QUEUE_SIZE.set(size)
 
     def _persist_batch(self, items: list) -> int:
+        """Upsert the batch into ``ema_history`` (and every 10th update into the log) in one transaction."""
         if not items:
             return 0
-
-        count = 0
+        rows = [_ema_row(modality, model, record) for (modality, model), record in items]
+        sampled = [row for row in rows if row["u"] % 10 == 0]
         try:
             with _get_db_engine().begin() as conn:
-                for (modality, model), record in items:
-                    try:
-                        # Upsert EMA history
-                        conn.execute(
-                            text("""
-                                INSERT INTO ema_history (modality, model, ema_latency, ema_quality, ema_cost, ema_alignment)
-                                VALUES (:mod, :m, :lat, :q, :c, :align)
-                                ON DUPLICATE KEY UPDATE
-                                    ema_latency = :lat, ema_quality = :q, ema_cost = :c,
-                                    ema_alignment = :align, updated_at = CURRENT_TIMESTAMP
-                            """),
-                            {
-                                "mod": modality, "m": model,
-                                "lat": record["ema_latency"], "q": record["ema_quality"],
-                                "c": record["ema_cost"], "align": record.get("ema_alignment", 1.0)
-                            }
-                        )
-                        # Log history (sampling - only log every 10th update to reduce writes further)
-                        if record.get("updates", 1) % 10 == 0:
-                            conn.execute(
-                                text("""
-                                    INSERT INTO ema_history_log (modality, model, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
-                                    VALUES (:mod, :m, :lat, :c, :q, :align, :u)
-                                """),
-                                {
-                                    "mod": modality, "m": model,
-                                    "lat": record["ema_latency"], "c": record["ema_cost"],
-                                    "q": record["ema_quality"], "align": record.get("ema_alignment", 1.0),
-                                    "u": record.get("updates", 1)
-                                }
-                            )
-                        count += 1
-                    except SQLAlchemyError as e:
-                        logger.warning(f"[EMA Batch] Error persisting {modality}/{model}: {e}")
-
-            EMA_BATCH_FLUSHES.inc()
-            logger.debug(f"[EMA Batch] Flushed {count} updates to DB")
+                conn.execute(_EMA_UPSERT_SQL, rows)
+                if sampled:
+                    conn.execute(_EMA_LOG_SQL, sampled)
         except SQLAlchemyError as e:
             logger.warning(f"[EMA Batch] Batch persist error: {e}")
+            return 0
+        EMA_BATCH_FLUSHES.inc()
+        logger.debug(f"[EMA Batch] Flushed {len(rows)} updates to DB")
+        return len(rows)
 
-        return count
+
+_EMA_UPSERT_SQL = text("""
+    INSERT INTO ema_history (modality, model, ema_latency, ema_quality, ema_cost, ema_alignment)
+    VALUES (:mod, :m, :lat, :q, :c, :align)
+    ON DUPLICATE KEY UPDATE
+        ema_latency = :lat, ema_quality = :q, ema_cost = :c,
+        ema_alignment = :align, updated_at = CURRENT_TIMESTAMP
+""")
+# Histórico amostrado (1 a cada 10 atualizações) para reduzir escritas.
+_EMA_LOG_SQL = text("""
+    INSERT INTO ema_history_log (modality, model, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
+    VALUES (:mod, :m, :lat, :c, :q, :align, :u)
+""")
+
+
+def _ema_row(modality: str, model: str, record: dict) -> dict:
+    return {
+        "mod": modality,
+        "m": model,
+        "lat": record["ema_latency"],
+        "q": record["ema_quality"],
+        "c": record["ema_cost"],
+        "align": record.get("ema_alignment", 1.0),
+        "u": record.get("updates", 1),
+    }
+
+
 EMA_BATCH = EMABatchQueue()
 _bg_stop_event = threading.Event()
 _bg_threads: list[threading.Thread] = []
