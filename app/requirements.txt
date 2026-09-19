@@ -21,7 +21,10 @@ google-cloud-aiplatform==1.66.0
 tenacity==9.1.4
 pybreaker==1.0.1
 tiktoken==0.7.0
-sentence-transformers>=2.2.2
+sentence-transformers==5.1.2
+# O código remoto do nomic-embed-text-v1.5 (trust_remote_code) usa get_extended_attention_mask,
+# removido no transformers 5: sem este pin o embedding local falha e vira vetor nulo (u(q) = 1).
+transformers==4.57.6
 river
 einops
 

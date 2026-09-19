@@ -210,7 +210,7 @@ def _local_cpu_embed(text: str) -> List[float]:
         text = f"search_query: {text}"
 
     # Gera vetor
-    vec = model.encode(text, convert_to_numpy=True)
+    vec = model.encode(text, convert_to_numpy=True, show_progress_bar=False)  # sem barra "Batches" nos logs
     return vec.tolist()
 
 # ============================================================
@@ -261,7 +261,24 @@ def embed_text(text: str) -> List[float]:
         _embed_l1_cache.set(key, vec)   # L1 Cache
         return vec
 
+    _warn_null_embedding()
     return [0.0] * 768  # Retorna vetor zerado em caso de falha total
+
+
+_last_null_embedding_log = 0.0
+
+
+def _warn_null_embedding() -> None:
+    """Log (at most once a minute) that no provider produced an embedding.
+
+    The zero vector keeps the request alive, but uncertainty becomes 1.0 and the
+    semantic cache stops matching; before this log the degradation was silent.
+    """
+    global _last_null_embedding_log
+    now = time.monotonic()
+    if now - _last_null_embedding_log >= 60.0:
+        _last_null_embedding_log = now
+        logger.error("[Embeddings] Nenhum provedor de embeddings disponível: usando vetor nulo (u(q) = 1, cache semântico inoperante).")
 
 
 def get_embedding_cache_stats() -> Dict[str, Any]:

@@ -54,3 +54,37 @@ def test_l2_roundtrip_binary_and_legacy_json(monkeypatch):
 
     server.set("emb:broken", b"f32:abc")  # tamanho não múltiplo de 4
     assert embeddings._load_cache("emb:broken") is None
+
+
+def test_total_failure_returns_null_vector_and_logs_error_once_a_minute(monkeypatch, fake_clock, caplog):
+    from app import embeddings
+
+    clock = fake_clock(embeddings)
+    monkeypatch.setattr(embeddings, "_last_null_embedding_log", 0.0)
+    monkeypatch.setattr(embeddings, "_local_cpu_embed", lambda text: (_ for _ in ()).throw(AttributeError("nomic")))
+    monkeypatch.setattr(embeddings, "_load_cache", lambda key: None)
+    monkeypatch.setattr(embeddings.settings, "get", lambda key, default=None: None)
+    monkeypatch.setattr(embeddings, "_embed_l1_cache", embeddings.EmbeddingL1Cache(maxsize=8, ttl_s=60))
+
+    with caplog.at_level("ERROR", logger=embeddings.logger.name):
+        assert embeddings.embed_text("a") == [0.0] * 768
+        embeddings.embed_text("b")  # mesmo minuto: não repete o log
+        clock.advance(61)
+        embeddings.embed_text("c")
+    errors = [r for r in caplog.records if "vetor nulo" in r.getMessage()]
+    assert len(errors) == 2
+
+
+def test_local_encode_disables_progress_bar(monkeypatch):
+    from app import embeddings
+
+    seen = {}
+
+    class _Model:
+        def encode(self, text, **kwargs):
+            seen.update(kwargs, text=text)
+            return np.ones(4, dtype=np.float32)
+
+    monkeypatch.setattr(embeddings, "get_local_model", lambda: _Model())
+    assert embeddings._local_cpu_embed("oi") == [1.0] * 4
+    assert seen["show_progress_bar"] is False  # antes: "Batches: 0%" a cada consulta nos logs do worker
