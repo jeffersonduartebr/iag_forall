@@ -18,6 +18,34 @@ from app.openrouter_exploration_state import _load_model_stats, _save_model_stat
 logger = logging.getLogger("app.openrouter_explorer")
 
 
+_SHADOW_PREFIXES = ("openrouter/", "openai/", "anthropic/", "gemini/", "ollama/")
+_SHADOW_HISTORY = 20
+
+
+def _shadow_eligible(explored_model: str, incumbent_model: Optional[str]) -> bool:
+    if not incumbent_model or incumbent_model == explored_model:
+        return False
+    return incumbent_model.startswith(_SHADOW_PREFIXES)
+
+
+def _judged_quality(judge_scores: Any) -> float:
+    """Mean judge score on the 0-100 scale used by the explorer (5/10 when no judge answered)."""
+    valid = [s["score"] for s in judge_scores if "score" in s]
+    return round((float(np.mean(valid)) if valid else 5.0) * 10.0, 2)
+
+
+def _append_shadow(stats: Dict[str, Any], delta: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep the last ``_SHADOW_HISTORY`` paired deltas and their mean quality delta."""
+    shadows = stats.get("shadow_comparisons")
+    shadows = (shadows if isinstance(shadows, list) else []) + [delta]
+    stats["shadow_comparisons"] = shadows[-_SHADOW_HISTORY:]
+    stats["shadow_delta_quality_mean"] = round(
+        sum(float(s.get("delta_quality", 0)) for s in stats["shadow_comparisons"]) / len(stats["shadow_comparisons"]),
+        4,
+    )
+    return stats
+
+
 async def maybe_run_shadow_comparison(
     *,
     query: str,
@@ -31,12 +59,10 @@ async def maybe_run_shadow_comparison(
     settings: Any,
 ) -> None:
     """Run incumbent model on the same query and store paired comparison deltas."""
-    if not incumbent_model or incumbent_model == explored_model:
+    if not _shadow_eligible(explored_model, incumbent_model):
         return
-    if not incumbent_model.startswith(("openrouter/", "openai/", "anthropic/", "gemini/", "ollama/")):
-        return
-
     try:
+        started = time.perf_counter()
         out, meta = await deps["call_model"](
             model=incumbent_model,
             prompt=query,
@@ -45,19 +71,17 @@ async def maybe_run_shadow_comparison(
             temperature=float(getattr(settings, "TEMPERATURE_DEFAULT", 0.2) or 0.2),
             max_tokens=int(getattr(settings, "MAX_TOKENS_DEFAULT", 512) or 512),
         )
+        incumbent_latency = time.perf_counter() - started
         incumbent_answer = out if isinstance(out, str) else str(out)
-        p_tok, c_tok, incumbent_cost, _, _ = deps["parse_meta_cost"](
+        _, _, incumbent_cost, _, _ = deps["parse_meta_cost"](
             meta=meta,
             chosen_model=incumbent_model,
             cost_lookup=deps["get_model_cost"],
         )
-        judge_scores = await deps["judge_answer"](query, incumbent_answer)
-        valid_scores = [s["score"] for s in judge_scores if "score" in s]
-        incumbent_quality = round((float(np.mean(valid_scores)) if valid_scores else 5.0) * 10.0, 2)
-
+        incumbent_quality = _judged_quality(await deps["judge_answer"](query, incumbent_answer))
         delta = {
             "delta_quality": round(explored_quality - incumbent_quality, 3),
-            "delta_latency_s": round(explored_latency - 0.0, 3),
+            "delta_latency_s": round(explored_latency - incumbent_latency, 3),
             "delta_cost_usd": round(explored_cost - float(incumbent_cost or 0.0), 6),
             "incumbent_model": incumbent_model,
             "explored_model": explored_model,
@@ -68,16 +92,7 @@ async def maybe_run_shadow_comparison(
 
         rds = await _get_redis()
         if rds:
-            stats = await _load_model_stats(rds, explored_model)
-            shadows = stats.get("shadow_comparisons") or []
-            if not isinstance(shadows, list):
-                shadows = []
-            shadows.append(delta)
-            stats["shadow_comparisons"] = shadows[-20:]
-            stats["shadow_delta_quality_mean"] = round(
-                sum(float(s.get("delta_quality", 0)) for s in stats["shadow_comparisons"]) / len(stats["shadow_comparisons"]),
-                4,
-            )
+            stats = _append_shadow(await _load_model_stats(rds, explored_model), delta)
             await _save_model_stats(rds, explored_model, stats)
 
         logger.info(
