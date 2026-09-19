@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 from typing import Any, Dict, Optional
@@ -86,12 +87,14 @@ def schedule_tenant_usage(
     requests: int = 1,
 ) -> None:
     """Persist tenant usage without blocking the response path."""
-    usage = {"cost_usd": cost_usd, "tokens_in": tokens_in, "tokens_out": tokens_out, "requests": requests}
+    record = functools.partial(
+        record_tenant_usage, tenant_id, cost_usd=cost_usd, tokens_in=tokens_in, tokens_out=tokens_out, requests=requests
+    )
     try:
         # Dado de cobrança: sem limite de descarte, mas rastreado e drenado no shutdown.
-        spawn(asyncio.to_thread(record_tenant_usage, tenant_id, **usage), name="tenant_usage")
+        spawn(asyncio.to_thread(record), name="tenant_usage")
     except RuntimeError:
-        record_tenant_usage(tenant_id, **usage)
+        record()
 
 
 async def invalidate_active_policy_cache_async() -> None:

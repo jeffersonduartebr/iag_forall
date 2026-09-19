@@ -264,7 +264,8 @@ def _many_from_redis(keys: List[str]) -> Optional[Dict[str, str]]:
         return None
     try:
         values = rds.mget([f"{REDIS_PREFIX}{key}" for key in keys])
-        return {key: decode_redis_value(raw) for key, raw in zip(keys, values) if raw is not None}
+        decoded = {key: decode_redis_value(raw) for key, raw in zip(keys, values) if raw is not None}
+        return {key: value for key, value in decoded.items() if value is not None}
     except Exception:
         return None
 

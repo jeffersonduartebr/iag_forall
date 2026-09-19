@@ -151,7 +151,7 @@ _PROVIDER_ERROR_CATEGORIES = {
 }
 
 
-def _routing_http_error(exc: BaseException, modality: str) -> HTTPException:
+def _routing_http_error(exc: Exception, modality: str) -> HTTPException:
     """Map a routing failure onto the HTTP error contract (and count the outcome)."""
     if isinstance(exc, asyncio.TimeoutError):
         ROUTER_QUERY_OUTCOME.labels(outcome="provider_timeout", model="unknown", modality=modality).inc()
