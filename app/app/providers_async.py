@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 # Bibliotecas de Resiliência e HTTP Async
 import pybreaker
@@ -27,6 +27,9 @@ from prometheus_client import generate_latest
 from prometheus_client.exposition import CONTENT_TYPE_LATEST
 
 from app.model_registry import is_provider_configured
+
+if TYPE_CHECKING:
+    import httpx
 from app.observability import (
     PROVIDER_RATE_LIMIT_ERRORS,
     PROVIDER_TIMEOUT_ERRORS,
@@ -43,6 +46,12 @@ from app.utils.pricing import get_model_cost
 from app.utils.token_utils import count_tokens
 
 logger = logging.getLogger("providers_async")
+
+# Cliente HTTP compartilhado: criado sob demanda por providers._infra.get_http_client,
+# que lê e grava ``_pa._http_client``. Precisa existir desde o import; antes só era criado
+# por reset_provider_runtime_state() (chamado nos testes), e em produção o primeiro
+# get_http_client() levantava AttributeError (health do Ollama e /query com 502).
+_http_client: Optional["httpx.AsyncClient"] = None
 
 
 # ============================================================
