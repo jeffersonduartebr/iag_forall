@@ -5,7 +5,6 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-
 from app.utils import background
 
 

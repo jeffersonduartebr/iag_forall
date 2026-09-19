@@ -5,7 +5,6 @@ import json
 
 import fakeredis
 import pytest
-
 from app.services import ema_store
 
 

@@ -5,7 +5,6 @@ import time
 from types import SimpleNamespace
 
 import pytest
-
 from app.services import router_provider_stage as rps
 from app.services import router_stages as rs
 

@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from app.services import feedback_stages as fs
 
 _NOOP_METRIC = SimpleNamespace(labels=lambda **k: SimpleNamespace(inc=lambda: None, set=lambda v: None))

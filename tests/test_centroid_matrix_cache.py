@@ -6,7 +6,6 @@ import json
 import fakeredis
 import numpy as np
 import pytest
-
 from app.services import bandit_centroids as bc
 from app.utils import uncertainty as uq
 

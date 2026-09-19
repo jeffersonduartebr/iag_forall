@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.config.settings_catalog import SETTINGS_DEFAULTS
 from app.services import frozen_policy, nsga_tuning

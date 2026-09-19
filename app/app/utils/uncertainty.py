@@ -12,7 +12,6 @@ armazenados pelo sistema Bandit.
 import logging
 
 import numpy as np
-
 from app.embeddings import embed_text
 from app.services.bandit_centroids import load_centroid_matrix, normalize_centroid_vec
 from app.utils.redis_client import get_redis

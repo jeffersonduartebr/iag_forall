@@ -5,9 +5,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from app.services import judge_rubric as jr
 
 from app import judges
-from app.services import judge_rubric as jr
 
 WEIGHTS = dict(jr.DEFAULT_RUBRIC_WEIGHTS)
 

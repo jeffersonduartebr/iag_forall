@@ -5,9 +5,8 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
-
 from app.services import query_runtime as qr
+from fastapi import HTTPException
 
 
 def _req(**overrides):

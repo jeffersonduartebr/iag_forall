@@ -6,7 +6,6 @@ from contextlib import contextmanager
 
 import fakeredis
 import pytest
-
 from app.services import bandit_stats_store as store
 
 

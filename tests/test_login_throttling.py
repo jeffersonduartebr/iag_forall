@@ -2,11 +2,10 @@
 """Admin login throttling: spoofed X-Forwarded-For does not reset the limit; state stays bounded."""
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from app.api import admin_auth_routes as auth
 from app.utils.client_ip import parse_trusted_proxies, resolve_client_ip
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture(autouse=True)

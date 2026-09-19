@@ -2,7 +2,6 @@
 """services.query_reliability: confidence, band, verification, abstention and publication."""
 
 import pytest
-
 from app.services import query_reliability as qrel
 
 

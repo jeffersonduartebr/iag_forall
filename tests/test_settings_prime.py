@@ -4,10 +4,9 @@
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import app.settings_dynamic as sd
 import fakeredis
 import pytest
-
-import app.settings_dynamic as sd
 
 
 class _Engine:

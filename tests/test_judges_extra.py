@@ -9,9 +9,9 @@ handling for the corresponding runtime component.
 from types import SimpleNamespace
 
 import pytest
+from app.services import judge_context
 
 from app import judges
-from app.services import judge_context
 
 # Estes testes exercitam o caminho binário (CORRECT/INCORRECT); a rubrica é o padrão.
 _BINARY_GET = lambda key, default=None: {"JUDGE_SCORING_MODE": "binary"}.get(key, default)  # noqa: E731

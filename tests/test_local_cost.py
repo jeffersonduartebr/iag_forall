@@ -2,7 +2,6 @@
 """Imputed cost of local (Ollama) inference and its separation from cash cost."""
 
 import pytest
-
 from app.services.router_services import parse_meta_cost
 from app.utils import pricing
 

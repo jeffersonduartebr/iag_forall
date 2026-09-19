@@ -13,10 +13,9 @@ import math
 import time
 from typing import Any
 
-from sqlalchemy import text
-
 from app.db import get_engine
 from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
+from sqlalchemy import text
 
 logger = logging.getLogger("pricing")
 
