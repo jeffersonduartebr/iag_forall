@@ -358,8 +358,11 @@ def tune_weights_from_judge_feedback() -> None:
     Adjust NSGA weights based on recent judge verdicts.
 
     If error rate is high (>30%), boost quality weight to prioritize
-    better-performing models.
+    better-performing models. Skipped under frozen policy (NSGA_W_* are part
+    of the frozen snapshot).
     """
+    if is_frozen_policy_active():
+        return
     try:
         with _db_engine().connect() as conn:
             min_samples = int(settings.get("JUDGE_FEEDBACK_MIN_SAMPLES", 30))

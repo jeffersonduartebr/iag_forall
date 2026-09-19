@@ -90,6 +90,8 @@ def tune_global_strategy_weights(sys_metrics: Tuple[float, float, float]):
     Se o sistema ideal encontrado ainda é lento, aumentamos a penalidade de latência.
     Se a qualidade está baixa, aumentamos o peso da qualidade.
     """
+    if is_frozen_policy_active():  # NSGA_W_* fazem parte do snapshot congelado da avaliação
+        return
     changes = propose_strategy_weights(sys_metrics, settings.NSGA_W_QUALITY, settings.NSGA_W_LATENCY, settings.NSGA_W_COST)
     for key, (_old, new) in changes.items():
         settings.set(key, str(round(new, 2)), actor="nsga-updater")
@@ -128,13 +130,18 @@ RISK_RULES = (
 )
 
 
+def _or_default(value: Any, default: float) -> float:
+    """Missing (NULL) values take the default; a real 0.0 (abstention, exact centroid match) is kept."""
+    return default if value is None or value == "" else float(value)
+
+
 def bucket_qualities(rows: List[Any], uq_threshold: float) -> Dict[str, List[float]]:
     """Group judged qualities by (model family, uncertainty regime)."""
     buckets: Dict[str, List[float]] = {rule.bucket: [] for rule in RISK_RULES}
     for model, quality, uq in rows:
         lowered = str(model).lower()
-        quality = float(quality) if quality else 5.0
-        high_uq = (float(uq) if uq else 0.5) > uq_threshold
+        quality = _or_default(quality, 5.0)
+        high_uq = _or_default(uq, 0.5) > uq_threshold
         if high_uq and any(marker in lowered for marker in _SOTA_MARKERS):
             buckets["sota_high_uq"].append(quality)
         elif "ollama" in lowered:
@@ -239,7 +246,7 @@ def split_by_uncertainty(rows: List[Any], threshold: float) -> Tuple[List[float]
     high: List[float] = []
     low: List[float] = []
     for _model, quality, uq in rows:
-        (high if (float(uq) if uq else 0.5) > threshold else low).append(float(quality) if quality else 5.0)
+        (high if _or_default(uq, 0.5) > threshold else low).append(_or_default(quality, 5.0))
     return high, low
 
 

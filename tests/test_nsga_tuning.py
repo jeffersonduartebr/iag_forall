@@ -71,6 +71,16 @@ def test_tune_global_strategy_weights_writes_in_order(stub):
     ]
 
 
+def test_global_tuners_do_not_write_under_frozen_policy(stub, monkeypatch):
+    monkeypatch.setattr(nsga_tuning, "is_frozen_policy_active", lambda: True)
+    nsga_tuning.tune_global_strategy_weights((4.0, 0.02, 6.0))
+    assert stub.writes == []
+
+    monkeypatch.setattr(nwu, "is_frozen_policy_active", lambda: True)
+    monkeypatch.setattr(nwu, "_db_engine", lambda: pytest.fail("não deveria consultar o DB"))
+    nwu.tune_weights_from_judge_feedback()
+
+
 def test_tune_uncertainty_threshold_branches(stub):
     assert nsga_tuning.tune_uncertainty_threshold(current_efficiency=5.0) == pytest.approx(0.5)
     assert nsga_tuning.tune_uncertainty_threshold(current_efficiency=3.0) == pytest.approx(0.45)
@@ -83,6 +93,13 @@ def test_tune_uncertainty_threshold_branches(stub):
 def test_split_by_uncertainty_uses_defaults_for_missing_values():
     rows = [("m", 9.0, 0.9), ("m", 3.0, 0.1), ("m", None, None), ("m", 7.0, "0.46")]
     assert nsga_tuning.split_by_uncertainty(rows, 0.45) == ([9.0, 5.0, 7.0], [3.0])
+
+
+def test_zero_quality_and_zero_uncertainty_are_real_values():
+    # Abstenção (qualidade 0) não vira 5; u(q) = 0 é baixa incerteza, não o default 0,5.
+    assert nsga_tuning.split_by_uncertainty([("m", 0.0, 0.0)], 0.45) == ([], [0.0])
+    buckets = nsga_tuning.bucket_qualities([("ollama/gemma3", 0.0, 0.0)], 0.45)
+    assert buckets["local_low_uq"] == [0.0] and buckets["local_high_uq"] == []
 
 
 @pytest.mark.parametrize(
