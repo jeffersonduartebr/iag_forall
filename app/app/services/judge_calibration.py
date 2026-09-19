@@ -45,11 +45,18 @@ CREATE TABLE IF NOT EXISTS judge_calibration (
 """
 
 
+_table_ready = False
+
+
 def _ensure_judge_calibration_table():
-    """Ensure judge_calibration table exists."""
+    """Ensure judge_calibration table exists (DDL runs once per process, not per judgment)."""
+    global _table_ready
+    if _table_ready:
+        return
     try:
         with _get_engine().begin() as conn:
             conn.execute(text(JUDGE_CALIBRATION_DDL))
+        _table_ready = True
     except Exception as exc:
         logger.warning("[Judges] Failed to create calibration table: %s", exc)
 
@@ -109,6 +116,9 @@ def update_calibration_cache_status(query: str) -> None:
         return
 
     try:
+        # O cache pode gravar antes do primeiro julgamento: sem isto o UPDATE falhava com
+        # "Table 'judge_calibration' doesn't exist".
+        _ensure_judge_calibration_table()
         query_hash = hashlib.sha256(query.encode()).hexdigest()[:64]
 
         with _get_engine().begin() as conn:

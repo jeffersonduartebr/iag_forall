@@ -170,6 +170,9 @@ def mock_dependencies(monkeypatch):
     ema_module = sys.modules.get("app.services.ema_store")
     if ema_module is not None:
         ema_module.reset_ema_snapshots()
+    calibration_module = sys.modules.get("app.services.judge_calibration")
+    if calibration_module is not None:
+        calibration_module._table_ready = False
 
     mock_engine = _make_mock_db_engine()
     try:

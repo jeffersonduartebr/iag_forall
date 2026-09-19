@@ -103,7 +103,22 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "cost_per_1k": "FLOAT",
             "reward": "FLOAT",
             "context_label": "VARCHAR(64)",
-            "raw_payload": "LONGTEXT"
+            "raw_payload": "LONGTEXT",
+            # Mesmas colunas que query_service.ensure_query_log acrescenta: os workers (NSGA,
+            # Celery) dependem só do db_init e podiam consultá-las antes de a API subir.
+            "quality_source": "VARCHAR(32) DEFAULT 'unknown'",
+            "judge_sampled": "TINYINT DEFAULT 0",
+            "predicted_error_prob": "FLOAT NULL",
+            "confidence_score": "FLOAT NULL",
+            "confidence_band": "VARCHAR(16) DEFAULT NULL",
+            "abstained": "TINYINT DEFAULT 0",
+            "abstain_reason": "VARCHAR(64) DEFAULT NULL",
+            "grounded": "TINYINT DEFAULT 0",
+            "verification_status": "VARCHAR(32) DEFAULT NULL",
+            "knowledge_version": "VARCHAR(255) DEFAULT NULL",
+            "review_status": "VARCHAR(32) DEFAULT NULL",
+            "estimated_cost_usd": "FLOAT NULL",
+            "tenant_id": "VARCHAR(128) NULL"
         }
     },
 
