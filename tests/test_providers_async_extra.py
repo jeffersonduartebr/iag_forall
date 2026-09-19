@@ -152,6 +152,15 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         await pa.call_model("openai/gpt-4o", "x")
     assert exc2.value.category == "provider_rate_limit"
 
+    class _PSilentTimeout:
+        async def generate(self, **kwargs):
+            raise asyncio.TimeoutError()  # str() vazio, como o ReadTimeout do httpx
+
+    monkeypatch.setattr(pa.ProviderFactory, "get_provider", lambda m: _PSilentTimeout())
+    with pytest.raises(pa.ProviderCallError) as exc3:
+        await pa.call_model("openai/gpt-4o", "x")
+    assert "TimeoutError" in str(exc3.value)  # a causa não some do log
+
 
 def test_runtime_provider_settings_parses_string_and_csv_forms(monkeypatch):
     """Runtime provider settings should normalize JSON/csv warm-model inputs and aliases."""

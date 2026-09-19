@@ -278,7 +278,7 @@ async def call_model(
                 pass
         elif category == "provider_unavailable":
             mark_provider_unavailable(model)
-        raise ProviderCallError(model=model, message=str(e), category=category, retryable=True) from e
+        raise ProviderCallError(model=model, message=str(e) or type(e).__name__, category=category, retryable=True) from e
 
 
 # ==============================================================================
