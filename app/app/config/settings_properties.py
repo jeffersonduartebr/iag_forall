@@ -7,7 +7,7 @@ env defaults and typing imports."""
 
 from __future__ import annotations
 
-from typing import List
+from typing import TYPE_CHECKING, Any, List
 
 from .settings_env import DB_HOST_ENV, DB_NAME_ENV, DB_PASS_ENV, DB_PORT_ENV, DB_USER_ENV
 
@@ -15,34 +15,28 @@ from .settings_env import DB_HOST_ENV, DB_NAME_ENV, DB_PASS_ENV, DB_PORT_ENV, DB
 class TypedSettingsMixin:
     """Typed, cached accessors for known settings, mixed into DynamicSettings."""
 
+    if TYPE_CHECKING:  # implementados por DynamicSettings (resolvidos via MRO)
+
+        def get(self, key: str, fallback: Any = None) -> Any: ...
+        def _get_str(self, key: str, default: str = "") -> str: ...
+        def _get_int(self, key: str, default: int) -> int: ...
+        def _get_float(self, key: str, default: float) -> float: ...
+        def _get_bool(self, key: str, default: bool = False) -> bool: ...
+        def _get_list(self, key: str, default: str = "[]") -> List[str]: ...
+
     # -------------------------
     # Propriedades Tipadas
     # -------------------------
     @property
     def CANDIDATE_MODELS_LIST(self) -> List[str]:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
         return self._get_list("CANDIDATE_MODELS_LIST")
 
     @property
     def CANDIDATE_VISION_MODELS_LIST(self) -> List[str]:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
         return self._get_list("CANDIDATE_VISION_MODELS_LIST")
 
     @property
     def CANDIDATE_MULTIMODAL_MODELS_LIST(self) -> List[str]:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
         return self._get_list("CANDIDATE_MULTIMODAL_MODELS_LIST")
 
     @property
@@ -59,30 +53,15 @@ class TypedSettingsMixin:
 
     @property
     def VLM_OLLAMA_MODELS(self) -> List[str]:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
         return self._get_list("VLM_OLLAMA_MODELS")
 
     @property
     def JUDGE_MODELS(self) -> List[str]:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
         return self._get_list("JUDGE_MODELS")
 
     # Embeddings
     @property
     def EMBED_TEXT_MODEL(self) -> str:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
         return self._get_str("EMBED_TEXT_MODEL", "nomic-embed-text")
 
     @property
@@ -535,9 +514,4 @@ class TypedSettingsMixin:
     # Emergency Fallback Models
     @property
     def EMERGENCY_FALLBACK_MODELS(self) -> List[str]:
-        """Executa a responsabilidade descrita por este método.
-
-        Returns:
-            Valor produzido pela execução.
-        """
         return self._get_list("EMERGENCY_FALLBACK_MODELS")

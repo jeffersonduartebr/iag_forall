@@ -30,7 +30,7 @@ from ..config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 logger = logging.getLogger(__name__)
 
 # In-memory fallback store used when Redis is unavailable (also exercised by tests).
-_MEM_CLUSTERS: Dict[str, Dict[str, float]] = {}
+_MEM_CLUSTERS: Dict[str, Dict[str, Any]] = {}
 
 _LOCAL_PREFIXES = ("ollama/",)
 _CLUSTER_KEY_PREFIX = "advgov:cluster:"
@@ -110,7 +110,7 @@ def _read_redis() -> Any:
         return None
 
 
-def _load_cluster(cluster_id: str) -> Dict[str, float]:
+def _load_cluster(cluster_id: str) -> Dict[str, Any]:
     rds = _read_redis()
     if rds is not None:
         try:
@@ -124,7 +124,7 @@ def _load_cluster(cluster_id: str) -> Dict[str, float]:
     return dict(_MEM_CLUSTERS.get(cluster_id) or {})
 
 
-def _store_cluster(cluster_id: str, data: Dict[str, float]) -> None:
+def _store_cluster(cluster_id: str, data: Dict[str, Any]) -> None:
     _MEM_CLUSTERS[cluster_id] = data
     rds = _read_redis()
     if rds is not None:

@@ -266,7 +266,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate docker compose
-        run: docker compose config >/tmp/docker-compose.rendered.yml
+        run: |
+          cp .env.example .env  # o compose declara env_file: .env (não versionado)
+          docker compose config >/tmp/docker-compose.rendered.yml
 
       - name: Validate Grafana dashboards JSON
         run: |
