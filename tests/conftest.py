@@ -31,6 +31,17 @@ except ImportError:
     pass  # Ignora se não conseguir importar
 
 
+try:
+    from hypothesis import settings as hypothesis_settings
+
+    # Sem deadline: CI compartilhado tem latência variável. O perfil "ci" fixa a semente.
+    hypothesis_settings.register_profile("dev", deadline=None, max_examples=100)
+    hypothesis_settings.register_profile("ci", deadline=None, max_examples=200, derandomize=True)
+    hypothesis_settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))
+except ImportError:
+    pass
+
+
 def _make_mock_db_engine():
     """Return a SQLAlchemy-like engine stub for unit tests."""
     mock_conn = MagicMock()
@@ -50,6 +61,46 @@ def pytest_configure(config):
     """Register shared custom markers even when pytest.ini is not mounted."""
     config.addinivalue_line("markers", "integration: tests that require external services or credentials")
     config.addinivalue_line("markers", "slow: long-running tests")
+
+@pytest.fixture
+def fake_redis_server():
+    """One in-memory Redis server shared by ``fake_redis`` and ``fake_aioredis``."""
+    import fakeredis
+
+    return fakeredis.FakeServer()
+
+
+@pytest.fixture
+def fake_redis(monkeypatch, fake_redis_server):
+    """Opt-in sync fakeredis client behind the ``app.utils.redis_client`` getters.
+
+    The autouse ``MagicMock`` Redis accepts any call and returns mocks, so
+    parsing code silently falls into its error branches; this fixture gives
+    real Redis semantics. Modules that bound a getter at import time
+    (``from ..redis_client import get_redis``) still need their own patch.
+    """
+    import fakeredis
+
+    client = fakeredis.FakeRedis(server=fake_redis_server)
+    for name in ("get_redis", "get_redis_async_safe", "get_redis_sync_nonblocking", "ensure_redis_connected"):
+        monkeypatch.setattr(f"app.utils.redis_client.{name}", lambda *a, **k: client)
+    return client
+
+
+@pytest.fixture
+def fake_aioredis(monkeypatch, fake_redis_server):
+    """Opt-in ``redis.asyncio`` fakeredis client (same server as ``fake_redis``)."""
+    import fakeredis
+
+    client = fakeredis.FakeAsyncRedis(server=fake_redis_server)
+
+    async def _get_redis_async():
+        return client
+
+    monkeypatch.setattr("app.utils.redis_client.get_redis_async", _get_redis_async)
+    monkeypatch.setattr("app.utils.redis_async_ops.get_redis_async", _get_redis_async)
+    return client
+
 
 @pytest.fixture(autouse=True)
 def _isolate_experiment_manifests(monkeypatch, tmp_path):
