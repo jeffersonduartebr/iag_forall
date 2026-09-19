@@ -61,6 +61,7 @@ def pytest_configure(config):
     """Register shared custom markers even when pytest.ini is not mounted."""
     config.addinivalue_line("markers", "integration: tests that require external services or credentials")
     config.addinivalue_line("markers", "slow: long-running tests")
+    config.addinivalue_line("markers", "contract: OpenAPI contract fuzzing (schemathesis)")
 
 @pytest.fixture
 def fake_redis_server():
