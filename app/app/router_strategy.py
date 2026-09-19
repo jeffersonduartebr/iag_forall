@@ -16,7 +16,7 @@ Atualizado:
 """
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 # Importa helpers do bandits.py
 from app.bandits import get_snapshot, sample_metrics_from_snapshot
@@ -75,6 +75,45 @@ def _get_circuit_breaker_penalty(model: str) -> float:
         return 1.0  # Default to no penalty on error
 
 
+def _filter_candidates(candidates: List[str], modality: str, breaker_manager) -> List[str]:
+    """Drop models with an open circuit breaker, then apply the modality hard filters."""
+    available = [m for m in candidates if breaker_manager.is_available(m)]
+    if not available:
+        logger.warning("[Strategy] ⚠️ All models have open circuit breakers! Using original candidates.")
+        available = candidates
+    elif len(available) < len(candidates):
+        logger.info(f"[Strategy] Circuit breaker filtered {len(candidates) - len(available)} model(s)")
+
+    # Visão exige capacidade multimodal; a fonte única de verdade é app.model_registry.
+    if modality in ("vision", "multimodal"):
+        vision = [m for m in available if model_supports_vision(m)]
+        if vision:
+            return vision
+        # Se o filtro removeu tudo (ex: lista mal configurada), força um fallback seguro
+        logger.warning("[Strategy] ⚠️ NENHUM modelo de visão encontrado na lista! Usando fallback Qwen3-VL.")
+        return ["ollama/qwen3-vl:4b"]
+    # Texto: remove modelos estritamente de visão (economia de VRAM/custo); "Omni" (gpt-4o) fica.
+    if modality == "text":
+        return [m for m in available if not is_vision_only_model(m)] or ["ollama/gemma3:4b"]
+    return available
+
+
+def _risk_factor(model: str, is_high_uncertainty: bool, risks: Tuple[float, float, float]) -> float:
+    """UQ safety mode: trust frontier models on unknown ground, favor local ones on known ground."""
+    sota_high_uq, local_high_uq, local_low_uq = risks
+    if is_high_uncertainty:
+        if _is_sota(model):
+            return sota_high_uq
+        return local_high_uq if _is_local(model) else 1.0
+    return local_low_uq if _is_local(model) else 1.0
+
+
+def model_score(quality: float, latency_s: float, cost_usd: float, weights: Tuple[float, float, float]) -> float:
+    """S(m) = Q*w_Q - L*w_L - C*w_C (NSGA-II weights on raw scales)."""
+    w_q, w_l, w_c = weights
+    return quality * w_q - latency_s * w_l - cost_usd * w_c
+
+
 def choose_top2_models(
     candidates: List[str],
     weights: Dict[str, float],  # Pesos do NSGA-II (w_quality, w_latency, w_cost)
@@ -107,95 +146,22 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     is_high_uncertainty = uncertainty_score > uq_threshold
 
-    # ==================================================================
-    # 🔒 CIRCUIT BREAKER FILTER - Remove models with open circuit breakers
-    # ==================================================================
-    breaker_manager = get_circuit_breaker_manager()
-    available_candidates = [m for m in candidates if breaker_manager.is_available(m)]
-
-    if not available_candidates:
-        logger.warning("[Strategy] ⚠️ All models have open circuit breakers! Using original candidates.")
-        available_candidates = candidates
-    elif len(available_candidates) < len(candidates):
-        excluded = len(candidates) - len(available_candidates)
-        logger.info(f"[Strategy] Circuit breaker filtered {excluded} model(s)")
-
-    candidates = available_candidates
-
-    # ==================================================================
-    # 🔒 HARD FILTERS (SEGURANÇA DE TIPO)
-    # ==================================================================
-
-    # 1. SE FOR VISÃO: Exige capacidade multimodal
-    # Fonte única de verdade da capacidade em app.model_registry (antes esta lista
-    # de marcadores era duplicada aqui).
-    if modality in ("vision", "multimodal"):
-        vision_candidates = [m for m in candidates if model_supports_vision(m)]
-
-        if vision_candidates:
-            candidates = vision_candidates
-        else:
-            # Se o filtro removeu tudo (ex: lista mal configurada), força um fallback seguro
-            logger.warning("[Strategy] ⚠️ NENHUM modelo de visão encontrado na lista! Usando fallback Qwen3-VL.")
-            candidates = ["ollama/qwen3-vl:4b"]
-
-    # 2. SE FOR TEXTO: Remove modelos estritamente de visão (economia de VRAM/custo);
-    # modelos "Omni" (gpt-4o) permanecem por serem ótimos em texto também.
-    elif modality == "text":
-        candidates = [m for m in candidates if not is_vision_only_model(m)]
-        # Se sobrar vazio, fallback para texto
-        if not candidates:
-            candidates = ["ollama/gemma3:4b"]
-
-    # ==================================================================
-
-    scores = []
+    candidates = _filter_candidates(candidates, modality, get_circuit_breaker_manager())
 
     # Define pesos padrão caso o NSGA-II ainda não tenha rodado ou retornado vazio
-    w_q = weights.get("w_quality", 1.0)
-    w_l = weights.get("w_latency", 0.5)
-    w_c = weights.get("w_cost", 50.0)
+    w = (weights.get("w_quality", 1.0), weights.get("w_latency", 0.5), weights.get("w_cost", 50.0))
+    risks = (settings.RISK_FACTOR_SOTA_HIGH_UQ, settings.RISK_FACTOR_LOCAL_HIGH_UQ, settings.RISK_FACTOR_LOCAL_LOW_UQ)
 
-    # Get dynamic risk factors from settings
-    risk_sota_high_uq = settings.RISK_FACTOR_SOTA_HIGH_UQ
-    risk_local_high_uq = settings.RISK_FACTOR_LOCAL_HIGH_UQ
-    risk_local_low_uq = settings.RISK_FACTOR_LOCAL_LOW_UQ
-
+    scores = []
     for model in candidates:
-        # Base quality (0-10) via Thompson Sampling
-        q_base = sampled_qs.get(model, 5.0)
-
-        # --- LÓGICA UQ (Safety Mode) with Dynamic Risk Factors ---
-        risk_factor = 1.0
-
-        if is_high_uncertainty:
-            # Em terreno desconhecido:
-            if _is_sota(model):
-                risk_factor = risk_sota_high_uq  # Confia nos modelos fortes
-            elif _is_local(model):
-                risk_factor = risk_local_high_uq  # Desconfia dos locais
-        else:
-            # Em terreno conhecido:
-            if _is_local(model):
-                risk_factor = risk_local_low_uq  # Bônus de eficiência para locais
-
-        # --- CIRCUIT BREAKER PENALTY ---
-        cb_penalty = _get_circuit_breaker_penalty(model)
-        risk_factor *= cb_penalty
-
-        # Qualidade Ajustada pelo Risco
-        q_final = q_base * risk_factor
-
+        risk = _risk_factor(model, is_high_uncertainty, risks) * _get_circuit_breaker_penalty(model)
         # Latência e custo estimados: EMA compartilhada (feedback de todos os workers);
         # heurísticas só enquanto o modelo tiver poucas observações.
         avg_latency, est_cost = routing_latency_cost(
             ema_snapshot.get(model), is_local=_is_local(model), is_sota=_is_sota(model)
         )
-
-        # --- FÓRMULA DE SCORE (NSGA-II) ---
-        # Score = (Qualidade * wQ) - (Latencia * wL) - (Custo * wC)
-        score = (q_final * w_q) - (avg_latency * w_l) - (est_cost * w_c)
-
+        # Qualidade base (0-10) via Thompson Sampling, ajustada pelo risco
+        score = model_score(sampled_qs.get(model, 5.0) * risk, avg_latency, est_cost, w)
         scores.append((model, score))
 
     # Ordena e pega top 2
