@@ -100,3 +100,15 @@ def test_persist_log_adds_rubric_and_reliability_fields():
     assert row["raw_payload"]["judge_rubric"] == {"score": 0.8}
     assert row["confidence_score"] == 0.7 and row["grounded"] is True and row["tenant_id"] == "t1"
     assert row["confidence_band"] is None and row["judge_sampled"] is True
+
+
+def test_shared_ema_is_persisted_or_local_fallback():
+    persisted = []
+    fb = _fb(latency_s=3.0, cost_val=0.02)
+    local = fs.next_ema(None, 3.0, 8.0, 0.02)
+    shared = {**local, "updates": 7}
+    deps = _deps(_persist_ema=lambda mod, model, entry: persisted.append(entry), update_shared_ema=lambda *a: shared)
+    fs._share_and_persist_ema(deps, fb, 8.0, local)
+    deps["update_shared_ema"] = lambda *a: None  # Redis indisponível
+    fs._share_and_persist_ema(deps, fb, 8.0, local)
+    assert persisted == [shared, local]

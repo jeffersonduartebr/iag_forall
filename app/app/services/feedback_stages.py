@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from .ema_store import next_ema, update_shared_ema
 from .reward import cost_per_1k_from_total
 from .router_services import spawn_via_deps
 from .router_stages import quietly
 
-EMA_ALPHA = 0.2
 CACHE_MIN_QUALITY = 7.0
 
 
@@ -237,29 +237,23 @@ async def record_exploration(deps: Dict[str, Any], fb: FeedbackRequest, reward: 
     await _shadow_compare(deps, fb, quality)
 
 
-def next_ema(prev: Optional[Dict[str, Any]], latency_s: float, quality: float, cost: float) -> Dict[str, Any]:
-    """One exponential-moving-average step (alpha = EMA_ALPHA); first sample seeds the averages."""
-    if prev is None:
-        return {"ema_latency": latency_s, "ema_quality": quality, "ema_cost": cost, "ema_alignment": 1.0, "updates": 1}
-    a = EMA_ALPHA
-    return {
-        "ema_latency": a * latency_s + (1 - a) * prev["ema_latency"],
-        "ema_quality": a * quality + (1 - a) * prev["ema_quality"],
-        "ema_cost": a * cost + (1 - a) * prev["ema_cost"],
-        "ema_alignment": prev.get("ema_alignment", 1.0),
-        "updates": prev.get("updates", 0) + 1,
-    }
+def _share_and_persist_ema(deps: Dict[str, Any], fb: FeedbackRequest, quality: float, local: Dict[str, Any]) -> None:
+    """Fold the observation into the shared (Redis) EMA and persist that entry to ema_history."""
+    shared = deps.get("update_shared_ema", update_shared_ema)(
+        fb.modality, fb.chosen_model, fb.latency_s, quality, fb.cost_val
+    )
+    deps["_persist_ema"](fb.modality, fb.chosen_model, shared or local)
 
 
 def update_ema(deps: Dict[str, Any], state: Dict[str, Any], fb: FeedbackRequest, quality: Quality) -> None:
-    """In-process EMA per (modality, model) plus background persistence to ema_history."""
+    """EMA per (modality, model): in-process copy, shared Redis copy (routing) and ema_history."""
     try:
         key = (fb.modality, fb.chosen_model)
         entry = next_ema(state["EMA_HISTORY"].get(key), fb.latency_s, quality.value, fb.cost_val)
         state["EMA_HISTORY"].set(key, entry)
         spawn_via_deps(
             deps,
-            deps["asyncio"].to_thread(deps["_persist_ema"], fb.modality, fb.chosen_model, entry),
+            deps["asyncio"].to_thread(_share_and_persist_ema, deps, fb, quality.value, entry),
             name="ema_persist",
         )
     except Exception as exc:

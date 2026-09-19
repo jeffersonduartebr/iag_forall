@@ -23,6 +23,7 @@ from app.bandits import get_snapshot, sample_metrics_from_snapshot
 from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.model_registry import is_vision_only_model, model_supports_vision
 from app.reliability import get_cascade_detector, get_circuit_breaker_manager
+from app.services.ema_store import load_ema_snapshot, routing_latency_cost
 from app.settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             return [emergency_model]
 
     snapshot = get_snapshot()
+    ema_snapshot = load_ema_snapshot(modality)
     # Amostra qualidade probabilística (Thompson Sampling)
     sampled_qs = sample_metrics_from_snapshot(snapshot)
 
@@ -160,14 +162,6 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     risk_local_low_uq = settings.RISK_FACTOR_LOCAL_LOW_UQ
 
     for model in candidates:
-        # Chave para buscar stats no snapshot
-        key_options = [f"{model}::{modality}", model]
-        stats = {}
-        for k in key_options:
-            if k in snapshot:
-                stats = snapshot[k]
-                break
-
         # Base quality (0-10) via Thompson Sampling
         q_base = sampled_qs.get(model, 5.0)
 
@@ -192,15 +186,11 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         # Qualidade Ajustada pelo Risco
         q_final = q_base * risk_factor
 
-        # Heurística de Latência (se não tiver dados reais)
-        avg_latency = stats.get("avg_latency", 2.0)
-        if _is_local(model) and avg_latency == 2.0:
-            avg_latency = 0.5
-
-        # Heurística de Custo (se não tiver dados reais)
-        est_cost = stats.get("avg_cost", 0.000001)
-        if _is_sota(model) and est_cost < 0.001:
-            est_cost = 0.01
+        # Latência e custo estimados: EMA compartilhada (feedback de todos os workers);
+        # heurísticas só enquanto o modelo tiver poucas observações.
+        avg_latency, est_cost = routing_latency_cost(
+            ema_snapshot.get(model), is_local=_is_local(model), is_sota=_is_sota(model)
+        )
 
         # --- FÓRMULA DE SCORE (NSGA-II) ---
         # Score = (Qualidade * wQ) - (Latencia * wL) - (Custo * wC)

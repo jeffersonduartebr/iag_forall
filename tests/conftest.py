@@ -78,6 +78,9 @@ def mock_dependencies(monkeypatch):
     judges_module = sys.modules.get("app.judges")
     if judges_module is not None:
         judges_module._judge_stats_cache.clear()
+    ema_module = sys.modules.get("app.services.ema_store")
+    if ema_module is not None:
+        ema_module.reset_ema_snapshots()
 
     mock_engine = _make_mock_db_engine()
     try:
