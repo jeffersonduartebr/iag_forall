@@ -4,9 +4,8 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -15,12 +14,7 @@ from ..error_handling import ErrorCategory, create_error_response, log_error
 from ..guardrails import sanitize_output_guardrails
 from ..observability import (
     POLICY_VERSION_ACTIVE,
-    QUERY_COMPLEXITY_DETECTED,
     QUERY_POLICY_APPLIED,
-    RESPONSE_ABSTAIN_TOTAL,
-    RESPONSE_GROUNDED_TOTAL,
-    RESPONSE_REVIEW_STATUS,
-    RESPONSE_VERIFICATION_STATUS,
     ROUTER_QUERY_OUTCOME,
     logger,
 )
@@ -33,407 +27,23 @@ from ..services.governance_runtime import (
     schedule_runtime_usage,
 )
 from ..services.hot_path_runtime import check_input_guardrails_async
-from ..services.query_complexity import apply_complexity_runtime_adjustments, detect_query_complexity
 from ..services.tool_governance import audit_tool_denial, evaluate_tool_policy
 from ..services.tool_observability import record_tool_turn
 from ..settings_dynamic import settings
 from ..tasks import task_process_feedback
+from .query_profile import (  # noqa: F401  (reexportados para tasks/tests)
+    _effective_sync_timeout_seconds,
+    _infer_retrieval_profile,
+    _workload_provider_timeout_seconds,
+    _workload_sync_deadline_seconds,
+    apply_query_runtime_profile,
+    classify_query_workload,
+)
+from .query_reliability import _clamp, enrich_result_reliability  # noqa: F401  (reexportados)
 
 check_tenant_budget = check_runtime_budget_async
 get_active_policy = get_runtime_active_policy_async
 record_tenant_usage = schedule_runtime_usage
-
-_REASONING_HINTS = (
-    "step by step",
-    "passo a passo",
-    "prove",
-    "derive",
-    "demonstre",
-    "justify",
-    "explique detalhadamente",
-    "chain of thought",
-)
-_RETRIEVAL_HINTS = (
-    "according to",
-    "de acordo com",
-    "cite",
-    "reference",
-    "document",
-    "manual",
-    "policy",
-    "regulation",
-    "source",
-    "baseado no material",
-)
-_SIMPLE_QUERY_HINTS = (
-    "quanto é",
-    "what is",
-    "who is",
-    "when was",
-    "capital of",
-    "defina",
-    "define",
-)
-_SOURCE_REQUIRED_HINTS = (
-    "fonte",
-    "fontes",
-    "source",
-    "sources",
-    "artigo",
-    "paper",
-    "lei",
-    "decreto",
-    "resolução",
-    "norma",
-    "manual",
-)
-
-
-def _clamp(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
-    """Clamp one floating-point value into the expected confidence interval."""
-    return max(lower, min(upper, float(value)))
-
-
-def enrich_result_reliability(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Attach confidence, grounding, verification, and review hints to one result."""
-    metadata = result.setdefault("metadata", {})
-    route = result.setdefault("route", {})
-
-    # Turno de tool call: o modelo devolveu tool_calls (texto vazio é esperado).
-    # Não aplicar lógica de abstenção/verificação de resposta vazia.
-    if result.get("finish_reason") == "tool_calls" or result.get("tool_calls"):
-        metadata["confidence_score"] = None
-        metadata["confidence_band"] = None
-        metadata["abstained"] = False
-        metadata["abstain_reason"] = None
-        metadata["verification_status"] = None
-        metadata["review_status"] = "auto_approved"
-        result["confidence_score"] = None
-        result["confidence_band"] = None
-        result["abstained"] = False
-        result["abstain_reason"] = None
-        result["verification_status"] = None
-        result["review_status"] = "auto_approved"
-        result["grounded"] = bool(metadata.get("grounded"))
-        result["citations"] = list(metadata.get("citations") or [])
-        result["evidence_snippets"] = list(metadata.get("evidence_snippets") or [])
-        result["knowledge_version"] = metadata.get("knowledge_version")
-        return result
-
-    fallback = (route.get("fallback") or {})
-    answer_text = str(result.get("answer", "") or "").strip()
-    uncertainty = float(metadata.get("uncertainty_score", 0.5) or 0.5)
-    grounded = bool(metadata.get("grounded"))
-    retrieval_mode = str(metadata.get("retrieval_mode") or "no_retrieval")
-    workload_class = str(metadata.get("workload_class") or "reasoning")
-    output_guardrail_tags = metadata.get("guardrail_output_tags") or []
-    fallback_used = bool(fallback.get("used"))
-
-    confidence_score = 1.0 - uncertainty
-    if grounded:
-        confidence_score += 0.20
-    if retrieval_mode != "no_retrieval" and not grounded:
-        confidence_score -= 0.20
-    if fallback_used:
-        confidence_score -= 0.10
-    if output_guardrail_tags:
-        confidence_score -= 0.10
-    if not answer_text:
-        confidence_score -= 0.60
-    confidence_score = round(_clamp(confidence_score), 3)
-
-    if confidence_score >= 0.75:
-        confidence_band = "high"
-    elif confidence_score >= 0.45:
-        confidence_band = "medium"
-    else:
-        confidence_band = "low"
-
-    if not answer_text:
-        verification_status = "unsupported"
-    elif grounded and confidence_score >= 0.70:
-        verification_status = "supported"
-    elif grounded or confidence_score >= 0.45:
-        verification_status = "weakly_supported"
-    else:
-        verification_status = "unsupported"
-
-    abstained = False
-    abstain_reason = None
-    if not answer_text:
-        abstained = True
-        abstain_reason = "empty_answer"
-    elif confidence_band == "low" and workload_class in {"knowledge_lookup", "reasoning"} and verification_status == "unsupported":
-        abstained = True
-        abstain_reason = "low_confidence"
-    elif (
-        str(metadata.get("detected_complexity") or "") in {"high", "expert"}
-        and confidence_band == "low"
-        and verification_status == "unsupported"
-    ):
-        abstained = True
-        abstain_reason = "low_confidence"
-    elif retrieval_mode != "no_retrieval" and workload_class == "knowledge_lookup" and not grounded and confidence_score < 0.55:
-        abstained = True
-        abstain_reason = "insufficient_evidence"
-
-    if abstained:
-        safe_answer = (
-            "Nao tenho evidencia suficiente para responder com confianca. "
-            "Tente reformular a pergunta ou fornecer mais contexto."
-        )
-        result["answer"] = safe_answer
-        answer_text = safe_answer
-
-    review_status = "needs_review" if abstained or verification_status == "unsupported" or confidence_band == "low" else "auto_approved"
-
-    metadata["confidence_score"] = confidence_score
-    metadata["confidence_band"] = confidence_band
-    metadata["abstained"] = abstained
-    metadata["abstain_reason"] = abstain_reason
-    metadata["verification_status"] = verification_status
-    metadata["review_status"] = review_status
-    metadata["grounded"] = grounded
-    metadata["citations"] = list(metadata.get("citations") or [])
-    metadata["evidence_snippets"] = list(metadata.get("evidence_snippets") or [])
-    result["confidence_score"] = confidence_score
-    result["confidence_band"] = confidence_band
-    result["abstained"] = abstained
-    result["abstain_reason"] = abstain_reason
-    result["grounded"] = grounded
-    result["citations"] = metadata["citations"]
-    result["evidence_snippets"] = metadata["evidence_snippets"]
-    result["knowledge_version"] = metadata.get("knowledge_version")
-    result["verification_status"] = verification_status
-    result["review_status"] = review_status
-    try:
-        RESPONSE_GROUNDED_TOTAL.labels(grounded="true" if grounded else "false").inc()
-        RESPONSE_VERIFICATION_STATUS.labels(status=verification_status).inc()
-        RESPONSE_REVIEW_STATUS.labels(status=review_status).inc()
-        if abstained:
-            RESPONSE_ABSTAIN_TOTAL.labels(reason=str(abstain_reason or "unknown")).inc()
-    except Exception:
-        pass
-    return result
-
-
-def classify_query_workload(req: Any, modality: str, image_input: str | None) -> str:
-    """Classify a request into a small set of performance-relevant workload classes."""
-    if image_input or modality in {"vision", "multimodal"}:
-        return "vision"
-
-    if str(settings.get("ROUTER_QUERY_CLASSIFIER_ENABLED", "1")).strip() != "1":
-        return "reasoning"
-
-    query = str(getattr(req, "query", "") or "").strip()
-    lowered = query.lower()
-
-    if any(hint in lowered for hint in _RETRIEVAL_HINTS):
-        return "knowledge_lookup"
-    if any(hint in lowered for hint in _REASONING_HINTS):
-        return "reasoning"
-
-    token_count = len(re.findall(r"\w+", query))
-    if any(hint in lowered for hint in _SIMPLE_QUERY_HINTS):
-        return "simple_text"
-    if token_count <= 18 and len(query) <= 140 and "?" in query:
-        return "simple_text"
-    if token_count <= 12 and len(query) <= 100:
-        return "simple_text"
-    return "reasoning"
-
-
-def _infer_retrieval_profile(query: str, workload: str) -> str:
-    """Choose the cheapest retrieval depth that still matches the query intent."""
-    lowered = str(query or "").lower()
-    if workload == "simple_text":
-        return "no_retrieval"
-    if workload == "knowledge_lookup":
-        if any(hint in lowered for hint in _SOURCE_REQUIRED_HINTS):
-            return "full_retrieval"
-        return "light_retrieval"
-    if workload == "vision":
-        return "full_retrieval"
-    return "full_retrieval"
-
-
-def _workload_sync_deadline_seconds(workload: str) -> int:
-    """Return the synchronous deadline budget for one workload class."""
-    key_map = {
-        "simple_text": "SYNC_DEADLINE_SIMPLE_SECONDS",
-        "knowledge_lookup": "SYNC_DEADLINE_KNOWLEDGE_SECONDS",
-        "reasoning": "SYNC_DEADLINE_REASONING_SECONDS",
-        "vision": "SYNC_DEADLINE_VISION_SECONDS",
-    }
-    default_map = {
-        "simple_text": 25,
-        "knowledge_lookup": 40,
-        "reasoning": 70,
-        "vision": 100,
-    }
-    key = key_map.get(workload, "SYNC_DEADLINE_REASONING_SECONDS")
-    default = default_map.get(workload, 70)
-    return max(5, int(settings.get(key, default)))
-
-
-def _workload_provider_timeout_seconds(workload: str) -> int:
-    """Return the provider timeout budget for one workload class."""
-    key_map = {
-        "simple_text": "PROVIDER_TIMEOUT_SIMPLE_SECONDS",
-        "knowledge_lookup": "PROVIDER_TIMEOUT_KNOWLEDGE_SECONDS",
-        "reasoning": "PROVIDER_TIMEOUT_REASONING_SECONDS",
-        "vision": "PROVIDER_TIMEOUT_VISION_SECONDS",
-    }
-    default_map = {
-        "simple_text": 20,
-        "knowledge_lookup": 35,
-        "reasoning": 60,
-        "vision": 90,
-    }
-    key = key_map.get(workload, "PROVIDER_TIMEOUT_REASONING_SECONDS")
-    default = default_map.get(workload, 60)
-    return max(5, int(settings.get(key, default)))
-
-
-def _effective_sync_timeout_seconds(req_timeout_seconds: int | None, runtime_profile: Dict[str, Any]) -> int:
-    """Clamp request-level timeout overrides to the workload-specific sync deadline.
-
-    Clients may send a generous `timeout_seconds`, but the runtime should not
-    let simple interactive workloads inherit a slower budget than the profile
-    selected for that workload class. This helper keeps lower client overrides
-    intact while preventing higher overrides from stretching the synchronous
-    path beyond the workload deadline.
-    """
-    runtime_deadline = int((runtime_profile.get("runtime_hints") or {}).get("sync_deadline_seconds", 0) or 0)
-    if runtime_deadline <= 0:
-        return max(5, int(req_timeout_seconds or settings.get("REQUEST_TIMEOUT_SECONDS", 120)))
-    if req_timeout_seconds is None:
-        return runtime_deadline
-    return max(5, min(int(req_timeout_seconds), runtime_deadline))
-
-
-def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None) -> Dict[str, Any]:
-    """Derive execution knobs for one request without mutating the incoming request object."""
-    workload = classify_query_workload(req, modality=modality, image_input=image_input)
-    perf_mode_enabled = str(settings.get("ROUTER_PERF_MODE", "0")).strip() == "1"
-    simple_query_cap = int(settings.get("ROUTER_SIMPLE_QUERY_MAX_TOKENS", settings.MAX_TOKENS_DEFAULT))
-    simple_text_max_fallbacks = max(1, int(settings.get("ROUTER_SIMPLE_TEXT_MAX_FALLBACKS", 1)))
-    rag_simple_bypass = str(settings.get("RAG_SIMPLE_QUERY_BYPASS_ENABLED", "1")).strip() == "1"
-    light_top_k = max(1, int(settings.get("RAG_LIGHT_TOP_K", 2)))
-    light_context_budget = max(128, int(settings.get("RAG_LIGHT_CONTEXT_TOKEN_BUDGET", 480)))
-    full_context_budget = max(light_context_budget, int(settings.get("RAG_FULL_CONTEXT_TOKEN_BUDGET", settings.get("RAG_CONTEXT_TOKEN_BUDGET", 1200))))
-    rerank_for_light = str(settings.get("RERANK_ENABLED_FOR_LIGHT_RETRIEVAL", "0")).strip() == "1"
-
-    use_rag = bool(req.enable_rag_for_answer or req.enable_rag_for_image)
-    effective_max_tokens = req.max_tokens or settings.MAX_TOKENS_DEFAULT
-    retrieval_mode = _infer_retrieval_profile(getattr(req, "query", ""), workload)
-    top_k = max(1, light_top_k)
-    context_token_budget = full_context_budget
-    rerank_enabled = True
-    max_fallbacks = 2
-    needs_retrieval = retrieval_mode != "no_retrieval"
-    needs_rerank = True
-    interactive_priority = "normal"
-
-    if perf_mode_enabled and workload == "simple_text":
-        effective_max_tokens = min(int(effective_max_tokens), max(32, simple_query_cap))
-
-    if workload == "simple_text" and rag_simple_bypass:
-        use_rag = False
-        retrieval_mode = "no_retrieval"
-        top_k = 1
-        context_token_budget = light_context_budget
-        rerank_enabled = False
-        needs_retrieval = False
-        needs_rerank = False
-        interactive_priority = "high"
-        max_fallbacks = simple_text_max_fallbacks
-    elif workload == "knowledge_lookup":
-        use_rag = True if use_rag or perf_mode_enabled else use_rag
-        retrieval_mode = _infer_retrieval_profile(getattr(req, "query", ""), workload)
-        top_k = light_top_k
-        context_token_budget = light_context_budget if retrieval_mode == "light_retrieval" else full_context_budget
-        rerank_enabled = rerank_for_light if retrieval_mode == "light_retrieval" else True
-        needs_retrieval = True
-        needs_rerank = bool(rerank_enabled)
-        interactive_priority = "high"
-        max_fallbacks = 1 if perf_mode_enabled else 2
-    elif workload == "reasoning":
-        retrieval_mode = "full_retrieval" if use_rag else "no_retrieval"
-        top_k = max(3, light_top_k + 1)
-        context_token_budget = full_context_budget
-        rerank_enabled = True
-        needs_retrieval = retrieval_mode != "no_retrieval"
-        needs_rerank = True
-        interactive_priority = "normal"
-        max_fallbacks = 2
-
-    if modality in {"vision", "multimodal"} or image_input:
-        use_rag = bool(req.enable_rag_for_answer or req.enable_rag_for_image)
-        retrieval_mode = "full_retrieval" if use_rag else "no_retrieval"
-        top_k = max(3, light_top_k + 1)
-        context_token_budget = full_context_budget
-        rerank_enabled = True
-        needs_retrieval = retrieval_mode != "no_retrieval"
-        needs_rerank = True
-        interactive_priority = "high"
-        max_fallbacks = 2
-
-    detected_complexity = detect_query_complexity(str(getattr(req, "query", "") or ""), workload)
-    runtime_hints: Dict[str, Any] = {
-        "workload_class": workload,
-        "retrieval_mode": retrieval_mode if use_rag else "no_retrieval",
-        "rag_top_k": top_k,
-        "rag_context_token_budget": context_token_budget,
-        "rag_rerank_enabled": rerank_enabled,
-        "max_fallbacks": max_fallbacks,
-        "needs_retrieval": bool(use_rag and needs_retrieval),
-        "needs_rerank": bool(use_rag and needs_rerank),
-        "interactive_priority": interactive_priority,
-        "provider_timeout_seconds": _workload_provider_timeout_seconds(workload),
-        "sync_deadline_seconds": _workload_sync_deadline_seconds(workload),
-    }
-    adjusted = apply_complexity_runtime_adjustments(
-        detected_complexity=detected_complexity,
-        workload_class=workload,
-        max_tokens=int(effective_max_tokens),
-        sync_deadline_seconds=int(runtime_hints["sync_deadline_seconds"]),
-        provider_timeout_seconds=int(runtime_hints["provider_timeout_seconds"]),
-        runtime_hints=runtime_hints,
-        workload_hints=getattr(req, "workload_hints", None),
-    )
-    effective_max_tokens = int(adjusted["max_tokens"])
-    runtime_hints = adjusted["runtime_hints"]
-    detected_complexity = adjusted["detected_complexity"]
-
-    expected_tokens = None
-    workload_hints = getattr(req, "workload_hints", None)
-    if workload_hints is not None:
-        expected_tokens = (
-            workload_hints.get("expected_tokens")
-            if isinstance(workload_hints, dict)
-            else getattr(workload_hints, "expected_tokens", None)
-        )
-    if expected_tokens:
-        effective_max_tokens = max(effective_max_tokens, int(expected_tokens))
-
-    try:
-        QUERY_COMPLEXITY_DETECTED.labels(
-            detected_complexity=detected_complexity,
-            workload_class=workload,
-        ).inc()
-    except Exception:
-        pass
-
-    return {
-        "workload_class": workload,
-        "detected_complexity": detected_complexity,
-        "perf_mode_enabled": perf_mode_enabled,
-        "use_rag": use_rag,
-        "max_tokens": effective_max_tokens,
-        "runtime_hints": runtime_hints,
-    }
-
 
 def _raise_if_guardrail_blocked(req: Any, decision: Any) -> None:
     """HTTP 400 when the input guardrails block the query."""
@@ -478,6 +88,177 @@ def _raise_if_budget_exceeded(req: Any, budget: Any) -> None:
     )
 
 
+def _resolve_modality(req: Any) -> Tuple[str, Optional[str]]:
+    """Requested modality and the image input (first of ``images``); text + image => vision."""
+    modality = (req.modality or "text").lower()
+    image_input = req.image_b64 or (req.images[0] if req.images else None)
+    if image_input and modality == "text":
+        modality = "vision"
+    return modality, image_input
+
+
+def _select_policy(req: Any, active_policy: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Explicit policy version, else the active one (published as a gauge)."""
+    version = (active_policy or {}).get("version")
+    if version:
+        POLICY_VERSION_ACTIVE.labels(policy_version=str(version)).set(1)
+    return req.policy_version or version
+
+
+def _enforce_tool_policy(req: Any, active_policy: Optional[Dict[str, Any]], modality: str) -> None:
+    """HTTP 403 when a requested tool is not allowed by the tenant/tool policy."""
+    req_tools = getattr(req, "tools", None)
+    if not req_tools:
+        return
+    decision = evaluate_tool_policy(req_tools, active_policy, req.tenant_id)
+    if decision.allowed:
+        return
+    audit_tool_denial(req.tenant_id, decision)
+    ROUTER_QUERY_OUTCOME.labels(outcome="tool_policy_denied", model="tool_governance", modality=modality).inc()
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": True,
+            "category": "tool_policy_denied",
+            "reason": decision.reason,
+            "tool": decision.offending_tool,
+        },
+    )
+
+
+def _assign_experiment(req: Any, selected_policy: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """A/B assignment (variant may override the policy version); failures keep the request going."""
+    if not (req.experiment_id and settings.AB_TESTING_ENABLED):
+        return None, selected_policy
+    try:
+        assignment = get_ab_test_manager().get_assignment(
+            req.experiment_id,
+            req.user_key or req.tenant_id or f"anon:{hash(req.query)}",
+        )
+    except Exception as exc:
+        logger.warning(f"[query] Failed experiment assignment: {exc}")
+        return None, selected_policy
+    if not assignment:
+        return None, selected_policy
+    variant_name, variant_cfg = assignment
+    return {"name": variant_name, "config": variant_cfg}, variant_cfg.get("policy_version", selected_policy)
+
+
+_PROVIDER_ERROR_CATEGORIES = {
+    "provider_timeout": (ErrorCategory.PROVIDER_TIMEOUT, 504),
+    "provider_rate_limit": (ErrorCategory.PROVIDER_RATE_LIMIT, 429),
+    "provider_unavailable": (ErrorCategory.PROVIDER_UNAVAILABLE, 502),
+}
+
+
+def _routing_http_error(exc: BaseException, modality: str) -> HTTPException:
+    """Map a routing failure onto the HTTP error contract (and count the outcome)."""
+    if isinstance(exc, asyncio.TimeoutError):
+        ROUTER_QUERY_OUTCOME.labels(outcome="provider_timeout", model="unknown", modality=modality).inc()
+        info = log_error(asyncio.TimeoutError("Request timed out"), category=ErrorCategory.PROVIDER_TIMEOUT)
+        return HTTPException(status_code=504, detail=create_error_response(info))
+    if isinstance(exc, ProviderCircuitOpenError):
+        ROUTER_QUERY_OUTCOME.labels(outcome="provider_unavailable", model=exc.model or "unknown", modality=modality).inc()
+        info = log_error(exc, category=ErrorCategory.CIRCUIT_OPEN, model=exc.model)
+        return HTTPException(status_code=503, detail=create_error_response(info))
+    if isinstance(exc, ProviderCallError):
+        ROUTER_QUERY_OUTCOME.labels(outcome=exc.category, model=exc.model or "unknown", modality=modality).inc()
+        if exc.category == "no_tool_model":
+            return HTTPException(
+                status_code=422, detail={"error": True, "category": "no_tool_model", "message": str(exc)}
+            )
+        category, status_code = _PROVIDER_ERROR_CATEGORIES.get(
+            exc.category, (ErrorCategory.PROVIDER_UNAVAILABLE, 502)
+        )
+        info = log_error(exc, category=category, model=exc.model)
+        return HTTPException(status_code=status_code, detail=create_error_response(info))
+    ROUTER_QUERY_OUTCOME.labels(outcome="provider_unavailable", model="unknown", modality=modality).inc()
+    info = log_error(exc)
+    logger.exception(f"[router] Erro: {exc}")
+    return HTTPException(status_code=500, detail=create_error_response(info))
+
+
+async def _route(req: Any, modality: str, image_input: Optional[str], profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Call the router with the runtime profile; failures become HTTP errors."""
+    try:
+        return await route_and_answer(
+            query=req.query,
+            system_prompt=req.system_prompt or "",
+            use_rag=profile["use_rag"],
+            max_tokens=profile["max_tokens"],
+            temperature=req.temperature or settings.TEMPERATURE_DEFAULT,
+            modality=modality,
+            image_b64=image_input,
+            rag_modality=(req.rag_modality or "text").lower(),
+            use_cache=req.use_cache,
+            timeout_seconds=_effective_sync_timeout_seconds(req.timeout_seconds, profile),
+            runtime_hints=profile["runtime_hints"],
+            tenant_id=req.tenant_id,
+            tools=getattr(req, "tools", None),
+            tool_choice=getattr(req, "tool_choice", None),
+            messages=getattr(req, "messages", None),
+            response_format=getattr(req, "response_format", None),
+        )
+    except Exception as exc:
+        raise _routing_http_error(exc, modality) from exc
+
+
+def _annotate_result(
+    req: Any,
+    result: Dict[str, Any],
+    profile: Dict[str, Any],
+    selected_policy: Optional[str],
+    assigned_variant: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Output guardrails, governance/experiment metadata and reliability hints."""
+    answer_clean, output_tags = sanitize_output_guardrails(result.get("answer", ""))
+    result["answer"] = answer_clean
+    metadata = result.setdefault("metadata", {})
+    metadata.update(
+        {
+            "guardrail_output_tags": output_tags,
+            "policy_version": selected_policy,
+            "experiment_id": req.experiment_id,
+            "experiment_variant": assigned_variant,
+            "tenant_id": req.tenant_id,
+            "workload_class": profile["workload_class"],
+            "detected_complexity": profile.get("detected_complexity"),
+            "perf_mode_enabled": profile["perf_mode_enabled"],
+            "retrieval_mode": profile["runtime_hints"]["retrieval_mode"],
+        }
+    )
+    return enrich_result_reliability(result)
+
+
+def _record_query_cost(result: Dict[str, Any], profile: Dict[str, Any]) -> None:
+    try:
+        from ..observability import ROUTER_QUERY_COST_USD
+
+        cost_usd = float(result.get("estimated_cost_usd", result.get("cost_per_1k", 0.0)) or 0.0)
+        if cost_usd > 0:
+            ROUTER_QUERY_COST_USD.labels(
+                benchmark_theme=str(profile["runtime_hints"].get("benchmark_theme") or "unknown"),
+                detected_complexity=str(profile.get("detected_complexity") or "unknown"),
+            ).inc(cost_usd)
+    except Exception:
+        pass
+
+
+def _query_outcome(result: Dict[str, Any]) -> str:
+    """Outcome label for router_query_outcome_total."""
+    if result.get("model", "unknown") == "semantic_cache":
+        return "cache_hit"
+    if result.get("finish_reason") == "tool_calls" or result.get("tool_calls"):
+        return "tool_calls"
+    if not str(result.get("answer", "") or "").strip():
+        return "empty_answer"
+    if bool(result.get("abstained")) and str(result.get("abstain_reason") or "") == "empty_answer":
+        return "empty_answer"
+    if ((result.get("route") or {}).get("fallback") or {}).get("used"):
+        return "fallback_success"
+    return "success"
+
+
 async def process_query_request(req: Any) -> Dict[str, Any]:
     """Process one query request with governance, guardrails, and experimentation hooks."""
     if not req or not req.query.strip():
@@ -496,52 +277,11 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     if isinstance(active_policy, BaseException):
         raise active_policy
 
-    modality = (req.modality or "text").lower()
-    image_input = req.image_b64
-    if not image_input and req.images and len(req.images) > 0:
-        image_input = req.images[0]
-    if image_input and modality == "text":
-        modality = "vision"
-
-    runtime_profile = apply_query_runtime_profile(req, modality=modality, image_input=image_input)
-
-    selected_policy = req.policy_version
-    if not selected_policy and active_policy:
-        selected_policy = active_policy.get("version")
-    if active_policy and active_policy.get("version"):
-        POLICY_VERSION_ACTIVE.labels(policy_version=str(active_policy["version"])).set(1)
-
-    req_tools = getattr(req, "tools", None)
-    if req_tools:
-        tool_decision = evaluate_tool_policy(req_tools, active_policy, req.tenant_id)
-        if not tool_decision.allowed:
-            audit_tool_denial(req.tenant_id, tool_decision)
-            ROUTER_QUERY_OUTCOME.labels(outcome="tool_policy_denied", model="tool_governance", modality=modality).inc()
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": True,
-                    "category": "tool_policy_denied",
-                    "reason": tool_decision.reason,
-                    "tool": tool_decision.offending_tool,
-                },
-            )
-
-    assigned_variant = None
-    if req.experiment_id and settings.AB_TESTING_ENABLED:
-        try:
-            manager = get_ab_test_manager()
-            assignment = manager.get_assignment(
-                req.experiment_id,
-                req.user_key or req.tenant_id or f"anon:{hash(req.query)}",
-            )
-            if assignment:
-                variant_name, variant_cfg = assignment
-                assigned_variant = {"name": variant_name, "config": variant_cfg}
-                selected_policy = variant_cfg.get("policy_version", selected_policy)
-        except Exception as exc:
-            logger.warning(f"[query] Failed experiment assignment: {exc}")
-
+    modality, image_input = _resolve_modality(req)
+    profile = apply_query_runtime_profile(req, modality=modality, image_input=image_input)
+    selected_policy = _select_policy(req, active_policy)
+    _enforce_tool_policy(req, active_policy, modality)
+    assigned_variant, selected_policy = _assign_experiment(req, selected_policy)
     logger.info(
         "[query] '%s...' (mod=%s, tenant=%s, policy=%s, exp=%s)",
         req.query[:60],
@@ -551,131 +291,16 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
         req.experiment_id or "-",
     )
 
-    try:
-        result = await route_and_answer(
-            query=req.query,
-            system_prompt=req.system_prompt or "",
-            use_rag=runtime_profile["use_rag"],
-            max_tokens=runtime_profile["max_tokens"],
-            temperature=req.temperature or settings.TEMPERATURE_DEFAULT,
-            modality=modality,
-            image_b64=image_input,
-            rag_modality=(req.rag_modality or "text").lower(),
-            use_cache=req.use_cache,
-            timeout_seconds=_effective_sync_timeout_seconds(req.timeout_seconds, runtime_profile),
-            runtime_hints=runtime_profile["runtime_hints"],
-            tenant_id=req.tenant_id,
-            tools=getattr(req, "tools", None),
-            tool_choice=getattr(req, "tool_choice", None),
-            messages=getattr(req, "messages", None),
-            response_format=getattr(req, "response_format", None),
-        )
-    except asyncio.TimeoutError:
-        ROUTER_QUERY_OUTCOME.labels(
-            outcome="provider_timeout",
-            model="unknown",
-            modality=modality,
-        ).inc()
-        error_info = log_error(
-            asyncio.TimeoutError("Request timed out"),
-            category=ErrorCategory.PROVIDER_TIMEOUT,
-        )
-        raise HTTPException(status_code=504, detail=create_error_response(error_info))
-    except ProviderCircuitOpenError as exc:
-        ROUTER_QUERY_OUTCOME.labels(
-            outcome="provider_unavailable",
-            model=exc.model or "unknown",
-            modality=modality,
-        ).inc()
-        error_info = log_error(exc, category=ErrorCategory.CIRCUIT_OPEN, model=exc.model)
-        raise HTTPException(status_code=503, detail=create_error_response(error_info))
-    except ProviderCallError as exc:
-        ROUTER_QUERY_OUTCOME.labels(
-            outcome=exc.category,
-            model=exc.model or "unknown",
-            modality=modality,
-        ).inc()
-        if exc.category == "no_tool_model":
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": True,
-                    "category": "no_tool_model",
-                    "message": str(exc),
-                },
-            )
-        category_map = {
-            "provider_timeout": ErrorCategory.PROVIDER_TIMEOUT,
-            "provider_rate_limit": ErrorCategory.PROVIDER_RATE_LIMIT,
-            "provider_unavailable": ErrorCategory.PROVIDER_UNAVAILABLE,
-        }
-        category = category_map.get(exc.category, ErrorCategory.PROVIDER_UNAVAILABLE)
-        status_code = 504 if category == ErrorCategory.PROVIDER_TIMEOUT else (429 if category == ErrorCategory.PROVIDER_RATE_LIMIT else 502)
-        error_info = log_error(exc, category=category, model=exc.model)
-        raise HTTPException(status_code=status_code, detail=create_error_response(error_info))
-    except Exception as exc:
-        ROUTER_QUERY_OUTCOME.labels(
-            outcome="provider_unavailable",
-            model="unknown",
-            modality=modality,
-        ).inc()
-        error_info = log_error(exc)
-        logger.exception(f"[router] Erro: {exc}")
-        raise HTTPException(status_code=500, detail=create_error_response(error_info))
-
-    answer_clean, output_guardrail_tags = sanitize_output_guardrails(result.get("answer", ""))
-    result["answer"] = answer_clean
-    metadata = result.setdefault("metadata", {})
-    metadata["guardrail_output_tags"] = output_guardrail_tags
-    metadata["policy_version"] = selected_policy
-    metadata["experiment_id"] = req.experiment_id
-    metadata["experiment_variant"] = assigned_variant
-    metadata["tenant_id"] = req.tenant_id
-    metadata["workload_class"] = runtime_profile["workload_class"]
-    metadata["detected_complexity"] = runtime_profile.get("detected_complexity")
-    metadata["perf_mode_enabled"] = runtime_profile["perf_mode_enabled"]
-    metadata["retrieval_mode"] = runtime_profile["runtime_hints"]["retrieval_mode"]
-    result = enrich_result_reliability(result)
-
-    chosen_model = result.get("model", "unknown")
+    routed = await _route(req, modality, image_input, profile)
+    result = _annotate_result(req, routed, profile, selected_policy, assigned_variant)
     if selected_policy:
         QUERY_POLICY_APPLIED.labels(policy_version=str(selected_policy)).inc()
-
-    try:
-        from ..observability import ROUTER_QUERY_COST_USD
-
-        cost_usd = float(result.get("estimated_cost_usd", result.get("cost_per_1k", 0.0)) or 0.0)
-        theme_label = str(runtime_profile["runtime_hints"].get("benchmark_theme") or "unknown")
-        complexity_label = str(runtime_profile.get("detected_complexity") or "unknown")
-        if cost_usd > 0:
-            ROUTER_QUERY_COST_USD.labels(
-                benchmark_theme=theme_label,
-                detected_complexity=complexity_label,
-            ).inc(cost_usd)
-    except Exception:
-        pass
-
-    fallback_used = bool(((result.get("route") or {}).get("fallback") or {}).get("used"))
-    answer_clean_str = str(result.get("answer", "") or "").strip()
-    if chosen_model == "semantic_cache":
-        outcome = "cache_hit"
-    elif result.get("finish_reason") == "tool_calls" or result.get("tool_calls"):
-        outcome = "tool_calls"
-    elif bool(result.get("abstained")) and str(result.get("abstain_reason") or "") == "empty_answer":
-        outcome = "empty_answer"
-    elif not answer_clean_str:
-        outcome = "empty_answer"
-    elif fallback_used:
-        outcome = "fallback_success"
-    else:
-        outcome = "success"
-
+    _record_query_cost(result, profile)
     ROUTER_QUERY_OUTCOME.labels(
-        outcome=outcome,
-        model=chosen_model,
+        outcome=_query_outcome(result),
+        model=result.get("model", "unknown"),
         modality=result.get("modality", modality),
     ).inc()
-
     return {
         "result": result,
         "image_input": image_input,
