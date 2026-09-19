@@ -8,7 +8,6 @@ Extracted from ``app.nsga_weights_updater`` (re-exported there).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Dict
 
@@ -27,14 +26,6 @@ def _calibrate_risk_factors() -> None:
 def _calibrate_uncertainty() -> None:
     result = calibrate_uncertainty_threshold()
     logger.info(f"[Calibration] UQ threshold: {result.get('status', 'unknown')}")
-
-
-def _calibrate_cache_threshold() -> None:
-    from app.semantic_cache import tune_cache_threshold
-
-    result = asyncio.run(tune_cache_threshold())
-    if result:
-        logger.info(f"[Calibration] Cache threshold adjusted to {result}")
 
 
 def _publish_predictor_metrics(metrics: Dict[str, Dict[str, float]]) -> None:
@@ -60,7 +51,9 @@ def _calibrate_predictors() -> None:
 
 
 def _calibrate_judges() -> None:
-    from app.judges import calibrate_judges
+    # Só banco de dados: app.judges puxaria providers/SDKs, ausentes na imagem enxuta do NSGA
+    # ("No module named 'pybreaker'").
+    from app.services.judge_calibration import calibrate_judges
 
     result = calibrate_judges()
     logger.info(f"[Calibration] Judge calibration: {result.get('status', 'unknown')}")
@@ -69,7 +62,8 @@ def _calibrate_judges() -> None:
 CALIBRATION_STEPS = (
     ("Risk factor tuning", _calibrate_risk_factors),
     ("UQ calibration", _calibrate_uncertainty),
-    ("Cache threshold tuning", _calibrate_cache_threshold),
+    # O ajuste do limiar do cache semântico roda na API (router_core._cache_threshold_tuner):
+    # ele lê a taxa de acerto do cache L1 do processo que atende as consultas.
     ("Predictor calibration", _calibrate_predictors),
     ("Judge calibration", _calibrate_judges),
 )

@@ -297,6 +297,24 @@ def _ema_batch_flusher() -> None:
         _bg_stop_event.wait(10)  # Check every 10 seconds
 
 
+CACHE_TUNE_INTERVAL_S = 300.0
+
+
+def _cache_threshold_tuner() -> None:
+    """Background thread: tune the semantic-cache threshold from this process's L1 hit rate.
+
+    Moved from the NSGA calibration cycle, which runs in a process that serves no
+    queries (its L1 stats stay empty) and lacks chromadb in its image.
+    """
+    from .semantic_cache import tune_cache_threshold
+
+    while not _bg_stop_event.wait(CACHE_TUNE_INTERVAL_S):
+        try:
+            asyncio.run(tune_cache_threshold())
+        except Exception as e:
+            logger.warning(f"[CacheTuning] Tuner error: {e}")
+
+
 # ============================================================
 # 🧹 EMA HISTORY LOG RETENTION (Quick Win #2)
 # ============================================================
@@ -407,6 +425,7 @@ def start_background_services() -> None:
             update_db_pool_metrics=_update_db_pool_metrics,
         )
     )
+    _bg_threads.append(threading.Thread(target=_cache_threshold_tuner, name="cache-threshold-tuner", daemon=True))
     for thread in _bg_threads:
         thread.start()
     logger.info("[router] Background services started")

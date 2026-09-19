@@ -48,3 +48,20 @@ def test_calibration_cycle_isolates_failing_steps(monkeypatch):
     monkeypatch.setattr(nsga_calibration, "CALIBRATION_STEPS", steps)
     nsga_calibration.run_calibration_cycle()
     assert ran == ["boom", "second"]
+
+
+def test_calibration_cycle_stays_within_the_nsga_image(monkeypatch):
+    """Judge calibration uses the DB-only module; cache tuning runs in the API, not here."""
+    import sys
+
+    from app import nsga_calibration
+
+    labels = [label for label, _ in nsga_calibration.CALIBRATION_STEPS]
+    assert "Cache threshold tuning" not in labels
+
+    calls = []
+    monkeypatch.setattr("app.services.judge_calibration.calibrate_judges", lambda: calls.append(1) or {"status": "ok"})
+    monkeypatch.delitem(sys.modules, "app.judges", raising=False)
+    nsga_calibration._calibrate_judges()
+    assert calls == [1]
+    assert "app.judges" not in sys.modules  # não puxa providers/SDKs (pybreaker)

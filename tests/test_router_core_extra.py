@@ -289,3 +289,22 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         latency_s=0.2,
         cost_val=0.01,
     )
+
+
+def test_cache_threshold_tuner_runs_until_stopped(monkeypatch):
+    """The API-side tuner calls tune_cache_threshold each interval and exits on stop."""
+    import threading
+
+    calls = []
+
+    async def fake_tune():
+        calls.append(1)
+        if len(calls) == 2:
+            stop.set()
+
+    stop = threading.Event()
+    monkeypatch.setattr(rc, "_bg_stop_event", stop)
+    monkeypatch.setattr(rc, "CACHE_TUNE_INTERVAL_S", 0.0)
+    monkeypatch.setattr("app.semantic_cache.tune_cache_threshold", fake_tune)
+    rc._cache_threshold_tuner()
+    assert calls == [1, 1]
