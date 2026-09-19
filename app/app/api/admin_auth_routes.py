@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import secrets
 import time
 from typing import Annotated, Optional
 
@@ -13,6 +12,7 @@ from pydantic import BaseModel, Field
 from ..schemas import ExpertLoginRequest
 from ..settings_dynamic import settings
 from ..utils.client_ip import parse_trusted_proxies, resolve_client_ip
+from ..utils.secure_compare import secret_equals
 from .auth import _auth_from_jwt, _encode_jwt_hs256, _extract_bearer_token
 
 router = APIRouter()
@@ -64,8 +64,8 @@ def _validate_ui_credentials(username: str, password: str) -> bool:
     expected_pass = (settings.get("ADMIN_UI_PASSWORD", "") or "").strip()
     if not expected_pass:
         return False
-    user_ok = secrets.compare_digest(username.strip(), expected_user)
-    pass_ok = secrets.compare_digest(password, expected_pass)
+    user_ok = secret_equals(username.strip(), expected_user)
+    pass_ok = secret_equals(password, expected_pass)
     return user_ok and pass_ok
 
 
@@ -93,7 +93,7 @@ def _validate_expert_credentials(username: str, password: str) -> bool:
     expected = users.get(username.strip())
     if not expected:
         return False
-    return secrets.compare_digest(password, expected)
+    return secret_equals(password, expected)
 
 
 def _issue_admin_token(username: str) -> tuple[str, int]:
@@ -138,7 +138,7 @@ def resolve_admin_session(
     configured = (settings.ADMIN_TOKEN or "").strip()
     previous = (settings.ADMIN_TOKEN_PREVIOUS or "").strip()
     if configured and x_admin_token:
-        if secrets.compare_digest(x_admin_token, configured) or (previous and secrets.compare_digest(x_admin_token, previous)):
+        if secret_equals(x_admin_token, configured) or (previous and secret_equals(x_admin_token, previous)):
             return {"authorized_by": "admin_token", "username": "admin", "roles": ["admin"]}
 
     token = _extract_bearer_token(authorization)
@@ -150,7 +150,7 @@ def resolve_admin_session(
                 "username": ctx.user_id or "admin",
                 "roles": list(ctx.roles),
             }
-        if configured and secrets.compare_digest(token, configured):
+        if configured and secret_equals(token, configured):
             return {"authorized_by": "admin_token", "username": "admin", "roles": ["admin"]}
 
     raise HTTPException(status_code=401, detail="Não autorizado.")
@@ -165,7 +165,7 @@ def resolve_expert_session(
     configured = (settings.ADMIN_TOKEN or "").strip()
     previous = (settings.ADMIN_TOKEN_PREVIOUS or "").strip()
     if configured and x_admin_token:
-        if secrets.compare_digest(x_admin_token, configured) or (previous and secrets.compare_digest(x_admin_token, previous)):
+        if secret_equals(x_admin_token, configured) or (previous and secret_equals(x_admin_token, previous)):
             return {"authorized_by": "admin_token", "username": "admin", "roles": ["admin", "expert_reviewer"], "portal": "admin"}
 
     token = _extract_bearer_token(authorization)
@@ -187,7 +187,7 @@ def resolve_expert_session(
                     "roles": roles,
                     "portal": "admin",
                 }
-        if configured and secrets.compare_digest(token, configured):
+        if configured and secret_equals(token, configured):
             return {"authorized_by": "admin_token", "username": "admin", "roles": ["admin"], "portal": "admin"}
 
     raise HTTPException(status_code=401, detail="Não autorizado.")
@@ -228,7 +228,7 @@ def _authenticate_expert_login(email_or_username: str, password: str) -> Optiona
     # Legacy env login accepts username keys (not necessarily email)
     users = _parse_expert_users()
     expected = users.get(email_or_username.strip())
-    if expected and secrets.compare_digest(password, expected):
+    if expected and secret_equals(password, expected):
         return email_or_username.strip()
     return None
 

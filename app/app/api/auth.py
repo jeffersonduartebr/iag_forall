@@ -8,7 +8,6 @@ import hashlib
 import hmac
 import json
 import logging
-import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -17,6 +16,7 @@ from fastapi import Header, HTTPException, Request
 
 from ..config.secrets_redaction import redact_secrets
 from ..settings_dynamic import settings
+from ..utils.secure_compare import secret_equals
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +112,15 @@ def _auth_from_api_key(token: str) -> Optional[AuthContext]:
     admin = (settings.ADMIN_TOKEN or "").strip()
     previous = (settings.ADMIN_TOKEN_PREVIOUS or "").strip()
     for candidate in configured:
-        if candidate and secrets.compare_digest(token, candidate):
+        if candidate and secret_equals(token, candidate):
             return AuthContext(
                 authenticated=True,
                 method="api_key",
                 api_key_hint=hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12],
             )
-    if admin and secrets.compare_digest(token, admin):
+    if admin and secret_equals(token, admin):
         return AuthContext(authenticated=True, method="admin_token", roles=["admin"])
-    if previous and secrets.compare_digest(token, previous):
+    if previous and secret_equals(token, previous):
         return AuthContext(authenticated=True, method="admin_token", roles=["admin"])
     return None
 
