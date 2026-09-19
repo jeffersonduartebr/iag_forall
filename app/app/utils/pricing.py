@@ -110,55 +110,59 @@ def invalidate_pricing_cache():
     logger.info("[pricing] Cache invalidated")
 
 
+# Preços de lista por 1k tokens (OpenRouter, 2026-09-18) para modelos sem linha em
+# model_pricing nem no catálogo do OpenRouter. A primeira regra cujos marcadores
+# aparecem todos no nome vence: variantes específicas vêm antes das genéricas.
+_FALLBACK_PRICES: tuple = (
+    (("gpt-5.5", "pro"), 0.030, 0.180),
+    (("gpt-5.5",), 0.005, 0.030),
+    (("gpt-5", "mini"), 0.00025, 0.002),
+    (("gpt-5",), 0.00125, 0.01),
+    (("gpt-4.1-mini",), 0.0004, 0.0016),
+    (("gpt-4o-mini",), 0.00015, 0.0006),
+    (("gpt-4o",), 0.0025, 0.01),
+    (("gemini-2.5-flash",), 0.0003, 0.0025),
+    (("gemini-2.5",), 0.00125, 0.01),
+    (("fable",), 0.010, 0.050),
+    (("haiku",), 0.001, 0.005),
+    (("sonnet-5",), 0.002, 0.010),
+    (("sonnet",), 0.003, 0.015),
+    (("opus",), 0.005, 0.025),
+)
+_FREE = {"in": 0.0, "out": 0.0}  # Ollama/local: custo de caixa zero (ocupação é imputada à parte)
+
+
+def _lookup_fallback(model: str) -> dict:
+    lowered = model.lower()
+    for markers, price_in, price_out in _FALLBACK_PRICES:
+        if all(marker in lowered for marker in markers):
+            return {"in": price_in, "out": price_out}
+    return _FREE
+
+
+def _lookup_catalog(model: str) -> Any:
+    """Price from model_pricing (exact or without provider prefix), then the OpenRouter catalog."""
+    clean_model = model.split("/", 1)[1] if "/" in model else model
+    pricing = _PRICING_CACHE.get(model) or _PRICING_CACHE.get(clean_model)
+    if pricing:
+        return pricing
+    slug_candidate = clean_model  # "openrouter/<slug>" -> "<slug>"; outros prefixos já foram removidos
+    if "/" not in slug_candidate:
+        return None
+    try:
+        from app.openrouter_catalog import get_openrouter_pricing_per_1k
+
+        return get_openrouter_pricing_per_1k(slug_candidate)
+    except Exception:
+        return None
+
+
 def get_model_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Calculate total cost in USD."""
+    """Calculate total (cash) cost in USD."""
     if time.time() - _LAST_UPDATE > CACHE_TTL:
         _refresh_pricing()
-
-    # Try exact match or clean model name
-    pricing = _PRICING_CACHE.get(model)
-    if not pricing:
-        clean_model = model.split("/", 1)[1] if "/" in model else model
-        pricing = _PRICING_CACHE.get(clean_model)
-
-    if not pricing:
-        slug_candidate = model.split("/", 1)[1] if model.startswith("openrouter/") else clean_model
-        if "/" in slug_candidate:
-            try:
-                from app.openrouter_catalog import get_openrouter_pricing_per_1k
-
-                pricing = get_openrouter_pricing_per_1k(slug_candidate)
-            except Exception:
-                pricing = None
-
-    if not pricing:
-        # Defaults (fallback for unconfigured models)
-        # Preços de lista por 1k tokens (OpenRouter, 2026-09-18) para modelos sem
-        # linha em model_pricing. Ordem importa: variantes específicas antes das genéricas.
-        m_lower = model.lower()
-        if "gpt-5.5" in m_lower and "pro" in m_lower: pricing = {"in": 0.030, "out": 0.180}
-        elif "gpt-5.5" in m_lower: pricing = {"in": 0.005, "out": 0.030}
-        elif "gpt-5" in m_lower and "mini" in m_lower: pricing = {"in": 0.00025, "out": 0.002}
-        elif "gpt-5" in m_lower: pricing = {"in": 0.00125, "out": 0.01}
-        elif "gpt-4.1-mini" in m_lower: pricing = {"in": 0.0004, "out": 0.0016}
-        elif "gpt-4o-mini" in m_lower: pricing = {"in": 0.00015, "out": 0.0006}
-        elif "gpt-4o" in m_lower: pricing = {"in": 0.0025, "out": 0.01}
-
-        elif "gemini-2.5-flash" in m_lower: pricing = {"in": 0.0003, "out": 0.0025}
-        elif "gemini-2.5" in m_lower: pricing = {"in": 0.00125, "out": 0.01}
-
-        elif "fable" in m_lower: pricing = {"in": 0.010, "out": 0.050}
-        elif "haiku" in m_lower: pricing = {"in": 0.001, "out": 0.005}
-        elif "sonnet-5" in m_lower: pricing = {"in": 0.002, "out": 0.010}
-        elif "sonnet" in m_lower: pricing = {"in": 0.003, "out": 0.015}
-        elif "opus" in m_lower: pricing = {"in": 0.005, "out": 0.025}
-
-        else: pricing = {"in": 0.0, "out": 0.0}  # Ollama/Local
-
-    cost_in = (input_tokens / 1000) * pricing["in"]
-    cost_out = (output_tokens / 1000) * pricing["out"]
-
-    return cost_in + cost_out
+    pricing = _lookup_catalog(model) or _lookup_fallback(model)
+    return (input_tokens / 1000) * pricing["in"] + (output_tokens / 1000) * pricing["out"]
 
 
 # ============================================================
