@@ -119,10 +119,9 @@ def derive_reward_weights(
     objective silently drops out of the reward.
     """
     shares = _normalize((w_quality * quality_bar, w_latency * latency_bar, w_cost * cost_bar))
-    if shares is None:
-        return DEFAULT_REWARD_WEIGHTS
     floor = max(0.0, min(float(min_share), 1.0 / 3.0))
-    return _apply_floor(shares, floor)
+    # Ponto de operação degenerado: usa os pesos padrão, mas o piso vale também para eles.
+    return _apply_floor(shares if shares is not None else DEFAULT_REWARD_WEIGHTS, floor)
 
 
 def _parse_weights(raw: Any) -> Optional[Weights]:

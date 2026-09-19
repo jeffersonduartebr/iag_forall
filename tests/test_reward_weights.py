@@ -5,7 +5,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from app.services import reward
 
 
@@ -39,6 +38,9 @@ def test_derive_reward_weights_floors_small_shares_and_keeps_sum_one():
 
 def test_derive_reward_weights_degenerate_falls_back_to_default():
     assert reward.derive_reward_weights(0, 0, 0, 0, 0, 0) == reward.DEFAULT_REWARD_WEIGHTS
+    # Um piso configurado acima da menor parcela padrão (0,15) também vale no fallback.
+    floored = reward.derive_reward_weights(0, 0, 0, 0, 0, 0, min_share=0.2)
+    assert min(floored) == pytest.approx(0.2) and sum(floored) == pytest.approx(1.0)
 
 
 def test_load_reward_weights_prefers_modality_then_text_then_default(monkeypatch):
