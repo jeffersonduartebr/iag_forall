@@ -16,7 +16,7 @@ import json
 import logging
 import threading
 import time
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
@@ -157,6 +157,18 @@ def _release_lock(key: str) -> None:
         pass
 
 
+def _parse_centroid(item: Any, now_ts: int) -> Optional[dict]:
+    """One stored centroid as ``{"id", "vec" (unit, CENTROIDS_DIM), "count", "last"}``; ``None`` if malformed."""
+    if not isinstance(item, dict) or "id" not in item or "vec" not in item:
+        return None
+    return {
+        "id": int(item["id"]),
+        "vec": _ensure_dim(np.array(item["vec"], dtype=np.float32)),
+        "count": int(item.get("count", 0)),
+        "last": int(item.get("last", now_ts)),
+    }
+
+
 def _load_centroids(update_matrix_cache: bool = True) -> List[dict]:
     """
     Carrega centróides de Redis:
@@ -171,23 +183,10 @@ def _load_centroids(update_matrix_cache: bool = True) -> List[dict]:
         raw = rds.get(R_CENTROIDS)
         if not raw:
             return []
-        arr = json.loads(raw)
-        cents: List[dict] = []
-        for it in arr:
-            if not isinstance(it, dict):
-                continue
-            if "id" not in it or "vec" not in it:
-                continue
-            vec = np.array(it["vec"], dtype=np.float32)
-            vec = _ensure_dim(vec)
-            cnt = int(it.get("count", 0))
-            last = int(it.get("last", int(time.time())))
-            cents.append({"id": int(it["id"]), "vec": vec, "count": cnt, "last": last})
-
-        # Update the pre-computed matrix cache
+        now_ts = int(time.time())
+        cents = [c for c in (_parse_centroid(it, now_ts) for it in json.loads(raw)) if c is not None]
         if update_matrix_cache and cents:
             _centroid_matrix_cache.update(cents)
-
         return cents
     except Exception as e:
         logger.warning(f"[centroids] Falha ao carregar: {e}")
