@@ -763,34 +763,6 @@ Resumo do arquivo: Módulo principal: descreve responsabilidades e integrações
 
 - `reset_incompatible_collections(chroma_path, expected_dim)` (`app/app/reset_chroma_collections.py:5`): Remove coleções do ChromaDB cuja dimensão de embeddings é diferente da esperada.
 
-## `app/app/risk_tuner.py`
-
-Resumo do arquivo: risk_tuner.py — Adaptive Risk Factor Management
-
-### Funções de módulo
-
-- `get_risk_tuner()` (`app/app/risk_tuner.py:318`): Get the global risk tuner instance.
-
-### Classes e métodos
-
-- Classe `PerformanceRecord` (`app/app/risk_tuner.py:40`): Records model performance for a specific uncertainty regime.
-  - `PerformanceRecord.avg_quality(self)` (`app/app/risk_tuner.py:47`): Executa avg quality.
-  - `PerformanceRecord.success_rate(self)` (`app/app/risk_tuner.py:54`): Executa success rate.
-  - `PerformanceRecord.to_dict(self)` (`app/app/risk_tuner.py:60`): Executa to dict.
-  - `PerformanceRecord.from_dict(data)` (`app/app/risk_tuner.py:69`): Executa from dict.
-- Classe `AdaptiveRiskTuner` (`app/app/risk_tuner.py:78`): Manages adaptive risk factor adjustments based on model performance.
-  - `AdaptiveRiskTuner.__new__(cls)` (`app/app/risk_tuner.py:89`): Executa new.
-  - `AdaptiveRiskTuner.__init__(self)` (`app/app/risk_tuner.py:98`): Inicializa estado interno necessário para uso da classe.
-  - `AdaptiveRiskTuner._get_redis(self)` (`app/app/risk_tuner.py:121`): Executa get redis.
-  - `AdaptiveRiskTuner._load_state(self)` (`app/app/risk_tuner.py:125`): Load persisted performance history from Redis.
-  - `AdaptiveRiskTuner._save_state(self)` (`app/app/risk_tuner.py:146`): Persist performance history to Redis.
-  - `AdaptiveRiskTuner._get_model_type(self, model)` (`app/app/risk_tuner.py:159`): Determine if model is SOTA or local.
-  - `AdaptiveRiskTuner.record_outcome(self, model, quality, is_high_uncertainty)` (`app/app/risk_tuner.py:166`): Record the outcome of a model call for risk tuning.
-  - `AdaptiveRiskTuner._calculate_adjustment(self, record, current_factor)` (`app/app/risk_tuner.py:200`): Calculate the adjustment for a risk factor based on performance.
-  - `AdaptiveRiskTuner.tune_factors(self)` (`app/app/risk_tuner.py:233`): Tune risk factors based on accumulated performance data.
-  - `AdaptiveRiskTuner.get_status(self)` (`app/app/risk_tuner.py:290`): Get current status of the risk tuner.
-  - `AdaptiveRiskTuner.reset(self)` (`app/app/risk_tuner.py:309`): Reset all performance tracking data.
-
 ## `app/app/roadmap_features.py`
 
 Resumo do arquivo: Roadmap hardening features.
@@ -2119,31 +2091,6 @@ Resumo do arquivo: Módulo `tests/test_reranker_module.py`: descreve responsabil
 
 - `test_get_reranker_model_and_rerank_paths(monkeypatch)` (`tests/test_reranker_module.py:6`): Testa get reranker model and rerank paths.
 - `test_get_reranker_model_load_error(monkeypatch)` (`tests/test_reranker_module.py:44`): Testa get reranker model load error.
-
-## `tests/test_risk_tuner.py`
-
-Resumo do arquivo: Tests for adaptive risk factor management.
-
-### Classes e métodos
-
-- Classe `TestPerformanceRecord` (`tests/test_risk_tuner.py:10`): Test suite for PerformanceRecord dataclass.
-  - `TestPerformanceRecord.test_avg_quality_empty(self)` (`tests/test_risk_tuner.py:13`): Test avg_quality returns default when no samples.
-  - `TestPerformanceRecord.test_avg_quality_with_samples(self)` (`tests/test_risk_tuner.py:20`): Test avg_quality calculation with samples.
-  - `TestPerformanceRecord.test_success_rate_empty(self)` (`tests/test_risk_tuner.py:27`): Test success_rate returns default when no samples.
-  - `TestPerformanceRecord.test_success_rate_with_samples(self)` (`tests/test_risk_tuner.py:34`): Test success_rate calculation with samples.
-  - `TestPerformanceRecord.test_to_dict_and_from_dict(self)` (`tests/test_risk_tuner.py:41`): Test serialization and deserialization.
-- Classe `TestAdaptiveRiskTuner` (`tests/test_risk_tuner.py:59`): Test suite for AdaptiveRiskTuner.
-  - `TestAdaptiveRiskTuner.risk_tuner(self)` (`tests/test_risk_tuner.py:63`): Create a fresh risk tuner instance.
-  - `TestAdaptiveRiskTuner.test_get_model_type_sota(self, risk_tuner)` (`tests/test_risk_tuner.py:71`): Test SOTA model detection.
-  - `TestAdaptiveRiskTuner.test_get_model_type_local(self, risk_tuner)` (`tests/test_risk_tuner.py:77`): Test local model detection.
-  - `TestAdaptiveRiskTuner.test_record_outcome_disabled(self, risk_tuner)` (`tests/test_risk_tuner.py:83`): Test that recording is skipped when disabled.
-  - `TestAdaptiveRiskTuner.test_record_outcome_updates_performance(self, risk_tuner)` (`tests/test_risk_tuner.py:91`): Test that recording updates performance data.
-  - `TestAdaptiveRiskTuner.test_calculate_adjustment_not_enough_samples(self, risk_tuner)` (`tests/test_risk_tuner.py:102`): Test that adjustment returns current factor when not enough samples.
-  - `TestAdaptiveRiskTuner.test_calculate_adjustment_clamps_to_bounds(self, risk_tuner)` (`tests/test_risk_tuner.py:111`): Test that adjustment respects bounds.
-  - `TestAdaptiveRiskTuner.test_get_status_structure(self, risk_tuner)` (`tests/test_risk_tuner.py:128`): Test that get_status returns expected structure.
-  - `TestAdaptiveRiskTuner.test_reset_clears_data(self, risk_tuner)` (`tests/test_risk_tuner.py:143`): Test that reset clears all performance data.
-- Classe `TestGetRiskTuner` (`tests/test_risk_tuner.py:154`): Test the get_risk_tuner factory function.
-  - `TestGetRiskTuner.test_returns_singleton(self)` (`tests/test_risk_tuner.py:157`): Test that get_risk_tuner returns singleton instance.
 
 ## `tests/test_router_core.py`
 

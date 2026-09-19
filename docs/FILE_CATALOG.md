@@ -41,7 +41,6 @@ Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 | `app/app/reliability.py` | reliability.py — Reliability Patterns for LLM Providers | 5 | 8 |
 | `app/app/reranker.py` | reranker.py — Módulo de Re-Ranking (Cross-Encoder) | 0 | 2 |
 | `app/app/reset_chroma_collections.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 1 |
-| `app/app/risk_tuner.py` | risk_tuner.py — Adaptive Risk Factor Management | 2 | 1 |
 | `app/app/roadmap_features.py` | Roadmap hardening features. | 2 | 26 |
 | `app/app/router_core.py` | router_core.py — Multimodal + UM-RAG + Meta-bandit + UQ + Online Learning | 2 | 23 |
 | `app/app/router_strategy.py` | router_strategy.py (Versão Final: Filtros Bilaterais de Segurança) | 0 | 4 |
@@ -116,7 +115,6 @@ Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 | `tests/test_redis_client.py` | test_redis_client.py — Tests for Redis Client Module | 6 | 0 |
 | `tests/test_reliability_core_extra.py` | Módulo `tests/test_reliability_core_extra.py`: descreve responsabilidades e integrações deste arquivo. | 0 | 5 |
 | `tests/test_reranker_module.py` | Módulo `tests/test_reranker_module.py`: descreve responsabilidades e integrações deste arquivo. | 0 | 2 |
-| `tests/test_risk_tuner.py` | Tests for adaptive risk factor management. | 3 | 0 |
 | `tests/test_router_core.py` | test_router_core.py — Unit tests for router_core.py | 3 | 0 |
 | `tests/test_router_core_extra.py` | Módulo `tests/test_router_core_extra.py`: descreve responsabilidades e integrações deste arquivo. | 0 | 4 |
 | `tests/test_router_core_internal.py` | Módulo `tests/test_router_core_internal.py`: descreve responsabilidades e integrações deste arquivo. | 0 | 6 |
