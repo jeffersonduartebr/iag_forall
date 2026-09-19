@@ -4,6 +4,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from app import native_tools as nt
 from app import provider_tools as pt
 
@@ -288,3 +290,35 @@ def test_openai_openrouter_native_tools_pass_through_untouched():
     fns, natives = nt.split_tools(TOOLS + [OPENAI_HOSTED_TOOL])
     assert fns == TOOLS
     assert natives == [OPENAI_HOSTED_TOOL]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (None, ""),
+        ("texto", "texto"),
+        ([{"type": "text", "text": "a"}, "b", {"type": "image_url", "image_url": {}}, 3], "ab"),
+        ({"type": "text"}, "{'type': 'text'}"),
+    ],
+)
+def test_content_to_text(content, expected):
+    assert pt._content_to_text(content) == expected
+
+
+def test_anthropic_user_content_blocks():
+    content = [
+        {"type": "text", "text": "veja"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+        {"type": "image_url", "image_url": {"url": "QUJD"}},  # sem cabeçalho: jpeg
+        {"type": "audio"},  # tipo desconhecido é descartado
+        42,
+    ]
+    assert pt._anthropic_user_content(content) == [
+        {"type": "text", "text": "veja"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "QUJD"}},
+        {"type": "text", "text": "42"},
+    ]
+    assert pt._anthropic_user_content("oi") == [{"type": "text", "text": "oi"}]
+    assert pt._anthropic_user_content([]) == [{"type": "text", "text": ""}]
+    assert pt._anthropic_user_content(None) == [{"type": "text", "text": ""}]

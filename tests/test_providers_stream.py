@@ -122,3 +122,60 @@ async def _drain(gen):
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_stream_ollama_parses_ndjson(monkeypatch):
+    import json
+
+    import httpx
+
+    seen = {}
+    lines = [
+        {"response": "Olá"},
+        "",
+        "{nao-json",
+        {"response": ", mundo"},
+        {"response": "", "done": True, "prompt_eval_count": 7, "eval_count": 3},
+    ]
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.content)
+        body = "\n".join(line if isinstance(line, str) else json.dumps(line) for line in lines)
+        return httpx.Response(200, text=body)
+
+    async def fake_client():
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr("app.providers_async.get_http_client", fake_client)
+    monkeypatch.setattr("app.providers_async.OLLAMA_HOST", "http://ollama:11434")
+
+    async def _run():
+        return [ev async for ev in ps._stream_ollama("ollama/gemma3:4b", "oi", "sys", 0.3, 32, 0.2)]
+
+    import asyncio
+
+    events = asyncio.run(_run())
+    assert [e.text for e in events if e.type == "delta"] == ["Olá", ", mundo"]
+    final = events[-1]
+    assert (final.type, final.prompt_tokens, final.completion_tokens) == ("final", 7, 3)
+    assert seen["url"] == "http://ollama:11434/api/generate"
+    assert seen["body"]["model"] == "gemma3:4b" and seen["body"]["system"] == "sys"
+    assert seen["body"]["options"] == {"temperature": 0.3, "num_predict": 32, "num_ctx": 4096}
+
+
+def test_stream_ollama_raises_on_http_error(monkeypatch):
+    import httpx
+
+    async def fake_client():
+        return httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503)))
+
+    monkeypatch.setattr("app.providers_async.get_http_client", fake_client)
+
+    async def _run():
+        return [ev async for ev in ps._stream_ollama("gemma3:4b", "oi", "", 0.3, 32, None)]
+
+    import asyncio
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(_run())

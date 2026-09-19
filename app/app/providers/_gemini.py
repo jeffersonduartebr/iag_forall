@@ -9,7 +9,7 @@ import base64
 import json
 import time
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
@@ -25,6 +25,33 @@ from ._infra import (
     cloud_breaker,
     google_genai,
 )
+
+
+class _GenOptions(NamedTuple):
+    temperature: float
+    max_tokens: int
+    tools: Optional[list]
+    tool_config: Optional[dict]
+    system_instruction: Optional[str]
+    response_format: Optional[dict]
+
+
+def _genai_contents(prompt: str, image_b64: Optional[str], contents: Optional[list]) -> list:
+    if contents:
+        return contents
+    parts: list = [{"text": prompt}]
+    if image_b64:
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": image_b64}})
+    return parts
+
+
+def _legacy_contents(prompt: str, image_b64: Optional[str], contents: Optional[list]) -> list:
+    if contents:
+        return contents
+    parts: list = [prompt]
+    if image_b64:
+        parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(image_b64)})
+    return parts
 
 
 class GeminiProvider(BaseProvider):
@@ -52,54 +79,44 @@ class GeminiProvider(BaseProvider):
             resposta bruto (para ``from_gemini_response`` extrair function calls);
             caso contrário, preserva o comportamento antigo (``SimpleNamespace(text)``).
             """
-            structured = bool(tools or contents)
+            options = _GenOptions(temperature, max_tokens, tools, tool_config, system_instruction, response_format)
             if google_genai is not None:
-                client = google_genai.Client(api_key=_pa.GEMINI_API_KEY or None)
-                if contents:
-                    req_contents = contents
-                else:
-                    req_contents = [{"text": prompt}]
-                    if image_b64:
-                        req_contents.append({"inline_data": {"mime_type": "image/jpeg", "data": image_b64}})
-                config: Dict[str, Any] = {"temperature": temperature, "max_output_tokens": max_tokens}
-                if system_instruction:
-                    config["system_instruction"] = system_instruction
-                if tools:
-                    config["tools"] = tools
-                if tool_config:
-                    config["tool_config"] = tool_config
-                config.update(ptools.to_gemini_response_config(response_format))
-                resp = client.models.generate_content(
-                    model=model_name,
-                    contents=req_contents,
-                    config=config,
-                )
-                if structured:
+                resp = self._generate_genai(model_name, _genai_contents(prompt, image_b64, contents), options)
+                if tools or contents:
                     return resp
                 return SimpleNamespace(text=getattr(resp, "text", "") or "")
-
             if _pa.genai is None:
                 raise ImportError("No Gemini SDK available")
+            return self._generate_legacy(model_name, _legacy_contents(prompt, image_b64, contents), options)
 
+        @staticmethod
+        def _generate_genai(model_name: str, contents: list, options: "_GenOptions"):
+            """``google-genai`` SDK: one client call with everything in ``config``."""
+            config: Dict[str, Any] = {"temperature": options.temperature, "max_output_tokens": options.max_tokens}
+            if options.system_instruction:
+                config["system_instruction"] = options.system_instruction
+            if options.tools:
+                config["tools"] = options.tools
+            if options.tool_config:
+                config["tool_config"] = options.tool_config
+            config.update(ptools.to_gemini_response_config(options.response_format))
+            client = google_genai.Client(api_key=_pa.GEMINI_API_KEY or None)
+            return client.models.generate_content(model=model_name, contents=contents, config=config)
+
+        @staticmethod
+        def _generate_legacy(model_name: str, contents: list, options: "_GenOptions"):
+            """Legacy ``google.generativeai`` SDK: tools/system on the model, the rest per call."""
             model_kwargs: Dict[str, Any] = {}
-            if system_instruction:
-                model_kwargs["system_instruction"] = system_instruction
-            if tools:
-                model_kwargs["tools"] = tools
-            gmodel = _pa.genai.GenerativeModel(model_name, **model_kwargs)
-            if contents:
-                gen_contents: Any = contents
-            else:
-                gen_contents = [prompt]
-                if image_b64:
-                    gen_contents.append({"mime_type": "image/jpeg", "data": base64.b64decode(image_b64)})
-            gen_kwargs: Dict[str, Any] = {
-                "generation_config": {"temperature": temperature, "max_output_tokens": max_tokens}
-            }
-            gen_kwargs["generation_config"].update(ptools.to_gemini_response_config(response_format))
-            if tool_config:
-                gen_kwargs["tool_config"] = tool_config
-            return gmodel.generate_content(gen_contents, **gen_kwargs)
+            if options.system_instruction:
+                model_kwargs["system_instruction"] = options.system_instruction
+            if options.tools:
+                model_kwargs["tools"] = options.tools
+            generation_config = {"temperature": options.temperature, "max_output_tokens": options.max_tokens}
+            generation_config.update(ptools.to_gemini_response_config(options.response_format))
+            gen_kwargs: Dict[str, Any] = {"generation_config": generation_config}
+            if options.tool_config:
+                gen_kwargs["tool_config"] = options.tool_config
+            return _pa.genai.GenerativeModel(model_name, **model_kwargs).generate_content(contents, **gen_kwargs)
 
     def __init__(self):
         """Initialize the Gemini provider and its adapter."""
