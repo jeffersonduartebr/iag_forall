@@ -41,7 +41,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = ROOT / "scripts" / "sloc_baseline.json"
-MAX_SLOC = 500
+MAX_SLOC = 300
 SCAN_ROOTS = [ROOT / "app" / "app", ROOT / "tests"]
 EXCLUDED_DIR_NAMES = {"__pycache__"}
 

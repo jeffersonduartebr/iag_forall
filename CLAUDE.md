@@ -137,9 +137,18 @@ Key settings: `NSGA_W_QUALITY`, `NSGA_W_LATENCY`, `NSGA_W_COST`, `BANDIT_EPSILON
 - Ruff for linting/formatting
 - MyPy for type checking (strict_optional, warn_redundant_casts)
 - Pre-commit hooks enforced (`.pre-commit-config.yaml`)
-- **Max 500 SLOC per file** (non-blank, non-comment lines) in `app/app/` and `tests/`.
+- **Max 300 SLOC per file** (logical lines) in `app/app/` and `tests/`.
   Enforced in CI via `python3 scripts/check_file_length.py`. Existing oversized files
   are grandfathered in `scripts/sloc_baseline.json` (ratchet: they may shrink, never
-  grow); new files must be ≤500. After shrinking a baselined file, lower its ceiling
+  grow); new files must be ≤300. After shrinking a baselined file, lower its ceiling
   with `python3 scripts/check_file_length.py --update`. Refactor roadmap in
   `docs/SLOC_REFACTOR_ROADMAP.md`.
+- **Cyclomatic complexity ≤ 20 per function** (`ruff` C901, `max-complexity = 20`).
+- **CRAP ≤ 30 per function** (CC² × (1 − cov)³ + CC): `pytest --cov=app/app --cov-report=json`
+  then `python3 scripts/crap_report.py` (ratchet in `scripts/crap_baseline.json`, same
+  `--update` flow). Coverage (lines + branches) has a CI floor (`--cov-fail-under`).
+- Test tooling: fakeredis fixtures (`fake_redis`, `fake_aioredis`), `fake_clock` for TTLs
+  (no real sleeps), hypothesis property tests (`tests/test_properties_*.py`), schemathesis
+  contract tests (`pytest -m contract tests/contract`), benchmarks
+  (`pytest tests/benchmarks -m benchmark --benchmark-enable`) and mutation testing
+  (`scripts/run_mutation.sh`, config in `[tool.mutmut]`).

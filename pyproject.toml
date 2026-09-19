@@ -5,10 +5,14 @@ target-version = "py311"
 
 [tool.ruff.lint]
 # Habilita Pyflakes (F), pycodestyle (E, W), isort (I), pep8-naming (N)
-select = ["E", "F", "W", "I", "N"]
+select = ["E", "F", "W", "I", "N", "C901"]
 # E501 (comprimento) fica a cargo do formatter; E701/E731 são escolhas de estilo
 # usadas de forma consistente no código (statements compostos e atalhos com lambda).
 ignore = ["E501", "E701", "E731"]
+
+[tool.ruff.lint.mccabe]
+# Portão de complexidade ciclomática: nenhuma função acima de 20 (ver scripts/crap_report.py).
+max-complexity = 20
 
 [tool.ruff.lint.per-file-ignores]
 # Propriedades de settings usam UPPER_CASE para espelhar as chaves de ambiente.

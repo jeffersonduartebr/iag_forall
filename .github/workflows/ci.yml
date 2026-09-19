@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"  # noturno: integração e teste de mutação
 
 jobs:
   lint_typecheck:
@@ -77,9 +80,16 @@ jobs:
       - name: Validate benchmark catalog
         run: python3 scripts/validate_benchmark_catalog.py
 
+      # Ratchet de cobertura (linhas + ramos, .coveragerc): suba o piso quando a cobertura subir.
       - name: Pytest (unit/default markers + coverage)
         run: |
-          PYTHONPATH=app pytest -q tests -m "not integration and not slow" --cov=app/app --cov-report=term-missing --cov-fail-under=70
+          PYTHONPATH=app pytest -q tests -m "not integration and not slow and not contract" \
+            --cov=app/app --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=80
+
+      # CRAP = CC² × (1 − cov)³ + CC por função; falha em função nova acima de 30 ou que piorou
+      # (scripts/crap_baseline.json, mesmo desenho do limite de SLOC).
+      - name: CRAP ratchet
+        run: python3 scripts/crap_report.py --coverage-json coverage.json
 
   tests_integration:
     runs-on: ubuntu-latest
@@ -117,7 +127,128 @@ jobs:
       - name: Pytest integration/smoke
         run: |
           PYTHONPATH=app pytest -q tests/test_smoke.py -v
-          PYTHONPATH=app pytest -q tests -m "integration and not slow" || true
+          PYTHONPATH=app pytest -q tests -m "integration and not slow"
+
+  tests_contract_properties:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      STATE_DIR: ${{ github.workspace }}/.ci_state
+      PROMETHEUS_MULTIPROC_DIR: ${{ github.workspace }}/.ci_prom
+      CHROMA_PATH: ${{ github.workspace }}/.ci_chroma
+      READINESS_MODE: strict
+      ENABLE_SMOKE_TESTS: "0"
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            app/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Prepare CI runtime dirs
+        run: mkdir -p .ci_state .ci_prom .ci_chroma
+
+      - name: OpenAPI contract (schemathesis)
+        run: PYTHONPATH=app pytest -q tests/contract -m contract
+
+      - name: Property-based tests (hypothesis, perfil ci)
+        run: |
+          PYTHONPATH=app pytest -q tests/test_properties_scoring.py tests/test_properties_routing.py \
+            tests/test_adaptive_timeout.py tests/test_bandit_policy.py
+
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true  # só relatório: tempos de runner compartilhado variam demais para bloquear
+    env:
+      STATE_DIR: ${{ github.workspace }}/.ci_state
+      PROMETHEUS_MULTIPROC_DIR: ${{ github.workspace }}/.ci_prom
+      CHROMA_PATH: ${{ github.workspace }}/.ci_chroma
+      ENABLE_SMOKE_TESTS: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            app/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Prepare CI runtime dirs
+        run: mkdir -p .ci_state .ci_prom .ci_chroma
+
+      - name: Hot-path benchmarks
+        run: |
+          PYTHONPATH=app pytest -q tests/benchmarks -m benchmark --benchmark-enable \
+            --benchmark-json=benchmark.json --benchmark-columns=min,median,mean,stddev
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: benchmark.json
+
+  mutation:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true  # relatório; meta de escore >= 80% nos módulos de [tool.mutmut]
+    env:
+      STATE_DIR: ${{ github.workspace }}/.ci_state
+      PROMETHEUS_MULTIPROC_DIR: ${{ github.workspace }}/.ci_prom
+      CHROMA_PATH: ${{ github.workspace }}/.ci_chroma
+      ENABLE_SMOKE_TESTS: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            app/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Prepare CI runtime dirs
+        run: mkdir -p .ci_state .ci_prom .ci_chroma
+
+      - name: Mutation testing (mutmut)
+        run: MUTMUT_WORKDIR=$RUNNER_TEMP/mutmut scripts/run_mutation.sh --max-children 4
+
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation
+          path: ${{ runner.temp }}/mutmut/mutmut-results.txt
 
   packaging_sanity:
     runs-on: ubuntu-latest

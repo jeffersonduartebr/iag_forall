@@ -1,14 +1,11 @@
 [run]
 source =
     app
+# Cobertura de ramos: exigida pelo relatório CRAP (scripts/crap_report.py) e pelo ratchet da CI.
+branch = True
 omit =
-    */correlation_metrics.py
-    */nsga_meta_optimizer.py
-    */nsga_weights_updater.py
+    # Painel Dash (serviço separado, sem testes de UI)
     */dash_control_panel.py
-    */update_nsga_best_params.py
-    */db_manager.py
-    */reset_chroma_collections.py
     */utils/bkp.redis_client.py
 
 [report]

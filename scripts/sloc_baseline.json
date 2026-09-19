@@ -1,1 +1,12 @@
-{}
+{
+  "app/app/config/settings_properties.py": 382,
+  "app/app/main.py": 357,
+  "app/app/middleware/rate_limit.py": 324,
+  "app/app/provider_tools.py": 378,
+  "app/app/providers/_ollama.py": 364,
+  "app/app/reliability.py": 322,
+  "app/app/roadmap_features.py": 325,
+  "app/app/schemas.py": 304,
+  "app/app/settings_dynamic.py": 326,
+  "tests/test_chaos.py": 304
+}
