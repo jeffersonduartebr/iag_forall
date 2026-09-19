@@ -319,3 +319,65 @@ def test_apply_mode_preset():
 
     preset = apply_mode_preset("cost_hunt")
     assert preset["OPENROUTER_EXPLORATION_RATE"] == "0.15"
+
+
+def test_next_exploration_stats_running_means_and_failures():
+    from app.openrouter_exploration_policy import next_exploration_stats
+
+    first = next_exploration_stats(
+        {},
+        reward=0.8,
+        latency_s=2.0,
+        cost_usd=0.002,
+        prompt_tokens=800,
+        completion_tokens=200,
+        success=True,
+        judge_quality=8.0,
+        catalog_usd_per_1k=None,
+    )
+    assert first["count"] == 1 and first["mean_reward"] == 0.8 and first["mean_observed_usd_per_1k"] == 0.002
+    second = next_exploration_stats(
+        first,
+        reward=0.0,
+        latency_s=4.0,
+        cost_usd=0.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        success=False,
+        judge_quality=None,
+        catalog_usd_per_1k=None,
+    )
+    assert second["count"] == 2 and second["mean_reward"] == 0.4 and second["mean_latency_s"] == 3.0
+    assert second["failure_count"] == 1 and second["consecutive_failures"] == 1 and second["failure_rate"] == 0.5
+    assert second["observed_cost_samples"] == 1  # sem tokens: mantém a média observada anterior
+
+
+@pytest.mark.asyncio
+async def test_load_many_model_stats_uses_mget_with_fallback():
+    import json as _json
+
+    from app.openrouter_exploration_state import REDIS_MODEL_STATS_PREFIX, _load_many_model_stats
+
+    store = {f"{REDIS_MODEL_STATS_PREFIX}a": _json.dumps({"count": 3}), f"{REDIS_MODEL_STATS_PREFIX}b": "{bad"}
+
+    class _WithMget:
+        calls = 0
+
+        async def mget(self, keys):
+            _WithMget.calls += 1
+            return [store.get(k) for k in keys]
+
+    class _GetOnly:
+        async def get(self, key):
+            return store.get(key)
+
+    assert await _load_many_model_stats(_WithMget(), ["a", "b", "c"]) == {"a": {"count": 3}, "b": {}, "c": {}}
+    assert _WithMget.calls == 1
+    assert await _load_many_model_stats(_GetOnly(), ["a"]) == {"a": {"count": 3}}
+    assert await _load_many_model_stats(None, ["a"]) == {}
+
+
+def test_explore_score_skips_blocked_and_promoted(settings_enabled):
+    cfg = ore.load_exploration_config(settings_enabled)
+    assert ore._explore_score("openrouter/x/y", {"count": 3}, cfg) == pytest.approx(0.25)
+    assert ore._explore_score("openrouter/x/y", {"consecutive_failures": 99}, cfg) is None
