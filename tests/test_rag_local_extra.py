@@ -305,3 +305,18 @@ async def test_dense_and_sparse_retrieval_run_concurrently(monkeypatch):
 
     bundle = await rag_local.build_retrieval_bundle("pergunta", rerank_enabled=False)
     assert "texto denso" in bundle["context"] and "texto do bm25" in bundle["context"]
+
+
+def test_retrieval_helpers_match_trim_and_cite():
+    from app import rag_local as rl
+
+    items = [("d1", "aaaa", {"source": "manual"}), ("d2", "bbbb", {}), ("d3", "aaaa", {})]
+    # textos repetidos mapeiam para documentos distintos, na ordem do rerank
+    assert [i[0] for i in rl._match_items(["aaaa", "aaaa", "zzzz"], items)] == ["d1", "d3"]
+    # orçamento de 1 token = 4 caracteres: o 1º cabe inteiro, nada sobra para o 2º
+    assert rl._trim_items(items, 1) == [("d1", "aaaa", {"source": "manual"})]
+    assert rl._trim_items(items, 0) == []
+    citations, evidence = rl._provenance(items[:2])
+    assert [c["rank"] for c in citations] == [1, 2] and citations[0]["source"] == "manual"
+    assert evidence[1]["source"] == "vectorstore"
+    assert rl._augmented_prompt("", "q") == "q" and "PERGUNTA DO USUÁRIO: q" in rl._augmented_prompt("ctx", "q")
