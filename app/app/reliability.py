@@ -237,51 +237,34 @@ class RequestDeduplicator:
             Result from execute_fn (either from this call or a deduplicated one)
         """
         key = self._compute_key(query, model, **kwargs)
-
         async with self._request_lock:
-            # Check for existing in-flight request
-            if key in self._in_flight:
-                request = self._in_flight[key]
-                # Check if it's still valid
-                if time.time() - request.created_at < self._ttl_seconds:
-                    logger.debug(f"[Dedup] Found in-flight request for key {key[:8]}...")
-                    try:
-                        return await request.future
-                    except Exception:
-                        # If the original request failed, we'll try again
-                        pass
+            existing = self._in_flight.get(key)
+            if existing is None or existing.future.done() or time.time() - existing.created_at >= self._ttl_seconds:
+                existing = None
+                entry = InFlightRequest(asyncio.get_running_loop().create_future(), time.time(), model, key)
+                self._in_flight[key] = entry
 
-            # Create new future for this request
-            loop = asyncio.get_event_loop()
-            future = loop.create_future()
-
-            self._in_flight[key] = InFlightRequest(
-                future=future,
-                created_at=time.time(),
-                model=model,
-                query_hash=key,
-            )
+        if existing is not None:
+            # Espera fora do lock: aguardar o LLM segurando o lock serializava todas as requisições.
+            try:
+                return await asyncio.shield(existing.future)
+            except Exception:
+                return await execute_fn()  # a original falhou: executa por conta própria
 
         try:
-            # Execute the actual request
             result = await execute_fn()
-
-            # Set the result for any waiting requests
-            if not future.done():
-                future.set_result(result)
-
+            if not entry.future.done():
+                entry.future.set_result(result)
             return result
-
-        except Exception as e:
-            # Set the exception for any waiting requests
-            if not future.done():
-                future.set_exception(e)
+        except BaseException as e:
+            if not entry.future.done():
+                # Cancelamento vira erro comum para os seguidores (que então executam sozinhos).
+                entry.future.set_exception(e if isinstance(e, Exception) else RuntimeError("requisição original cancelada"))
+                entry.future.exception()  # sem seguidores, evita o log "Future exception was never retrieved"
             raise
-
         finally:
-            # Clean up
             async with self._request_lock:
-                if key in self._in_flight:
+                if self._in_flight.get(key) is entry:
                     del self._in_flight[key]
 
     async def cleanup_stale(self):
