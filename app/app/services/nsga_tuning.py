@@ -5,7 +5,8 @@ factors, and UQ-threshold calibration. Extracted from nsga_weights_updater."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 
@@ -113,154 +114,131 @@ def tune_global_strategy_weights(sys_metrics: Tuple[float, float, float]):
 # ============================================================
 # 6.1 Adaptive Risk Factors Tuning (Phase 5 - Improvement 1)
 # ============================================================
+_SOTA_MARKERS = ("gpt-5", "opus", "sonnet", "gemini-3-pro")
+_MIN_BUCKET_SAMPLES = 20
+
+
+@dataclass(frozen=True)
+class RiskRule:
+    """P-controller rule for one routing risk factor."""
+
+    setting: str
+    bucket: str
+    label: str
+    lower: float
+    upper: float
+    decrease_below: Optional[float]  # média de qualidade abaixo disso reduz o fator
+    increase_above: Optional[float]  # média acima disso aumenta o fator
+
+
+RISK_RULES = (
+    # SOTA em alta incerteza: reduz o bônus se ficar abaixo de 7, aumenta se passar de 8.
+    RiskRule("RISK_FACTOR_SOTA_HIGH_UQ", "sota_high_uq", "SOTA_HIGH", 1.0, 2.0, 7.0, 8.0),
+    # Local em alta incerteza: penaliza mais abaixo de 5, alivia acima de 7.
+    RiskRule("RISK_FACTOR_LOCAL_HIGH_UQ", "local_high_uq", "LOCAL_HIGH", 0.3, 1.0, 5.0, 7.0),
+    # Local em terreno conhecido: só aumenta, acima de 7,5.
+    RiskRule("RISK_FACTOR_LOCAL_LOW_UQ", "local_low_uq", "LOCAL_LOW", 0.0, 1.5, None, 7.5),
+)
+
+
+def bucket_qualities(rows: List[Any], uq_threshold: float) -> Dict[str, List[float]]:
+    """Group judged qualities by (model family, uncertainty regime)."""
+    buckets: Dict[str, List[float]] = {rule.bucket: [] for rule in RISK_RULES}
+    for model, quality, uq in rows:
+        lowered = str(model).lower()
+        quality = float(quality) if quality else 5.0
+        high_uq = (float(uq) if uq else 0.5) > uq_threshold
+        if high_uq and any(marker in lowered for marker in _SOTA_MARKERS):
+            buckets["sota_high_uq"].append(quality)
+        elif "ollama" in lowered:
+            buckets["local_high_uq" if high_uq else "local_low_uq"].append(quality)
+    return buckets
+
+
+def _mean(values: List[float]) -> float:
+    return sum(values) / len(values) if values else 5.0
+
+
+def propose_risk_factor(rule: RiskRule, current: float, qualities: List[float], rate: float) -> Optional[float]:
+    """New factor for ``rule`` (``None`` = keep): needs enough samples, moves by ``rate`` within bounds."""
+    if len(qualities) < _MIN_BUCKET_SAMPLES:
+        return None
+    avg = _mean(qualities)
+    if rule.decrease_below is not None and avg < rule.decrease_below:
+        proposed = max(rule.lower, current - rate)
+    elif rule.increase_above is not None and avg > rule.increase_above:
+        proposed = min(rule.upper, current + rate)
+    else:
+        return None
+    return proposed if proposed != current else None
+
+
+def _bucket_metrics(buckets: Dict[str, List[float]]) -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {}
+    for name, values in buckets.items():
+        metrics[f"{name}_count"] = len(values)
+        metrics[f"{name}_avg_quality"] = _mean(values)
+    return metrics
+
+
+def _recent_quality_rows() -> List[Any]:
+    with _db_engine().connect() as conn:
+        return conn.execute(
+            text("""
+                SELECT
+                    chosen_model,
+                    quality,
+                    JSON_EXTRACT(raw_payload, '$.uncertainty_score') as uq_score
+                FROM query_log
+                WHERE created_at > NOW() - INTERVAL 24 HOUR
+                AND quality IS NOT NULL
+                AND raw_payload IS NOT NULL
+                AND JSON_EXTRACT(raw_payload, '$.uncertainty_score') IS NOT NULL
+                LIMIT 5000
+            """)
+        ).fetchall()
+
+
+def _publish_risk_factors() -> None:
+    try:
+        from app.observability import RISK_FACTOR_CURRENT
+
+        for rule in RISK_RULES:
+            RISK_FACTOR_CURRENT.labels(factor_type=rule.bucket).set(getattr(settings, rule.setting))
+    except Exception:
+        pass
+
+
 def tune_risk_factors() -> Dict[str, Any]:
     """
     Tune risk factors based on observed quality outcomes by model type and UQ level.
 
-    Analyzes query_log data to see if risk factor adjustments improve quality:
-    - If SOTA models in high-UQ scenarios underperform, reduce their boost
-    - If local models in high-UQ scenarios outperform expectations, increase their factor
-
-    Uses P-controller feedback to make gradual adjustments.
+    Analyzes the last 24 h of query_log: each rule in ``RISK_RULES`` nudges one
+    factor by ``RISK_FACTOR_ADAPT_RATE`` (P-controller) when its bucket has at
+    least 20 samples and the average quality crosses the rule's thresholds.
 
     Returns:
         Dict with adjustments made and metrics
     """
     if not settings.RISK_FACTOR_ADAPT_ENABLED:
         return {"status": "disabled"}
-
-    result: dict[str, Any] = {"adjustments": [], "metrics": {}}
-
     try:
-        with _db_engine().connect() as conn:
-            # Query recent data with UQ scores from raw_payload
-            rows = conn.execute(
-                text("""
-                    SELECT
-                        chosen_model,
-                        quality,
-                        JSON_EXTRACT(raw_payload, '$.uncertainty_score') as uq_score
-                    FROM query_log
-                    WHERE created_at > NOW() - INTERVAL 24 HOUR
-                    AND quality IS NOT NULL
-                    AND raw_payload IS NOT NULL
-                    AND JSON_EXTRACT(raw_payload, '$.uncertainty_score') IS NOT NULL
-                    LIMIT 5000
-                """)
-            ).fetchall()
-
+        rows = _recent_quality_rows()
         if len(rows) < 100:
             return {"status": "insufficient_data", "count": len(rows)}
-
-        # Categorize results
-        sota_high_uq = []
-        local_high_uq = []
-        local_low_uq = []
         uq_threshold = float(settings.get("UNCERTAINTY_THRESHOLD", DEFAULT_UNCERTAINTY_THRESHOLD))
-
-        for row in rows:
-            model = row[0]
-            quality = float(row[1]) if row[1] else 5.0
-            uq_score = float(row[2]) if row[2] else 0.5
-
-            is_sota = any(m in model.lower() for m in ["gpt-5", "opus", "sonnet", "gemini-3-pro"])
-            is_local = "ollama" in model.lower()
-            is_high_uq = uq_score > uq_threshold
-
-            if is_high_uq:
-                if is_sota:
-                    sota_high_uq.append(quality)
-                elif is_local:
-                    local_high_uq.append(quality)
-            else:
-                if is_local:
-                    local_low_uq.append(quality)
-
-        # Calculate average qualities
-        def safe_mean(lst):
-            """Executa a responsabilidade descrita por este método.
-
-            Args:
-                lst: Parâmetro de entrada.
-
-            Returns:
-                Valor produzido pela execução.
-            """
-            return sum(lst) / len(lst) if lst else 5.0
-
-        avg_sota_high = safe_mean(sota_high_uq)
-        avg_local_high = safe_mean(local_high_uq)
-        avg_local_low = safe_mean(local_low_uq)
-
-        result["metrics"] = {
-            "sota_high_uq_count": len(sota_high_uq),
-            "sota_high_uq_avg_quality": avg_sota_high,
-            "local_high_uq_count": len(local_high_uq),
-            "local_high_uq_avg_quality": avg_local_high,
-            "local_low_uq_count": len(local_low_uq),
-            "local_low_uq_avg_quality": avg_local_low,
-        }
-
-        adapt_rate = settings.RISK_FACTOR_ADAPT_RATE
-
-        # Tune SOTA high-UQ factor
-        current_sota = settings.RISK_FACTOR_SOTA_HIGH_UQ
-        if len(sota_high_uq) >= 20:
-            # If SOTA is underperforming in high-UQ (< 7.0), reduce boost
-            if avg_sota_high < 7.0:
-                new_sota = max(1.0, current_sota - adapt_rate)
-                if new_sota != current_sota:
-                    settings.set("RISK_FACTOR_SOTA_HIGH_UQ", str(round(new_sota, 2)), actor="risk-tuner")
-                    result["adjustments"].append(f"SOTA_HIGH: {current_sota:.2f} -> {new_sota:.2f}")
-            # If SOTA is performing well, slight boost
-            elif avg_sota_high > 8.0:
-                new_sota = min(2.0, current_sota + adapt_rate)
-                if new_sota != current_sota:
-                    settings.set("RISK_FACTOR_SOTA_HIGH_UQ", str(round(new_sota, 2)), actor="risk-tuner")
-                    result["adjustments"].append(f"SOTA_HIGH: {current_sota:.2f} -> {new_sota:.2f}")
-
-        # Tune local high-UQ factor
-        current_local_high = settings.RISK_FACTOR_LOCAL_HIGH_UQ
-        if len(local_high_uq) >= 20:
-            # If local models are underperforming in high-UQ, reduce further
-            if avg_local_high < 5.0:
-                new_local = max(0.3, current_local_high - adapt_rate)
-                if new_local != current_local_high:
-                    settings.set("RISK_FACTOR_LOCAL_HIGH_UQ", str(round(new_local, 2)), actor="risk-tuner")
-                    result["adjustments"].append(f"LOCAL_HIGH: {current_local_high:.2f} -> {new_local:.2f}")
-            # If local models are surprisingly good, increase
-            elif avg_local_high > 7.0:
-                new_local = min(1.0, current_local_high + adapt_rate)
-                if new_local != current_local_high:
-                    settings.set("RISK_FACTOR_LOCAL_HIGH_UQ", str(round(new_local, 2)), actor="risk-tuner")
-                    result["adjustments"].append(f"LOCAL_HIGH: {current_local_high:.2f} -> {new_local:.2f}")
-
-        # Tune local low-UQ factor
-        current_local_low = settings.RISK_FACTOR_LOCAL_LOW_UQ
-        if len(local_low_uq) >= 20:
-            # If local models do well in known territory, boost
-            if avg_local_low > 7.5:
-                new_local = min(1.5, current_local_low + adapt_rate)
-                if new_local != current_local_low:
-                    settings.set("RISK_FACTOR_LOCAL_LOW_UQ", str(round(new_local, 2)), actor="risk-tuner")
-                    result["adjustments"].append(f"LOCAL_LOW: {current_local_low:.2f} -> {new_local:.2f}")
-
-        # Update Prometheus metrics
-        try:
-            from app.observability import RISK_FACTOR_CURRENT
-
-            RISK_FACTOR_CURRENT.labels(factor_type="sota_high_uq").set(settings.RISK_FACTOR_SOTA_HIGH_UQ)
-            RISK_FACTOR_CURRENT.labels(factor_type="local_high_uq").set(settings.RISK_FACTOR_LOCAL_HIGH_UQ)
-            RISK_FACTOR_CURRENT.labels(factor_type="local_low_uq").set(settings.RISK_FACTOR_LOCAL_LOW_UQ)
-        except Exception:
-            pass
-
-        if result["adjustments"]:
-            logger.info(f"[Risk-Tuning] Adjustments: {', '.join(result['adjustments'])}")
-
-        result["status"] = "ok"
-        return result
-
+        buckets = bucket_qualities(rows, uq_threshold)
+        adjustments: List[str] = []
+        for rule in RISK_RULES:
+            current = getattr(settings, rule.setting)
+            proposed = propose_risk_factor(rule, current, buckets[rule.bucket], settings.RISK_FACTOR_ADAPT_RATE)
+            if proposed is not None:
+                settings.set(rule.setting, str(round(proposed, 2)), actor="risk-tuner")
+                adjustments.append(f"{rule.label}: {current:.2f} -> {proposed:.2f}")
+        _publish_risk_factors()
+        if adjustments:
+            logger.info(f"[Risk-Tuning] Adjustments: {', '.join(adjustments)}")
+        return {"adjustments": adjustments, "metrics": _bucket_metrics(buckets), "status": "ok"}
     except Exception as e:
         logger.warning(f"[Risk-Tuning] Failed: {e}")
         return {"status": "error", "error": str(e)}

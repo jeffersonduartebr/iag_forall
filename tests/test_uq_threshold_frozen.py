@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.config.settings_catalog import SETTINGS_DEFAULTS
 from app.services import frozen_policy, nsga_tuning
@@ -62,3 +64,47 @@ def test_frozen_snapshot_records_threshold(monkeypatch):
     monkeypatch.setattr(sd, "settings", fake)
     snapshot = frozen_policy.build_frozen_snapshot()
     assert snapshot["UNCERTAINTY_THRESHOLD"] == 0.45
+
+
+def test_bucket_qualities_by_family_and_uncertainty():
+    rows = [
+        ("openai/gpt-5.5", 9.0, 0.9),  # SOTA, alta incerteza
+        ("ollama/gemma3:4b", 4.0, 0.9),  # local, alta
+        ("ollama/gemma3:4b", 8.0, 0.1),  # local, baixa
+        ("openai/gpt-5.5", 7.0, 0.1),  # SOTA em baixa incerteza: ignorado
+        ("ollama/qwen", None, None),  # defaults: qualidade 5, incerteza 0.5 (> 0.45)
+    ]
+    buckets = nsga_tuning.bucket_qualities(rows, 0.45)
+    assert buckets == {"sota_high_uq": [9.0], "local_high_uq": [4.0, 5.0], "local_low_uq": [8.0]}
+
+
+def test_propose_risk_factor_rules():
+    sota, local_high, local_low = nsga_tuning.RISK_RULES
+    few, low, high = [9.0] * 5, [4.0] * 20, [9.0] * 20
+    assert nsga_tuning.propose_risk_factor(sota, 1.3, few, 0.1) is None  # amostras insuficientes
+    assert nsga_tuning.propose_risk_factor(sota, 1.3, low, 0.1) == pytest.approx(1.2)
+    assert nsga_tuning.propose_risk_factor(sota, 2.0, high, 0.1) is None  # já no teto
+    assert nsga_tuning.propose_risk_factor(local_high, 0.35, low, 0.1) == pytest.approx(0.3)
+    assert nsga_tuning.propose_risk_factor(local_low, 1.1, low, 0.1) is None  # só aumenta
+    assert nsga_tuning.propose_risk_factor(local_low, 1.1, high, 0.1) == pytest.approx(1.2)
+
+
+def test_tune_risk_factors_applies_rules(monkeypatch):
+    stub = _Settings({"UNCERTAINTY_THRESHOLD": "0.45"})
+    stub.RISK_FACTOR_ADAPT_ENABLED = True
+    stub.RISK_FACTOR_ADAPT_RATE = 0.1
+    stub.RISK_FACTOR_SOTA_HIGH_UQ = 1.3
+    stub.RISK_FACTOR_LOCAL_HIGH_UQ = 0.6
+    stub.RISK_FACTOR_LOCAL_LOW_UQ = 1.1
+    rows = [("openai/gpt-5.5", 6.0, 0.9)] * 50 + [("ollama/gemma3:4b", 8.0, 0.1)] * 60
+    monkeypatch.setattr(nsga_tuning, "settings", stub)
+    monkeypatch.setattr(nsga_tuning, "_recent_quality_rows", lambda: rows)
+
+    out = nsga_tuning.tune_risk_factors()
+    assert out["status"] == "ok"
+    assert out["adjustments"] == ["SOTA_HIGH: 1.30 -> 1.20", "LOCAL_LOW: 1.10 -> 1.20"]
+    assert out["metrics"]["sota_high_uq_count"] == 50
+    assert ("RISK_FACTOR_SOTA_HIGH_UQ", "1.2", "risk-tuner") in stub.writes
+
+    monkeypatch.setattr(nsga_tuning, "_recent_quality_rows", lambda: rows[:10])
+    assert nsga_tuning.tune_risk_factors() == {"status": "insufficient_data", "count": 10}
