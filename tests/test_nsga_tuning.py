@@ -190,3 +190,46 @@ def test_candidates_fallback(candidates_env, monkeypatch):
     assert nwu.load_candidate_models("audio") == []
     monkeypatch.setattr(nwu, "redis_client", None)
     assert nwu.load_candidate_models("text") == ["b", "a", "c"]
+
+
+# ---------------------------------------------------------------- laço do worker
+
+
+def test_loop_iteration_isolates_failures_and_calibrates_every_third(monkeypatch):
+    ran, calibrations = [], []
+
+    def cycle(modality):
+        ran.append(modality)
+        if modality == "vision":
+            raise RuntimeError("sem modelos")
+
+    def calibrate():
+        calibrations.append(True)
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(nwu, "run_optimization_cycle", cycle)
+    monkeypatch.setattr(nwu, "run_calibration_cycle", calibrate)
+    for i in (1, 2, 3):
+        nwu.run_loop_iteration(i)
+    assert ran == ["text", "vision", "multimodal"] * 3
+    assert calibrations == [True]
+
+
+def test_background_loop_stops_on_event(monkeypatch):
+    import threading
+
+    stop = threading.Event()
+    iterations = []
+
+    def iteration(i):
+        iterations.append(i)
+        if i == 2:
+            stop.set()
+
+    monkeypatch.setattr(nwu, "run_loop_iteration", iteration)
+    monkeypatch.setattr(nwu, "UPDATE_INTERVAL_S", 0)
+    nwu.background_loop(stop, initial_delay_s=0)
+    assert iterations == [1, 2]
+
+    nwu.background_loop(stop, initial_delay_s=0)  # já parado: não roda nenhum ciclo
+    assert iterations == [1, 2]

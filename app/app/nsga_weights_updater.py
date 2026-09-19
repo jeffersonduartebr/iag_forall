@@ -528,30 +528,34 @@ def calibration_status():
     return calibration_status_payload()
 
 
-def background_loop():
-    """Execute the background loop routine.
+CALIBRATION_EVERY_N_CYCLES = 3  # calibração a cada 3 ciclos, para reduzir o custo
 
-    This helper encapsulates one focused step used by the surrounding workflow."""
-    time.sleep(15)
-    calibration_counter = 0
 
+def run_loop_iteration(iteration: int) -> None:
+    """One worker cycle: optimize every modality, then calibrate every Nth cycle (errors are logged)."""
+    for m in MODALITIES:
+        try:
+            run_optimization_cycle(m)
+        except Exception as e:
+            logger.error(f"[Loop] Erro em {m}: {e}")
+    if iteration % CALIBRATION_EVERY_N_CYCLES == 0:
+        try:
+            run_calibration_cycle()
+        except Exception as e:
+            logger.error(f"[Loop] Calibration error: {e}")
+
+
+def background_loop(stop: threading.Event | None = None, initial_delay_s: float = 15.0) -> None:
+    """Run ``run_loop_iteration`` every UPDATE_INTERVAL_S until ``stop`` is set."""
+    stop = stop or threading.Event()
+    iteration = 0
+    if stop.wait(initial_delay_s):
+        return
     while True:
-        for m in MODALITIES:
-            try:
-                run_optimization_cycle(m)
-            except Exception as e:
-                logger.error(f"[Loop] Erro em {m}: {e}")
-
-        # Run calibration every 3rd cycle (to reduce overhead)
-        calibration_counter += 1
-        if calibration_counter >= 3:
-            try:
-                run_calibration_cycle()
-            except Exception as e:
-                logger.error(f"[Loop] Calibration error: {e}")
-            calibration_counter = 0
-
-        time.sleep(UPDATE_INTERVAL_S)
+        iteration += 1
+        run_loop_iteration(iteration)
+        if stop.wait(UPDATE_INTERVAL_S):
+            return
 
 
 if __name__ == "__main__":
