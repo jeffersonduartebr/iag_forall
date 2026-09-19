@@ -453,3 +453,21 @@ async def test_process_query_request_threads_tools_and_surfaces_tool_calls(monke
     assert result["abstained"] is False
     assert result["answer"] == ""
     assert result["review_status"] == "auto_approved"
+
+
+def test_chat_completion_limits_are_client_errors():
+    """Out-of-range sampling params and oversized fields become 422, never a 500."""
+    import pytest
+    from app.api.openai_compat_routes import ChatCompletionRequest, _messages_to_query
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(messages=[{"role": "user", "content": "oi"}], temperature=3.0)
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(messages=[{"role": "user", "content": "oi"}], max_tokens=0)
+
+    oversized = ChatCompletionRequest(messages=[{"role": "system", "content": "x" * 50_001}, {"role": "user", "content": "oi"}])
+    with pytest.raises(HTTPException) as exc:
+        _messages_to_query(oversized)
+    assert exc.value.status_code == 422

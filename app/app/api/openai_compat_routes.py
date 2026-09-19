@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..api.auth import AuthContext, require_api_auth
 from ..schemas import QueryRequest
@@ -30,10 +30,11 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: Optional[str] = None
     messages: List[ChatMessage] = Field(default_factory=list)
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
+    # Mesmos limites do QueryRequest: fora deles a resposta é 422, não um 500 na conversão.
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(None, ge=1, le=32000)
     stream: bool = False
-    tenant_id: Optional[str] = None
+    tenant_id: Optional[str] = Field(None, max_length=128)
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
 
@@ -75,18 +76,21 @@ def _messages_to_query(payload: ChatCompletionRequest) -> QueryRequest:
     # `messages` são a fonte da verdade. Garante um valor não-vazio (schema exige).
     query_text = last_user_text or "\n\n".join(user_parts) or "(tool follow-up)"
 
-    return QueryRequest(
-        query=query_text,
-        modality="text",
-        system_prompt="\n\n".join(system_parts) if system_parts else None,
-        temperature=payload.temperature if payload.temperature is not None else 0.5,
-        max_tokens=payload.max_tokens or 512,
-        tenant_id=payload.tenant_id,
-        stream=payload.stream,
-        tools=payload.tools,
-        tool_choice=payload.tool_choice,
-        messages=raw_messages if is_multiturn else None,
-    )
+    try:
+        return QueryRequest(
+            query=query_text,
+            modality="text",
+            system_prompt="\n\n".join(system_parts) if system_parts else None,
+            temperature=payload.temperature if payload.temperature is not None else 0.5,
+            max_tokens=payload.max_tokens or 512,
+            tenant_id=payload.tenant_id,
+            stream=payload.stream,
+            tools=payload.tools,
+            tool_choice=payload.tool_choice,
+            messages=raw_messages if is_multiturn else None,
+        )
+    except ValidationError as exc:  # ex.: system prompt acima do limite do QueryRequest
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False)) from exc
 
 
 def _to_openai_response(result: Dict[str, Any], requested_model: Optional[str]) -> Dict[str, Any]:
