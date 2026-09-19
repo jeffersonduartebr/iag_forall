@@ -39,6 +39,12 @@ REDIS_KEY_RESULTS = "ab:results"
 _RESULT_METRICS = ("quality", "latency", "cost")
 
 
+def _member_value(member: Any) -> float:
+    """Metric value stored in a result member ``"<timestamp>:<value>"`` (also the legacy layout)."""
+    text = member.decode() if isinstance(member, bytes) else str(member)
+    return float(text.rsplit(":", 1)[1])
+
+
 def summarize_scores(scores: List[float]) -> Dict[str, Any]:
     """Count, mean, std, median and p95 of one metric (``{"count": 0}`` when empty)."""
     if not scores:
@@ -359,9 +365,10 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
         try:
             key = f"{REDIS_KEY_RESULTS}:{experiment_id}:{variant_name}:{metric_name}"
-            # Use sorted set for percentile calculations
-            rds.zadd(key, {f"{time.time()}:{value}": value})
-            # Trim to last 10000 results
+            # Score = instante do registro, para o corte manter as 10000 amostras mais recentes
+            # (com score = valor, o corte descartava as menores e enviesava a média para cima).
+            # O valor fica no membro "<ns>:<valor>".
+            rds.zadd(key, {f"{time.time_ns()}:{float(value)}": time.time()})
             rds.zremrangebyrank(key, 0, -10001)
         except Exception as e:
             logger.warning(f"[ABTesting] Failed to record result: {e}")
@@ -396,7 +403,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     def _variant_metric(rds: Any, experiment_id: str, variant_name: str, metric: str) -> Dict[str, Any]:
         try:
             key = f"{REDIS_KEY_RESULTS}:{experiment_id}:{variant_name}:{metric}"
-            return summarize_scores([float(score) for _member, score in rds.zrange(key, 0, -1, withscores=True)])
+            return summarize_scores([_member_value(member) for member in rds.zrange(key, 0, -1)])
         except Exception as e:
             logger.warning(f"[ABTesting] Failed to get results for {variant_name}/{metric}: {e}")
             return {"error": str(e)}

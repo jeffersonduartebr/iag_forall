@@ -332,6 +332,25 @@ class TestExperimentResults:
         assert out["variants"]["control"]["latency"]["count"] == 1
         assert manager.get_experiment_results("nope") == {"error": "Experiment not found"}
 
+    def test_results_are_ranked_by_time_so_the_trim_drops_the_oldest(self, manager_with_redis, monkeypatch):
+        from types import SimpleNamespace
+
+        from app import ab_testing
+
+        manager, rds = manager_with_redis
+        key = "ab:results:e1:control:quality"
+        rds.zadd(key, {"1.0:9.5": 9.5})  # formato antigo (score = valor): sai primeiro no corte
+        clock = iter([100.0, 101.0, 102.0])
+        monkeypatch.setattr(ab_testing, "time", SimpleNamespace(time=lambda: next(clock), time_ns=lambda: 7))
+        for value in (10.0, 1.0):
+            manager.record_result("e1", "control", "quality", value)
+
+        members = rds.zrange(key, 0, -1, withscores=True)
+        assert [m for m, _ in members] == [b"1.0:9.5", b"7:10.0", b"7:1.0"]  # ordem de chegada, não de valor
+        assert [score for _, score in members][1:] == [100.0, 101.0]
+        stats = manager.get_experiment_results("e1")["variants"]["control"]["quality"]
+        assert (stats["count"], stats["mean"]) == (3, round((9.5 + 10.0 + 1.0) / 3, 4))
+
     def test_results_degrade_per_metric_on_redis_errors(self, manager_with_redis):
         manager, rds = manager_with_redis
         rds.set("ab:results:e1:control:quality", "not-a-zset")
