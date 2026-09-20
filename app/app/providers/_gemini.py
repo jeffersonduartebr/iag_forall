@@ -13,6 +13,7 @@ from typing import Any, Dict, NamedTuple, Optional
 
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
+from app.utils.breaker_async import guarded_by
 
 from ._base import (
     BaseProvider,
@@ -21,8 +22,8 @@ from ._base import (
     get_model_cost,
 )
 from ._infra import (
+    CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
-    cloud_breaker,
     google_genai,
 )
 
@@ -125,8 +126,8 @@ class GeminiProvider(BaseProvider):
         super().__init__("gemini", concurrency_limit=60)
         self._adapter = self.GeminiAdapter()
 
+    @guarded_by(CLOUD_BREAKERS["gemini"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one Gemini request and normalize the response payload."""
         model_name = kwargs.get("model", "gemini-1.5-flash")

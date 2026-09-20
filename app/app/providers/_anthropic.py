@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
+from app.utils.breaker_async import guarded_by
 
 from ._base import (
     BaseProvider,
@@ -16,8 +17,8 @@ from ._base import (
     get_model_cost,
 )
 from ._infra import (
+    CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
-    cloud_breaker,
 )
 
 
@@ -31,8 +32,8 @@ class AnthropicProvider(BaseProvider):
         self.client = _pa.AsyncAnthropic(api_key=_pa.ANTHROPIC_API_KEY)
         super().__init__("anthropic", concurrency_limit=50)
 
+    @guarded_by(CLOUD_BREAKERS["anthropic"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one Anthropic request and normalize the provider payload."""
         model = kwargs.get("model", "claude-3-5-sonnet-latest")

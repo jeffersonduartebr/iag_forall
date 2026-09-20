@@ -170,3 +170,57 @@ async def test_concurrent_calls_are_not_serialised_by_the_lock():
     # Se o lock fosse mantido durante o await, "a" terminaria antes de "b"
     # começar e a ordem seria início-a, fim-a, início-b, fim-b.
     assert order[:2] == ["inicio-a", "inicio-b"], order
+
+
+# ---------------------------------------------------------------------------
+# The decorator, which is where the provider layer was broken
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pybreakers_own_decorator_never_sees_an_async_failure():
+    """Pins the defect: this is why no provider circuit could ever open.
+
+    ``@breaker`` wraps the function with the *synchronous* ``call``. Applied to
+    an ``async def``, that returns the coroutine object instead of raising, so
+    the breaker records a success every time.
+    """
+    breaker = a_breaker(fail_max=2)
+
+    @breaker
+    async def _boom():
+        raise RuntimeError("provider em baixo")
+
+    for _ in range(5):
+        with pytest.raises(RuntimeError):
+            await _boom()
+
+    assert breaker.fail_counter == 0
+    assert breaker.current_state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_guarded_by_counts_the_failure():
+    from app.utils.breaker_async import guarded_by
+
+    breaker = a_breaker(fail_max=3)
+
+    @guarded_by(breaker)
+    async def _boom():
+        raise RuntimeError("provider em baixo")
+
+    with pytest.raises(RuntimeError):
+        await _boom()
+    assert breaker.fail_counter == 1
+
+
+@pytest.mark.asyncio
+async def test_guarded_by_preserves_the_function_identity():
+    """The provider methods are looked up by name in tests and logs."""
+    from app.utils.breaker_async import guarded_by
+
+    @guarded_by(a_breaker())
+    async def generate(self, prompt):
+        return prompt
+
+    assert generate.__name__ == "generate"

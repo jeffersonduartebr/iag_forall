@@ -9,7 +9,6 @@ handling for the corresponding runtime component.
 import asyncio
 from types import SimpleNamespace
 
-import pybreaker
 import pytest
 import requests
 
@@ -20,8 +19,8 @@ def _close_breakers():
     """Execute the close breakers routine.
 
 This helper encapsulates one focused step used by the surrounding workflow."""
-    pa.cloud_breaker._state = pybreaker.CircuitClosedState(pa.cloud_breaker)
-    pa.local_breaker._state = pybreaker.CircuitClosedState(pa.local_breaker)
+    pa.cloud_breaker.close()
+    pa.local_breaker.close()
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ taken only around the state transitions, which are the parts that actually race.
 from __future__ import annotations
 
 import threading
+from functools import wraps
 from typing import Any, Awaitable, Callable, TypeVar
 
 import pybreaker
@@ -71,3 +72,28 @@ async def call_through_breaker(
     with _TRANSITION_LOCK:
         breaker.state._handle_success()
     return result
+
+
+def guarded_by(breaker: pybreaker.CircuitBreaker) -> Callable:
+    """Decorate an ``async def`` so the breaker actually sees its outcome.
+
+    ``@breaker`` — pybreaker's own decorator — wraps the function with the
+    *synchronous* ``CircuitBreaker.call``. Applied to a coroutine function that
+    call returns the coroutine object instead of raising, so the breaker
+    records a success on every request and its failure counter never leaves
+    zero. Every provider in this codebase was decorated that way, which means
+    no provider circuit could ever open, whatever the provider did.
+
+    Order matters where this is applied: the retry strategy belongs *inside*
+    the breaker, so one user request counts as one failure. With the retry
+    outside, a single request's five attempts exhausted ``fail_max`` alone.
+    """
+
+    def _decorate(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        @wraps(func)
+        async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+            return await call_through_breaker(breaker, func, *args, **kwargs)
+
+        return _wrapper
+
+    return _decorate

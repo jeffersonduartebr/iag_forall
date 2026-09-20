@@ -12,6 +12,7 @@ from typing import Dict, Optional
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
 from app.observability import logger as structlog_logger
+from app.utils.breaker_async import guarded_by
 
 from ._base import (
     BaseProvider,
@@ -19,11 +20,11 @@ from ._base import (
     get_model_cost,
 )
 from ._infra import (
+    CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
     OPENROUTER_APP_NAME,
     OPENROUTER_BASE_URL,
     OPENROUTER_HTTP_REFERER,
-    cloud_breaker,
 )
 
 
@@ -37,8 +38,11 @@ class OpenAIProvider(BaseProvider):
         self.client = _pa.AsyncOpenAI(api_key=_pa.OPENAI_API_KEY)
         super().__init__("openai", concurrency_limit=100)
 
+    # Breaker POR FORA do retry: um pedido do utilizador conta uma falha,
+    # não cinco. E `guarded_by` em vez de `@cloud_breaker`, que na versão
+    # síncrona do pybreaker nunca chegava a ver a excepção de um async def.
+    @guarded_by(CLOUD_BREAKERS["openai"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one OpenAI chat-completion request and normalize its output."""
         model = kwargs.get("model", "gpt-4o")
@@ -148,8 +152,9 @@ class OpenRouterProvider(OpenAIProvider):
         )
         self._api_key = api_key
 
+    # Breaker próprio: o OpenRouter falhar não pode abrir o circuito da OpenAI.
+    @guarded_by(CLOUD_BREAKERS["openrouter"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         from app.openrouter_catalog import get_openrouter_api_key
 

@@ -16,13 +16,20 @@ import pytest
 class TestCircuitBreaker:
     """Tests for circuit breaker functionality."""
 
-    def test_cloud_breaker_configuration(self):
-        """Cloud breaker should have correct configuration."""
-        from app.providers_async import cloud_breaker
+    def test_each_cloud_provider_has_its_own_breaker(self):
+        """A shared instance would let one provider open the circuit for all four.
 
-        assert cloud_breaker.fail_max == 5
-        assert cloud_breaker.reset_timeout == 60
-        assert cloud_breaker.name == "cloud_breaker"
+        This also used to assert ``name == "cloud_breaker"`` on a single shared
+        instance — which was the defect, not the contract.
+        """
+        from app.providers._breakers import CLOUD_BREAKERS
+
+        assert set(CLOUD_BREAKERS) == {"openai", "openrouter", "anthropic", "gemini"}
+        assert len({id(b) for b in CLOUD_BREAKERS.values()}) == 4
+        for name, breaker in CLOUD_BREAKERS.items():
+            assert breaker.fail_max == 5
+            assert breaker.reset_timeout == 60
+            assert breaker.name == f"cloud_breaker_{name}"
 
     def test_local_breaker_configuration(self):
         """Local breaker should have correct configuration."""
