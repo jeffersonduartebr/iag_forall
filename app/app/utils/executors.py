@@ -31,6 +31,7 @@ _T = TypeVar("_T")
 
 _cpu_executor: Optional[ThreadPoolExecutor] = None
 _background_executor: Optional[ThreadPoolExecutor] = None
+_blocking_provider_executor: Optional[ThreadPoolExecutor] = None
 _lock = threading.Lock()
 
 
@@ -90,9 +91,44 @@ async def run_background(fn: Callable[..., _T], *args: Any) -> _T:
     return await loop.run_in_executor(get_background_executor(), functools.partial(fn, *args))
 
 
+def get_blocking_provider_executor() -> ThreadPoolExecutor:
+    """Dedicated pool for provider SDKs that only offer a blocking client.
+
+    The Gemini SDK is synchronous, so its call runs in a thread — and a thread
+    is **not cancellable**. When the router's deadline fires, the ``await`` is
+    cancelled but the thread keeps blocking until the SDK's own timeout, which
+    used to be ten minutes. On the default executor (16 threads) sixteen slow
+    Gemini calls therefore stalled *every* ``asyncio.to_thread`` in the
+    application — guardrails, budget checks, policy reads, embeddings, tenant
+    usage writes. One slow provider became a global stall.
+
+    Bounding it here means a Gemini outage can exhaust its own pool and nothing
+    else: callers queue for this executor, not for the one the rest of the
+    application shares.
+    """
+    global _blocking_provider_executor
+    if _blocking_provider_executor is None:
+        with _lock:
+            if _blocking_provider_executor is None:
+                workers = max(2, int(os.getenv("PROVIDER_BLOCKING_WORKERS", "8")))
+                _blocking_provider_executor = ThreadPoolExecutor(
+                    max_workers=workers, thread_name_prefix="provider-blocking"
+                )
+    return _blocking_provider_executor
+
+
+async def run_blocking_provider(fn: Callable[..., _T], *args: Any) -> _T:
+    """Run a blocking provider SDK call off the shared executor."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(get_blocking_provider_executor(), functools.partial(fn, *args))
+
+
 def shutdown_cpu_executor() -> None:
     """Tear down the CPU pool (used on app shutdown / test isolation)."""
-    global _cpu_executor, _background_executor
+    global _cpu_executor, _background_executor, _blocking_provider_executor
+    if _blocking_provider_executor is not None:
+        _blocking_provider_executor.shutdown(wait=False)
+        _blocking_provider_executor = None
     if _cpu_executor is not None:
         _cpu_executor.shutdown(wait=False)
         _cpu_executor = None

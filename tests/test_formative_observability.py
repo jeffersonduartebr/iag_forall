@@ -135,13 +135,21 @@ def test_every_verdict_is_reachable():
 
 
 def test_the_feedback_payload_carries_the_detected_complexity():
-    """Without this the matrix has no complexity axis at all."""
-    import inspect
+    """Without this the matrix has no complexity axis at all.
 
-    from app.services import query_runtime
+    Behaviour, not source text: the payload assembly moved out of
+    ``record_query_side_effects`` into ``build_feedback_payload``, and a test
+    that greps one function's source breaks on a refactor that changed nothing.
+    """
+    from app.services.feedback_payload import build_feedback_payload
 
-    source = inspect.getsource(query_runtime.record_query_side_effects)
-    assert '"detected_complexity"' in source
+    payload = build_feedback_payload(
+        {"metadata": {"detected_complexity": "expert", "workload_class": "long_form"}},
+        tenant_id=None,
+        include_raw=False,
+    )
+    assert payload["detected_complexity"] == "expert"
+    assert payload["workload_class"] == "long_form"
 
 
 def test_persist_log_emits_the_cell():

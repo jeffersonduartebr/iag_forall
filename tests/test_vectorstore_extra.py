@@ -208,7 +208,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     qdim_client = _Client(_QDimFail())
     monkeypatch.setattr(vs, "chroma_client", qdim_client)
     assert vs._query_embedding_sync("cq", [1, 2], 3) == {}
-    assert qdim_client.deleted == ["cq"]
+    # Esta asserção era `== ["cq"]`: codificava a destruição de dados pelo
+    # caminho de leitura. Uma consulta devolve vazio e não apaga nada.
+    assert qdim_client.deleted == []
 
     class _QOtherFail(_ColOK):
         """Represent `_QOtherFail` within this module.
@@ -224,17 +226,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(vs, "chroma_client", qother_client)
     assert vs._query_embedding_sync("cq2", [1, 2], 3) == {}
 
-    class _QDeleteFail(_ColOK):
-        def query(self, **kwargs):
-            raise RuntimeError("dimension does not match")
-
-    class _DeleteFailClient(_Client):
-        def delete_collection(self, name):
-            raise RuntimeError("delete failed")
-
-    qdelete_client = _DeleteFailClient(_QDeleteFail())
-    monkeypatch.setattr(vs, "chroma_client", qdelete_client)
-    assert vs._query_embedding_sync("cq3", [1, 2], 3) == {}
+    # O ramo "o delete da consulta também falhou" deixou de existir: a consulta
+    # já não apaga nada, portanto não há delete que possa falhar.
 
 
 @pytest.mark.asyncio
@@ -247,7 +240,13 @@ async def test_add_query_reset_and_health(monkeypatch):
     monkeypatch.setattr(vs, "embed_text", lambda txt: [0.1, 0.2])
     monkeypatch.setattr(vs, "embed_image", lambda img: [0.3, 0.4])
     monkeypatch.setattr(vs, "embed_multimodal", lambda txt, img: {"multimodal": [0.5, 0.6]})
-    monkeypatch.setattr(vs, "_insert_embedding_sync", lambda *a, **k: inserts.append((a, k)))
+    # O fake tem de honrar o contrato: _insert_embedding_sync devolve se o
+    # documento ficou mesmo na coleção.
+    def _fake_insert(*a, **k):
+        inserts.append((a, k))
+        return True
+
+    monkeypatch.setattr(vs, "_insert_embedding_sync", _fake_insert)
     monkeypatch.setattr(vs.sparse_index, "add_document", lambda did, txt: sparse_added.append((did, txt)))
     monkeypatch.setattr(vs.sparse_index, "commit", lambda: committed.__setitem__("n", committed["n"] + 1))
 
@@ -305,3 +304,4 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     assert await vs.health_async() is False
     vs.reset_vectorstore_runtime_state()
     assert vs.chroma_client is None
+

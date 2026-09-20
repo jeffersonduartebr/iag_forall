@@ -4,7 +4,6 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pybreaker
 import pytest
 
 
@@ -37,7 +36,7 @@ class TestOllamaProvider:
             # Reset the breaker state for testing
             from app.providers_async import local_breaker
 
-            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+            local_breaker.close()
 
             result = await provider.generate(prompt="Test prompt", model="phi4:latest")
 
@@ -68,7 +67,7 @@ class TestOllamaProvider:
             from app.providers_async import OllamaProvider, local_breaker
 
             provider = OllamaProvider()
-            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+            local_breaker.close()
 
             result = await provider.generate(prompt="Solve this math problem", model="phi4:latest")
 
@@ -95,7 +94,7 @@ class TestOllamaProvider:
             from app.providers_async import OllamaProvider, local_breaker
 
             provider = OllamaProvider()
-            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+            local_breaker.close()
 
             result = await provider.generate(
                 prompt="Quanto e 2+2?",
@@ -129,7 +128,7 @@ class TestOllamaProvider:
             from app.providers_async import OllamaProvider, local_breaker
 
             provider = OllamaProvider()
-            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+            local_breaker.close()
 
             result = await provider.generate(
                 prompt="Explique em uma frase.",
@@ -257,7 +256,7 @@ class TestOllamaProvider:
 
             from app import providers_async as pa
 
-            local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+            local_breaker.close()
             with (
                 patch.object(pa, "PROVIDER_INFLIGHT_REQUESTS", metric_inflight),
                 patch.object(pa, "PROVIDER_QUEUE_WAIT", metric_queue),

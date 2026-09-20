@@ -26,13 +26,15 @@ import logging
 import os
 import threading
 import time
-from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
+from prometheus_client import Counter
 from sqlalchemy import text
 
+from app.observability import registry as _observability_registry
 from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
 
+from .config.settings_cache import LRUCache, _lru  # noqa: F401  (reexportados: testes e chamadores externos)
 from .config.settings_catalog import (
     SETTING_METADATA,
     SETTINGS_DEFAULTS,
@@ -40,6 +42,7 @@ from .config.settings_catalog import (
     is_runtime_mutable,
     known_setting_keys,
 )
+from .config.settings_encryption import decrypt, encrypt, is_secret  # noqa: F401  (singleton partilhado)
 from .config.settings_env import DB_HOST_ENV, DB_NAME_ENV, DB_PASS_ENV, DB_PORT_ENV, DB_USER_ENV
 from .config.settings_properties import TypedSettingsMixin
 from .config.settings_sources import decode_redis_value, resolve_setting_value, resolve_setting_value_async
@@ -48,6 +51,14 @@ from .config.settings_validation import _read_setting  # noqa: F401  (reexportad
 from .config.settings_validation import validate_critical_settings as _validate_critical_settings
 
 logger = logging.getLogger(__name__)
+
+#: Definida aqui, junto ao consumidor: `observability` está acima do limite de
+#: SLOC e o registry é o mesmo, portanto /metrics não muda.
+SETTINGS_DB_READ_FAILURES = Counter(
+    "settings_db_read_failures_total",
+    "Persisted setting reads that fell back to env/defaults because MariaDB failed",
+    registry=_observability_registry,
+)
 
 # ============================================================
 # Redis / Banco básicos
@@ -135,57 +146,6 @@ except Exception as e:
 # ============================================================
 
 
-class LRUCache:
-    """Small thread-safe cache used to reduce repeated settings lookups.
-
-    The cache stores resolved setting values for a short period because many
-    runtime paths read the same keys on every request. It is deliberately simple
-    and only supports the operations needed by the settings facade.
-    """
-
-    def __init__(self, maxsize: int = 512, ttl_s: int = 30):
-        """Create a bounded cache with LRU eviction and optional TTL."""
-        self.maxsize = maxsize
-        self.ttl_s = ttl_s
-        self._lock = threading.Lock()
-        self._data: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
-
-    def get(self, key: str) -> Optional[Any]:
-        """Return a cached value when present and still fresh."""
-        now = time.time()
-        with self._lock:
-            if key not in self._data:
-                return None
-            value, ts = self._data[key]
-            if self.ttl_s > 0 and (now - ts) > self.ttl_s:
-                try:
-                    del self._data[key]
-                except KeyError:
-                    pass
-                return None
-            self._data.move_to_end(key)
-            return value
-
-    def set(self, key: str, value: Any) -> None:
-        """Insert or refresh one cached setting value."""
-        now = time.time()
-        with self._lock:
-            if key in self._data:
-                self._data.move_to_end(key)
-            self._data[key] = (value, now)
-            if len(self._data) > self.maxsize:
-                self._data.popitem(last=False)
-
-    def clear(self) -> None:
-        """Remove all cached entries immediately."""
-        with self._lock:
-            self._data.clear()
-
-
-SETTINGS_CACHE_SIZE = int(os.getenv("SETTINGS_CACHE_SIZE", "2000"))  # Optimized for high-capacity
-SETTINGS_CACHE_TTL_S = int(os.getenv("SETTINGS_CACHE_TTL_S", "300"))  # 5 min - reduces Redis/DB lookups by ~80%
-
-_lru = LRUCache(maxsize=SETTINGS_CACHE_SIZE, ttl_s=SETTINGS_CACHE_TTL_S)
 
 
 def _invalidate_cache():
@@ -207,7 +167,7 @@ def _get_from_redis(key: str) -> Optional[str]:
     if not rds:
         return None
     try:
-        return decode_redis_value(rds.get(f"{REDIS_PREFIX}{key}"))
+        return decrypt(decode_redis_value(rds.get(f"{REDIS_PREFIX}{key}")))
     except Exception:
         pass
     return None
@@ -221,13 +181,25 @@ async def _get_from_redis_async(key: str) -> Optional[str]:
         rds = await get_redis_async()
         if not rds:
             return None
-        return decode_redis_value(await rds.get(f"{REDIS_PREFIX}{key}"))
+        return decrypt(decode_redis_value(await rds.get(f"{REDIS_PREFIX}{key}")))
     except Exception:
         return None
 
 
 def _get_from_db(key: str) -> Optional[str]:
-    """Read one persisted setting from MariaDB, returning ``None`` on failure."""
+    """Read one persisted setting from MariaDB.
+
+    ``None`` means "not persisted", and it also meant "the read failed" — the
+    two are indistinguishable to the caller, which then falls back to env and
+    then to the code default. An override an operator had persisted through
+    ``/admin/settings`` (disabling a broken model, say) therefore **reverted to
+    the code default without a word** whenever MariaDB was unreachable, and the
+    broken model went back to serving traffic.
+
+    The value still degrades, because refusing to answer would make every
+    setting read a hard database dependency. What changes is that it is now
+    loud: the error is logged and counted, so the reversion is visible.
+    """
     try:
         with engine.connect() as conn:
             r = conn.execute(
@@ -235,9 +207,13 @@ def _get_from_db(key: str) -> Optional[str]:
                 {"k": key},
             ).fetchone()
         if r:
-            return r[0]
-    except Exception:
-        pass
+            return decrypt(r[0])
+    except Exception as exc:
+        logger.error(
+            f"[settings] Leitura de '{key}' falhou; a reverter para env/default e a "
+            f"IGNORAR qualquer override persistido: {exc}"
+        )
+        SETTINGS_DB_READ_FAILURES.inc()
     return None
 
 
@@ -254,7 +230,7 @@ def _all_from_db() -> Optional[Dict[str, str]]:
     try:
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT setting_key, setting_value FROM settings_dynamic")).fetchall()
-        return {str(row[0]): row[1] for row in rows}
+        return {str(row[0]): decrypt(row[1]) for row in rows}
     except Exception:
         return None
 
@@ -267,7 +243,7 @@ def _many_from_redis(keys: List[str]) -> Optional[Dict[str, str]]:
     try:
         values = rds.mget([f"{REDIS_PREFIX}{key}" for key in keys])
         decoded = {key: decode_redis_value(raw) for key, raw in zip(keys, values) if raw is not None}
-        return {key: value for key, value in decoded.items() if value is not None}
+        return {key: decrypt(value) for key, value in decoded.items() if value is not None}
     except Exception:
         return None
 
@@ -396,6 +372,10 @@ class DynamicSettings(TypedSettingsMixin):
         published on the reload channel so all running processes can evict stale
         local cache entries.
         """
+        previous = _get_from_db(key)
+        # Cifra antes de tocar em MariaDB ou Redis. Sem SETTINGS_ENCRYPTION_KEY
+        # configurada isto é a identidade, portanto nada muda.
+        stored = encrypt(key, value)
         try:
             with engine.begin() as conn:
                 conn.execute(
@@ -404,12 +384,13 @@ class DynamicSettings(TypedSettingsMixin):
                         VALUES (:k, :v)
                         ON DUPLICATE KEY UPDATE setting_value = :v
                     """),
-                    {"k": key, "v": value},
+                    {"k": key, "v": stored},
                 )
         except Exception as e:
             logger.warning(f"Falha ao gravar DB ({key}): {e}")
-        _set_to_redis(key, value)
+        _set_to_redis(key, stored)
         _invalidate_cache()
+        _audit_setting_change(key, previous, value, actor, source)
         rds = _get_rds()
         if rds:
             try:
@@ -602,3 +583,43 @@ def stop_reload_listener() -> None:
     if _reload_listener_thread and _reload_listener_thread.is_alive():
         _reload_listener_thread.join(timeout=1.0)
     _reload_listener_thread = None
+
+
+def _redact(key: str, value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    # A mesma lista que a redacção da API de admin e a cifra usam: uma chave
+    # não pode ser mascarada num sítio e guardada em claro noutro.
+    return "<redigido>" if is_secret(key) else str(value)[:512]
+
+
+def _audit_setting_change(
+    key: str, previous: Optional[str], value: str, actor: str, source: str
+) -> None:
+    """Record who changed which setting, when, and from what.
+
+    ``set`` já recebia ``actor`` e ``source`` de todos os chamadores — a API de
+    admin, o updater NSGA-II, o explorador OpenRouter, o feedback de avaliação —
+    e deitava-os fora. Sem isto, qualquer resultado experimental é
+    irreprodutível: não há forma de saber que configuração estava activa no
+    instante de uma linha de query_log, nem de ver que alguém a mudou a meio.
+
+    A escrita é best-effort: uma auditoria indisponível não pode impedir uma
+    mudança de configuração, sobretudo a que desactiva um modelo avariado.
+    """
+    try:
+        from app.roadmap_features import log_audit_event
+
+        log_audit_event(
+            actor=actor,
+            action="settings.set",
+            resource=key,
+            metadata={
+                "source": source,
+                "previous": _redact(key, previous),
+                "value": _redact(key, value),
+                "changed": previous != value,
+            },
+        )
+    except Exception as exc:
+        logger.warning(f"[settings] Falha ao auditar a alteração de '{key}': {exc}")

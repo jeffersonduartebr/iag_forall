@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Optional
 
 from sqlalchemy import create_engine, text
@@ -64,6 +65,26 @@ def get_db_url(config: Optional[dict] = None) -> str:
 
 _engine: Optional[Engine] = None
 _engine_initialized: bool = False
+#: Instante (monotónico) antes do qual não se volta a tentar criar o engine.
+_engine_retry_after: float = 0.0
+#: Uma falha de arranque é quase sempre transitória; 5 s dá tempo a um restart
+#: do MariaDB sem martelar um servidor em recuperação a cada pedido.
+ENGINE_RETRY_BACKOFF_S: float = float(os.getenv("DB_ENGINE_RETRY_BACKOFF_S", "5"))
+
+
+def _connect_args() -> dict:
+    """Socket timeouts for PyMySQL, which has none by default.
+
+    ``read_timeout=None`` is the driver default: a MariaDB that accepts the
+    connection but never answers — a locked table, a saturated server — blocks
+    the calling thread indefinitely. The Redis client in this codebase sets a
+    2 s connect timeout; nobody had done it for the database.
+    """
+    return {
+        "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT_S", "5")),
+        "read_timeout": int(os.getenv("DB_READ_TIMEOUT_S", "30")),
+        "write_timeout": int(os.getenv("DB_WRITE_TIMEOUT_S", "30")),
+    }
 
 
 def _get_pool_config() -> dict:
@@ -101,14 +122,21 @@ def get_engine() -> Engine:
     Returns:
         SQLAlchemy Engine instance.
     """
-    global _engine, _engine_initialized
+    global _engine, _engine_initialized, _engine_retry_after
 
     if _engine is not None:
         return _engine
 
-    if _engine_initialized:
-        # Engine was initialized but is None (failed)
-        raise RuntimeError("Database engine initialization failed previously")
+    # Uma falha anterior não pode ser permanente. Isto levantava RuntimeError
+    # para sempre: bastavam dois segundos de MariaDB indisponível no arranque
+    # do processo — um restart, um rolling deploy — para que TODAS as chamadas
+    # seguintes falhassem durante a vida inteira do processo. O MariaDB
+    # recuperava, a API não, até alguém reiniciar o container.
+    if _engine_initialized and time.monotonic() < _engine_retry_after:
+        raise RuntimeError(
+            f"Database engine initialization failed previously; nova tentativa em "
+            f"{_engine_retry_after - time.monotonic():.1f}s"
+        )
 
     _engine_initialized = True
 
@@ -121,6 +149,7 @@ def get_engine() -> Engine:
             poolclass=QueuePool,
             pool_pre_ping=True,
             echo=False,        # Set to True for SQL debugging
+            connect_args=_connect_args(),
             **pool_cfg,
         )
 
@@ -137,8 +166,12 @@ def get_engine() -> Engine:
         return _engine
 
     except Exception as e:
-        logger.error(f"[db] Failed to create database engine: {e}")
+        # Backoff em vez de desistência definitiva: falhas de arranque são
+        # quase sempre transitórias, e martelar o MariaDB em recuperação a
+        # cada pedido também não ajuda.
         _engine = None
+        _engine_retry_after = time.monotonic() + ENGINE_RETRY_BACKOFF_S
+        logger.error(f"[db] Failed to create database engine (nova tentativa em {ENGINE_RETRY_BACKOFF_S}s): {e}")
         raise
 
 
@@ -148,7 +181,7 @@ def close_engine() -> None:
 
     Should be called during application shutdown.
     """
-    global _engine, _engine_initialized
+    global _engine, _engine_initialized, _engine_retry_after
 
     if _engine is not None:
         try:
@@ -160,6 +193,7 @@ def close_engine() -> None:
             _engine = None
 
     _engine_initialized = False
+    _engine_retry_after = 0.0
 
 
 # ==============================================================================

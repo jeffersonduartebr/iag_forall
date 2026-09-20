@@ -12,6 +12,7 @@ from typing import Dict, Optional
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
 from app.observability import logger as structlog_logger
+from app.utils.breaker_async import guarded_by
 
 from ._base import (
     BaseProvider,
@@ -19,12 +20,13 @@ from ._base import (
     get_model_cost,
 )
 from ._infra import (
+    CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
     OPENROUTER_APP_NAME,
     OPENROUTER_BASE_URL,
     OPENROUTER_HTTP_REFERER,
-    cloud_breaker,
 )
+from ._timeouts import resolve_timeout
 
 
 class OpenAIProvider(BaseProvider):
@@ -34,11 +36,18 @@ class OpenAIProvider(BaseProvider):
         """Create the OpenAI client and configure cloud-provider concurrency."""
         if _pa.AsyncOpenAI is None:
             raise ImportError("OpenAI SDK not installed")
-        self.client = _pa.AsyncOpenAI(api_key=_pa.OPENAI_API_KEY)
+        # max_retries=0: o tenacity já repete por fora (5 tentativas) e o
+        # breaker conta uma falha por pedido. Com os 2 retries internos do SDK
+        # por dentro disso, uma requisição do utilizador podia gerar até 15
+        # chamadas ao upstream — todas facturadas.
+        self.client = _pa.AsyncOpenAI(api_key=_pa.OPENAI_API_KEY, max_retries=0)
         super().__init__("openai", concurrency_limit=100)
 
+    # Breaker POR FORA do retry: um pedido do utilizador conta uma falha,
+    # não cinco. E `guarded_by` em vez de `@cloud_breaker`, que na versão
+    # síncrona do pybreaker nunca chegava a ver a excepção de um async def.
+    @guarded_by(CLOUD_BREAKERS["openai"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one OpenAI chat-completion request and normalize its output."""
         model = kwargs.get("model", "gpt-4o")
@@ -76,6 +85,9 @@ class OpenAIProvider(BaseProvider):
                 api_args["max_tokens"] = max_tokens
                 api_args["temperature"] = temperature
 
+            # Sem isto o SDK usa o seu default de 600 s e o `timeout_seconds`
+            # calculado pelo router era simplesmente ignorado.
+            api_args["timeout"] = resolve_timeout(kwargs)
             resp = await self.client.chat.completions.create(**api_args)
 
             choice = resp.choices[0]
@@ -142,14 +154,16 @@ class OpenRouterProvider(OpenAIProvider):
             os.getenv("OPENROUTER_BASE_URL", "") or OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1"
         ).strip()
         self.client = _pa.AsyncOpenAI(
+            max_retries=0,  # ver acima: o retry é do tenacity, não do SDK
             api_key=api_key,
             base_url=base_url,
             default_headers=default_headers or None,
         )
         self._api_key = api_key
 
+    # Breaker próprio: o OpenRouter falhar não pode abrir o circuito da OpenAI.
+    @guarded_by(CLOUD_BREAKERS["openrouter"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         from app.openrouter_catalog import get_openrouter_api_key
 

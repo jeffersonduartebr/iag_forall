@@ -456,18 +456,20 @@ async def add_document_local(
     modality: str = "text",
     image_b64: Optional[str] = None,
 ) -> bool:
-    """Execute the add document local routine.
+    """Store one document in the local RAG index.
 
-This helper encapsulates one focused step used by the surrounding workflow."""
+    Returns whether it was actually stored. The result of ``add_document`` used
+    to be discarded and ``True`` returned regardless, so a failed insertion was
+    indistinguishable from a successful one.
+    """
     try:
-        await add_document(
+        return await add_document(
             modality=modality,
             doc_id=doc_id,
             text=text,
             image_b64=image_b64,
             metadata=metadata,
         )
-        return True
     except Exception as e:
         logger.error(f"[rag_local] Falha ao adicionar documento {doc_id}: {e}")
         return False

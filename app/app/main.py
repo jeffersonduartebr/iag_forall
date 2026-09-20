@@ -35,7 +35,6 @@ from fastapi import APIRouter, Depends, FastAPI, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.gzip import GZipMiddleware
 
 from .api import (
     admin_auth_router,
@@ -98,6 +97,7 @@ from .schemas import (
     QueryResponse,
     QueuedQueryAcceptedResponse,
 )
+from .services.app_wiring import install_middleware
 from .services.governance_runtime import ensure_runtime_support_tables
 from .services.ollama_preload import preload_ollama_models
 from .services.query_http import execute_query, execute_query_stream
@@ -107,6 +107,7 @@ from .services.query_runtime import (  # noqa: F401  (re-export p/ query_http/te
     process_query_request,
     record_query_side_effects,
 )
+from .services.schema_check import verify_schema
 from .services.tenant_context import bind_tenant_to_request
 from .settings_dynamic import settings, start_reload_listener, stop_reload_listener, validate_critical_settings
 from .utils.background import drain as drain_background
@@ -276,12 +277,11 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             clear_correlation_id()
 
 
-# Add middleware in order (last added = first executed)
-app.add_middleware(CorrelationIdMiddleware)
-app.add_middleware(TenantRateLimitMiddleware)
-app.add_middleware(BackpressureMiddleware)
-app.add_middleware(RateLimitMiddleware)
-app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_SIZE)
+install_middleware(
+    app,
+    (CorrelationIdMiddleware, TenantRateLimitMiddleware, BackpressureMiddleware, RateLimitMiddleware),
+    gzip_min_size=GZIP_MIN_SIZE,
+)
 
 
 
@@ -315,6 +315,11 @@ async def startup_event():
     config_errors = validate_critical_settings(settings)
     if config_errors:
         raise RuntimeError("Invalid critical settings: " + "; ".join(config_errors))
+
+    # O db_init não consegue reportar uma migração falhada (o comando do compose
+    # junta os passos com `;` e termina num `echo`), por isso este é o último
+    # sítio onde um esquema desatualizado pode ser apanhado.
+    verify_schema(strict=str(settings.get("ENV", "")).strip() == "production")
 
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)

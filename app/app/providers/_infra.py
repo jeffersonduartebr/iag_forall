@@ -16,8 +16,7 @@ import warnings
 from typing import Any, Dict, List, cast
 
 import httpx
-import pybreaker
-from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
+from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 # SDKs Defensivos
 try:
@@ -47,6 +46,18 @@ except ImportError:
 
 import app.providers_async as _pa
 
+from ._breakers import (  # noqa: F401  (reexportados: o pacote inteiro importa daqui)
+    CB_FAIL_MAX,
+    CB_LOCAL_FAIL_MAX,
+    CB_LOCAL_RESET_TIMEOUT,
+    CB_RESET_TIMEOUT,
+    CLOUD_BREAKERS,
+    breaker_states,
+    cloud_breaker,
+    local_breaker,
+    reset_breakers,
+)
+
 logger = logging.getLogger("providers_async")
 
 
@@ -54,8 +65,7 @@ def reset_state() -> None:
     """Reset infra-owned mutable state (HTTP client, breakers, verified models)."""
     _pa._http_client = None
     reset_ollama_tags_cache()
-    cloud_breaker._state = pybreaker.CircuitClosedState(cloud_breaker)
-    local_breaker._state = pybreaker.CircuitClosedState(local_breaker)
+    reset_breakers()
     with _ollama_verified_models_lock:
         _ollama_verified_models.clear()
 
@@ -134,38 +144,38 @@ if AsyncAnthropic is not None:
 if genai:
     RETRYABLE_ERRORS += (ResourceExhausted, ServiceUnavailable)
 
+#: Códigos que vale a pena repetir: congestão e indisponibilidade temporária.
+#: Tudo o resto no 4xx é um problema do pedido e repeti-lo é desperdício.
+RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Retry on transport faults and congestion, never on a bad request.
+
+    `RETRYABLE_ERRORS` inclui `httpx.HTTPStatusError` e `anthropic.APIStatusError`,
+    que são as classes-base de **todos** os 4xx. Sem este filtro, uma
+    ANTHROPIC_API_KEY inválida (401) era repetida 5 vezes com recuo exponencial
+    até 60 s — cerca de dois minutos por pedido — e, com os breakers agora a
+    funcionar, abriria o circuito do provider. Um erro de configuração passaria
+    por indisponibilidade.
+    """
+    if not isinstance(exc, RETRYABLE_ERRORS):
+        return False
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    return True if status is None else int(status) in RETRYABLE_STATUS
+
+
 COMMON_RETRY_STRATEGY = retry(
     reraise=True,
     stop=stop_after_attempt(5),
     wait=wait_random_exponential(multiplier=1, max=60),
-    retry=retry_if_exception_type(RETRYABLE_ERRORS),
+    retry=retry_if_exception(_is_retryable),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 
 # ==============================================================================
-# 2. CIRCUIT BREAKERS GLOBAIS (Configurable via settings)
-# ==============================================================================
-
-# Load circuit breaker settings from dynamic configuration
-try:
-    from app.settings_dynamic import settings as dynamic_settings
-
-    CB_FAIL_MAX = dynamic_settings.CIRCUIT_BREAKER_FAIL_MAX
-    CB_RESET_TIMEOUT = dynamic_settings.CIRCUIT_BREAKER_RESET_TIMEOUT
-    CB_LOCAL_FAIL_MAX = dynamic_settings.CIRCUIT_BREAKER_LOCAL_FAIL_MAX
-    CB_LOCAL_RESET_TIMEOUT = dynamic_settings.CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT
-except Exception:
-    # Fallback defaults
-    CB_FAIL_MAX = 5
-    CB_RESET_TIMEOUT = 60
-    CB_LOCAL_FAIL_MAX = 3
-    CB_LOCAL_RESET_TIMEOUT = 30
-
-cloud_breaker = pybreaker.CircuitBreaker(fail_max=CB_FAIL_MAX, reset_timeout=CB_RESET_TIMEOUT, name="cloud_breaker")
-
-local_breaker = pybreaker.CircuitBreaker(
-    fail_max=CB_LOCAL_FAIL_MAX, reset_timeout=CB_LOCAL_RESET_TIMEOUT, name="local_breaker"
-)
 
 # ==============================================================================
 # 3. HTTP CONNECTION POOLING (Performance Optimization)

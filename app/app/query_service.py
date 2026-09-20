@@ -244,6 +244,10 @@ def ensure_query_log() -> None:
             conn.execute(
                 text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS detected_complexity VARCHAR(16) NULL")
             )
+            # Auditoria da decisão (migração 0007): candidatos, objectivos,
+            # frente de Pareto e pesos; e o id que liga a linha ao rasto.
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS decision_json LONGTEXT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(64) NULL"))
         logger.info("[query_service] Tabela 'query_log' pronta (EXTENDIDA multimodal).")
     except SQLAlchemyError as exc:
         logger.warning("[query_service] Falha ao criar tabela query_log: %s", exc)
@@ -272,6 +276,8 @@ def insert_query_log(
     q_calibrado: Optional[float] = None,
     p_entrega: Optional[float] = None,
     detected_complexity: Optional[str] = None,
+    decision: Optional[dict] = None,
+    correlation_id: Optional[str] = None,
     predicted_error_prob: Optional[float] = None,
     confidence_score: Optional[float] = None,
     confidence_band: Optional[str] = None,
@@ -311,6 +317,7 @@ def insert_query_log(
                      grounded, verification_status, knowledge_version, review_status,
                      latency_s, estimated_cost_usd, cost_per_1k, reward,
                      quality_semantics, q_tech, q_calibrado, p_entrega, detected_complexity,
+                     decision_json, correlation_id,
                      context_label, tenant_id, raw_payload)
                     VALUES
                      (:q, :m, :mod, :ip,
@@ -321,6 +328,7 @@ def insert_query_log(
                      :grounded, :verification_status, :knowledge_version, :review_status,
                      :lat, :estimated_cost_usd, :cost, :rew,
                      :quality_semantics, :q_tech, :q_calibrado, :p_entrega, :detected_complexity,
+                     :decision_json, :correlation_id,
                      :ctx, :tenant_id, :payload)
                 """),
                 {
@@ -348,6 +356,8 @@ def insert_query_log(
                     "estimated_cost_usd": estimated_cost_usd,
                     "cost": estimated_cost_usd,
                     "rew": reward,
+                    "decision_json": _safe_json(decision) if decision else None,
+                    "correlation_id": correlation_id,
                     "quality_semantics": quality_semantics or _current_semantics(),
                     "q_tech": q_tech,
                     "q_calibrado": q_calibrado,

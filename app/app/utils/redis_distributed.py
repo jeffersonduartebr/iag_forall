@@ -62,6 +62,9 @@ class RedisGlobalSemaphore:
         self._name = name
         self._limit = max(1, int(limit))
         self._acquired = False
+        #: True quando a admissão foi concedida sem ter sido contada, por o
+        #: Redis estar indisponível. O chamador tem de aplicar o limite local.
+        self.degraded = False
 
     async def acquire(self) -> bool:
         from .redis_async_ops import redis_pipeline_execute as _pipe
@@ -75,6 +78,7 @@ class RedisGlobalSemaphore:
         try:
             results = await _pipe(_build)
             if results is None:
+                self.degraded = True
                 return True
             current = int(results[0] or 0)
             if current > self._limit:
@@ -86,7 +90,11 @@ class RedisGlobalSemaphore:
             self._acquired = True
             return True
         except Exception as exc:
+            # Admite, mas marca-se degradado: o chamador tem de saber que esta
+            # admissão não foi contada em lado nenhum, senão o limite global
+            # desaparece em silêncio durante uma falha do Redis.
             logger.warning("[redis_distributed] semaphore acquire failed: %s", exc)
+            self.degraded = True
             return True
 
     async def release(self) -> None:

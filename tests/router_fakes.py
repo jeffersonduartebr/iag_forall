@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pybreaker
+
 
 class Metric:
     def __init__(self):
@@ -25,7 +27,8 @@ class Metric:
 
 def deps_for_execution():
     metric = Metric()
-    logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
+    logger = SimpleNamespace(info=lambda *a, **k: None, error=lambda *a, **k: None,
+            warning=lambda *a, **k: None)
     settings = SimpleNamespace(
         MAX_TOKENS_DEFAULT=128,
         TEMPERATURE_DEFAULT=0.3,
@@ -50,7 +53,10 @@ def deps_for_execution():
         "asyncio": SimpleNamespace(create_task=lambda coro: coro.close() if coro else None, to_thread=_to_thread),
         "settings": settings,
         "normalize_modality": lambda modality, image_b64: "vision" if image_b64 and modality == "text" else modality,
-        "_dep_cache_breaker": SimpleNamespace(current_state="closed", call_async=lambda fn, *a, **k: fn(*a, **k)),
+        # pybreaker real: o fake anterior tinha um `call_async` que funcionava,
+        # ou seja testava uma interface que a produção não conseguia usar (a do
+        # pybreaker é Tornado-only e levanta NameError).
+        "_dep_cache_breaker": pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60, name="fake_cache"),
         "_dep_uq_breaker": SimpleNamespace(current_state="closed", call=lambda fn, *a, **k: fn(*a, **k)),
         "check_cache": None,
         "_record_dependency_breaker_metrics": lambda: None,

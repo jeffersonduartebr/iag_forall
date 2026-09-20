@@ -314,41 +314,16 @@ async def maybe_store_cache(deps: Dict[str, Any], fb: FeedbackRequest, quality: 
         quietly(lambda: deps["FEEDBACK_TASK_FAILURES"].labels(stage="cache_write").inc())
 
 
-def _optional_str(value: Any) -> Optional[str]:
-    return str(value) if value else None
+from .log_fields import _formative_fields, _reliability_fields  # noqa: E402  (evita ciclo)
 
 
-def _reliability_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
-    confidence = payload.get("confidence_score")
-    return {
-        "confidence_score": float(confidence) if confidence is not None else None,
-        "confidence_band": _optional_str(payload.get("confidence_band")),
-        "abstained": bool(payload.get("abstained")),
-        "abstain_reason": _optional_str(payload.get("abstain_reason")),
-        "grounded": bool(payload.get("grounded")),
-        "verification_status": _optional_str(payload.get("verification_status")),
-        "knowledge_version": _optional_str(payload.get("knowledge_version")),
-        "review_status": _optional_str(payload.get("review_status")),
-    }
+class FeedbackPersistError(RuntimeError):
+    """The query_log row could not be written.
 
-
-def _formative_fields(quality: Quality, fb: FeedbackRequest) -> Dict[str, Any]:
-    """The formative columns for one query_log row.
-
-    ``quality_semantics`` records which meaning ``quality`` carries on this row,
-    so a later analysis never has to guess whether a number came from the rubric
-    mean or from the calibrated score.
+    Raised so the Celery task is marked FAILURE instead of SUCCESS. It is
+    deliberately *not* retried: the judges have already run and been paid for,
+    so repeating the pipeline would buy the same row twice.
     """
-    from .quality_semantics import current_semantics
-
-    rubric = quality.judge_rubric or {}
-    return {
-        "quality_semantics": current_semantics(),
-        "q_tech": rubric.get("q_tech"),
-        "q_calibrado": rubric.get("q_calibrado"),
-        "p_entrega": rubric.get("p_entrega"),
-        "detected_complexity": fb.payload.get("detected_complexity"),
-    }
 
 
 def persist_log(
@@ -398,8 +373,13 @@ def persist_log(
             **_reliability_fields(fb.payload),
         )
     except Exception as exc:
-        deps["logger"].warning(f"[Background] Log fail: {exc}")
+        # Não engolir: com o MariaDB em baixo, a tarefa Celery terminava em
+        # SUCCESS e nenhuma linha de query_log era escrita. O ciclo de
+        # aprendizagem parava em silêncio e o único sinal era um contador que
+        # ninguém tinha alertado.
+        deps["logger"].error(f"[Background] query_log NÃO foi escrito: {exc}")
         quietly(lambda: deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc())
+        raise FeedbackPersistError(str(exc)) from exc
 
 
 def observe_backlog_age(deps: Dict[str, Any], fb: FeedbackRequest, now: float) -> None:

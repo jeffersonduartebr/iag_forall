@@ -55,15 +55,12 @@ async def test_request_deduplicator_compute_cleanup_and_stats():
 @pytest.mark.asyncio
 async def test_execute_with_fallback_success_and_fail(monkeypatch):
     """Testa execute with fallback success and fail."""
-    class _Breaker:
-        """Represent `_Breaker` within this module.
-
-The class groups the state and behavior required for Breaker."""
-        async def call_async(self, fn, model):
-            """Execute the call async routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            return await fn(model)
+    # Um pybreaker real, não um fake com `call_async`. O fake anterior
+    # implementava a interface que a produção NÃO conseguia usar — a
+    # `call_async` do pybreaker é Tornado-only e levanta NameError — e foi
+    # exactamente por isso que este teste passava enquanto a cadeia de
+    # fallback estava partida em produção.
+    import pybreaker
 
     class _Manager:
         """Represent `_Manager` within this module.
@@ -83,7 +80,7 @@ The constructor keeps setup local to the object so callers can use it without ad
             """Return breaker.
 
 This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
-            return _Breaker()
+            return pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60, name=f"t_{model}")
 
     monkeypatch.setattr(rel, "get_circuit_breaker_manager", lambda: _Manager())
     monkeypatch.setattr(

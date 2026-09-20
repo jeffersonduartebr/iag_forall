@@ -224,3 +224,44 @@ class TestCacheLogic:
             # ChromaDB should not be called
             mock_emb.assert_not_called()
             mock_query.assert_not_called()
+
+
+class TestTenantIsolation:
+    """A cache lookup must never cross a tenant boundary.
+
+    ``store_cache`` always writes a ``tenant_id`` — the caller's, or ``"global"``
+    when the request carries none. The lookup used to skip the filter entirely
+    for ``"global"``, which is not "search the global space" but "search every
+    tenant's rows", so an unauthenticated request could be served an answer
+    generated for a paying customer.
+    """
+
+    @staticmethod
+    async def _captured_where(tenant_id):
+        """Run a lookup and return the ``where`` clause it sent to Chroma."""
+        seen = {}
+
+        async def _fake_query(**kwargs):
+            seen.update(kwargs)
+            return None  # miss: o teste só observa o filtro
+
+        with (
+            patch("app.semantic_cache._make_embedding", AsyncMock(return_value=[0.1, 0.2])),
+            patch("app.semantic_cache.query_embedding", _fake_query),
+        ):
+            await check_cache("uma pergunta", tenant_id=tenant_id)
+        return seen.get("where")
+
+    @pytest.mark.asyncio
+    async def test_a_tenant_only_sees_its_own_rows(self):
+        assert await self._captured_where("acme") == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_a_request_without_a_tenant_is_scoped_to_global(self):
+        """This is the regression: ``None`` here matched every tenant's rows."""
+        assert await self._captured_where(None) == {"tenant_id": "global"}
+
+    @pytest.mark.asyncio
+    async def test_the_filter_is_never_omitted(self):
+        for tenant in (None, "", "   ", "global", "acme"):
+            assert await self._captured_where(tenant) is not None, tenant

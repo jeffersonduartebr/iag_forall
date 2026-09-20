@@ -256,11 +256,16 @@ def _hit_payload(meta: Dict, similarity: float) -> Optional[Dict]:
 
 async def _semantic_lookup(q_emb, tenant_ns: str, started_at: float, full_hash: str) -> Optional[Dict]:
     """L2 stage: nearest neighbour in Chroma, above the dynamic threshold."""
+    # O filtro é incondicional de propósito. ``store_cache`` grava sempre um
+    # ``tenant_id`` — o do pedido, ou "global" quando não há nenhum — por isso
+    # omitir o ``where`` para "global" não significava "procura no espaço
+    # global": significava procurar em TODOS os tenants, e devolver a um pedido
+    # sem tenant a resposta gerada para um cliente identificado.
     results = await query_embedding(
         modality="cache",
         embedding=q_emb,
         n_results=1,
-        where={"tenant_id": tenant_ns} if tenant_ns != "global" else None,
+        where={"tenant_id": tenant_ns},
     )
     if not results:
         _observe_lookup("miss", started_at)

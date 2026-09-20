@@ -28,11 +28,7 @@ from ..observability import (
 )
 from ..schemas import QueryRequest
 from ..services.tenant_context import bind_tenant_to_request
-from ..utils.redis_distributed import (
-    compute_idempotency_key,
-    redis_idempotency_get,
-    redis_idempotency_set,
-)
+from .idempotency import _resolve_idempotency, _store_idempotency
 
 logger = logging.getLogger(__name__)
 
@@ -51,47 +47,6 @@ def _should_proactively_defer_query(req: QueryRequest, request: Request | None) 
     return _defer(req, request)
 
 
-async def _resolve_idempotency(
-    req: QueryRequest,
-    request: Request | None,
-) -> Optional[Dict[str, Any]]:
-    """Return a cached idempotent response when Redis has one."""
-    if request is None:
-        return None
-    header_key = getattr(request.state, "idempotency_key", None)
-    if not header_key:
-        return None
-    key = compute_idempotency_key(
-        tenant_id=req.tenant_id,
-        query=req.query,
-        modality=req.modality,
-        model="",
-    )
-    composite = f"{header_key}:{key}"
-    cached = await redis_idempotency_get(composite)
-    if cached and cached.get("status") == "completed":
-        return cached.get("body")
-    return None
-
-
-async def _store_idempotency(
-    req: QueryRequest,
-    request: Request | None,
-    body: Dict[str, Any],
-) -> None:
-    if request is None:
-        return
-    header_key = getattr(request.state, "idempotency_key", None)
-    if not header_key:
-        return
-    key = compute_idempotency_key(
-        tenant_id=req.tenant_id,
-        query=req.query,
-        modality=req.modality,
-        model=str(body.get("model", "")),
-    )
-    composite = f"{header_key}:{key}"
-    await redis_idempotency_set(composite, {"status": "completed", "body": body}, ttl_s=300)
 
 
 async def execute_query(

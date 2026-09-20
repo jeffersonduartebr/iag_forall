@@ -16,6 +16,7 @@ import httpx
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
 from app.observability import logger as structlog_logger
+from app.utils.breaker_async import guarded_by
 from app.utils.pricing import impute_local_cost
 
 from ._base import (
@@ -138,8 +139,8 @@ class OllamaProvider(BaseProvider):
             pass
         _mark_ollama_model_state(model, loaded=True, load_seconds=load_sec)
 
+    @guarded_by(local_breaker)
     @COMMON_RETRY_STRATEGY
-    @local_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one local Ollama request and normalize text and reasoning output."""
         model = kwargs.get("model", "phi4:latest")

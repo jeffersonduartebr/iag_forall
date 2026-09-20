@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
+from app.utils.breaker_async import guarded_by
 
 from ._base import (
     BaseProvider,
@@ -16,9 +17,10 @@ from ._base import (
     get_model_cost,
 )
 from ._infra import (
+    CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
-    cloud_breaker,
 )
+from ._timeouts import resolve_timeout
 
 
 class AnthropicProvider(BaseProvider):
@@ -28,11 +30,12 @@ class AnthropicProvider(BaseProvider):
         """Create the Anthropic client and configure cloud-provider concurrency."""
         if _pa.AsyncAnthropic is None:
             raise ImportError("Anthropic SDK not installed")
-        self.client = _pa.AsyncAnthropic(api_key=_pa.ANTHROPIC_API_KEY)
+        # max_retries=0: o retry é do tenacity, por fora. Ver _openai.py.
+        self.client = _pa.AsyncAnthropic(api_key=_pa.ANTHROPIC_API_KEY, max_retries=0)
         super().__init__("anthropic", concurrency_limit=50)
 
+    @guarded_by(CLOUD_BREAKERS["anthropic"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one Anthropic request and normalize the provider payload."""
         model = kwargs.get("model", "claude-3-5-sonnet-latest")
@@ -70,6 +73,7 @@ class AnthropicProvider(BaseProvider):
                     if anth_tool_choice:
                         create_args["tool_choice"] = anth_tool_choice
 
+            create_args["timeout"] = resolve_timeout(kwargs)
             resp = await self.client.messages.create(**create_args)
 
             # Itera blocos (text + tool_use) em vez de assumir content[0].text.

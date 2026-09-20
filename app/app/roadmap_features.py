@@ -338,7 +338,6 @@ def record_tenant_usage(
     """Accumulate daily usage for tenant."""
     if not tenant_id:
         return
-    _HOTPATH_TENANT_USAGE_CACHE.invalidate(tenant_id)
     day_key = time.strftime("%Y-%m-%d")
     month_key = time.strftime("%Y-%m")
     with get_engine().begin() as conn:
@@ -365,6 +364,10 @@ def record_tenant_usage(
                 "c": max(0.0, float(cost_usd)),
             },
         )
+    # Invalidar só depois de gravar. Ao contrário, uma escrita falhada deixava
+    # a cache vazia e a linha por contabilizar: a verificação de orçamento
+    # seguinte relia um gasto menor do que o real e deixava passar.
+    _HOTPATH_TENANT_USAGE_CACHE.invalidate(tenant_id)
 
 
 def get_usage_summary(tenant_id: Optional[str] = None) -> Dict[str, Any]:

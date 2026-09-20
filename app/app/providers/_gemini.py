@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import time
@@ -13,6 +12,8 @@ from typing import Any, Dict, NamedTuple, Optional
 
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
+from app.utils.breaker_async import guarded_by
+from app.utils.executors import run_blocking_provider
 
 from ._base import (
     BaseProvider,
@@ -21,8 +22,8 @@ from ._base import (
     get_model_cost,
 )
 from ._infra import (
+    CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
-    cloud_breaker,
     google_genai,
 )
 
@@ -125,8 +126,8 @@ class GeminiProvider(BaseProvider):
         super().__init__("gemini", concurrency_limit=60)
         self._adapter = self.GeminiAdapter()
 
+    @guarded_by(CLOUD_BREAKERS["gemini"])
     @COMMON_RETRY_STRATEGY
-    @cloud_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
         """Execute one Gemini request and normalize the response payload."""
         model_name = kwargs.get("model", "gemini-1.5-flash")
@@ -164,7 +165,10 @@ class GeminiProvider(BaseProvider):
                     response_format=kwargs.get("response_format"),
                 )
 
-            resp = await asyncio.to_thread(_call)
+            # Pool dedicado, não o executor por omissão: o SDK do Gemini é
+            # síncrono e a thread não é cancelável, por isso um Gemini lento
+            # drenava as 16 threads partilhadas e parava a aplicação inteira.
+            resp = await run_blocking_provider(_call)
             text_out, tool_calls, finish_reason = ptools.from_gemini_response(resp)
 
             p_tok = count_tokens(prompt, model_name)

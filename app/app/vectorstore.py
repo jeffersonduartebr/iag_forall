@@ -251,8 +251,14 @@ def _insert_embedding_sync(
     text: Optional[str],
     embedding: List[float],
     metadata: Optional[Dict[str, Any]],
-):
-    """Insert one embedding into Chroma with automatic recovery from dimension drift."""
+) -> bool:
+    """Insert one embedding into Chroma, recovering from dimension drift.
+
+    Returns whether the document is actually in the collection. It used to
+    return ``None`` in every case, including total failure, and the caller
+    reported success regardless — so an ingest against a dead ChromaDB answered
+    ``200 OK`` and indexed nothing.
+    """
     try:
         col = get_chroma_client().get_or_create_collection(
             name=collection_name,
@@ -265,6 +271,7 @@ def _insert_embedding_sync(
             embeddings=[_ensure_list_of_floats(embedding)],
             metadatas=[_safe_metadata(metadata)],
         )
+        return True
     except Exception as e:
         msg = str(e).lower()
         # AUTO-HEALING: Se a dimensão não bater, reseta a coleção
@@ -281,10 +288,12 @@ def _insert_embedding_sync(
                     metadatas=[_safe_metadata(metadata)],
                 )
                 logger.info("[vectorstore] ✅ Coleção recriada e documento inserido com sucesso.")
+                return True
             except Exception as e2:
                 logger.error(f"[vectorstore] ❌ Falha crítica ao recriar coleção: {e2}")
-        else:
-            logger.error(f"[vectorstore] Erro na inserção: {e}")
+                return False
+        logger.error(f"[vectorstore] Erro na inserção: {e}")
+        return False
 
 
 async def add_document(
@@ -293,13 +302,19 @@ async def add_document(
     text: Optional[str] = None,
     image_b64: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
-):
+) -> bool:
     """Embed and persist one document into the collection that matches the modality.
 
     The helper resolves the correct embedding path, computes the target
     collection name, stores the dense vector in Chroma, and mirrors the text
     payload into the sparse index when the modality participates in hybrid
     retrieval.
+
+    Returns whether the dense vector was actually stored. The sparse (BM25)
+    mirror is deliberately skipped when it was not: an entry that is findable
+    by keyword but has no vector behind it is worse than no entry at all,
+    because it looks like a successful ingest for as long as nobody searches
+    semantically.
     """
     modality = _normalize_modality(modality)
 
@@ -314,7 +329,7 @@ async def add_document(
 
     collection_name = _collection_for_modality(modality)
 
-    await asyncio.to_thread(
+    stored = await asyncio.to_thread(
         _insert_embedding_sync,
         collection_name,
         doc_id,
@@ -322,6 +337,9 @@ async def add_document(
         embedding,
         metadata,
     )
+    if not stored:
+        logger.error(f"[vectorstore] doc_id={doc_id} NÃO foi inserido em {collection_name}")
+        return False
 
     # --- 2. Processamento Esparso (BM25) ---
     # Apenas para texto ou multimodal que tenha texto
@@ -352,14 +370,20 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int, where
         return col.query(**kwargs)
     except Exception as e:
         msg = str(e).lower()
-        # AUTO-HEALING: Se a dimensão não bater na consulta, a coleção está suja.
+        # Uma consulta NUNCA destrói dados. Isto apagava a coleção inteira
+        # quando a dimensão não batia — e a causa habitual da dimensão não
+        # bater é o modelo de embeddings local ter falhado a carregar e
+        # `embed_text` ter devolvido um vetor de zeros do tamanho errado. Ou
+        # seja: uma pergunta do utilizador apagava o corpus RAG todo, e o único
+        # aviso aparecia depois do estrago. O auto-healing na escrita é
+        # defensável, porque aí já se está a mexer na coleção; na leitura não é.
         if "dimension" in msg and "match" in msg:
-            logger.warning(f"[vectorstore] Dimensão incompatível na consulta '{collection_name}'. Deletando coleção corrompida.")
-            try:
-                get_chroma_client().delete_collection(collection_name)
-                return {}
-            except Exception as del_err:
-                logger.debug(f"[vectorstore] Falha ao deletar coleção: {del_err}")
+            logger.error(
+                f"[vectorstore] Dimensão incompatível na consulta '{collection_name}': "
+                f"a coleção foi escrita com outro modelo de embeddings, ou o modelo actual "
+                f"falhou a carregar. A coleção NÃO foi apagada. {e}"
+            )
+            return {}
 
         logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
         return {}

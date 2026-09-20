@@ -79,7 +79,7 @@ from .services.router_facade import (
     route_and_answer_with_resilience,
 )
 from .services.router_feedback import process_background_feedback_impl
-from .services.router_maintenance import create_background_threads
+from .services.router_maintenance import create_background_threads, retention_loop
 from .services.router_resilience import (
     dep_cache_breaker as _dep_cache_breaker,
 )
@@ -330,20 +330,14 @@ EMA_LOG_RETENTION_DAYS = 30  # Keep logs for 30 days
 
 def _cleanup_ema_history_log() -> None:
     """Cleanup old ema_history_log entries (runs daily)."""
-    while not _bg_stop_event.is_set():
-        try:
-            with _get_db_engine().begin() as conn:
-                result = conn.execute(
-                    text("DELETE FROM ema_history_log WHERE created_at < (NOW() - INTERVAL :d DAY)"),
-                    {"d": EMA_LOG_RETENTION_DAYS},
-                )
-                deleted = result.rowcount if result else 0
-                if deleted > 0:
-                    logger.info(f"[EMA Log Cleanup] Removed {deleted} rows older than {EMA_LOG_RETENTION_DAYS} days")
-                    EMA_LOG_CLEANUP_ROWS.inc(deleted)
-        except Exception as e:
-            logger.warning(f"[EMA Log Cleanup] Error: {e}")
-        _bg_stop_event.wait(86400)  # Run once per day
+    retention_loop(
+        stop_event=_bg_stop_event,
+        table="ema_history_log",
+        days=EMA_LOG_RETENTION_DAYS,
+        engine_factory=_get_db_engine,
+        logger=logger,
+        on_deleted=EMA_LOG_CLEANUP_ROWS.inc,
+    )
 
 
 def _update_db_pool_metrics() -> None:
@@ -387,18 +381,25 @@ def _persist_ema(modality: str, model: str, record: Dict[str, Any]) -> None:
     EMA_BATCH.add(modality, model, record)
 
 def _cleanup_old_query_logs() -> None:
-    """Limpeza periódica de logs antigos."""
-    while not _bg_stop_event.is_set():
-        try:
-            ensure_query_log()
-            with _get_db_engine().begin() as conn:
-                conn.execute(
-                    text("DELETE FROM query_log WHERE created_at < (NOW() - INTERVAL :d DAY)"),
-                    {"d": LOG_RETENTION_DAYS},
-                )
-        except Exception:
-            pass
-        _bg_stop_event.wait(86400)  # Roda uma vez por dia
+    """Apaga linhas de query_log acima da retenção. ``0`` desliga a limpeza.
+
+    Esta é a tabela que sustenta toda a análise empírica, e a limpeza corria
+    com `except Exception: pass`, sem log nenhum: podia falhar todos os dias
+    durante um ano e o único sintoma seria o disco a encher. O irmão que limpa
+    `ema_history_log` já registava quantas linhas apagou.
+
+    `QUERY_LOG_RETENTION_DAYS=0` é o valor para ambientes de experiência: com o
+    default de 7 dias, uma corrida de um mês perde as três primeiras semanas
+    enquanto ainda decorre.
+    """
+    retention_loop(
+        stop_event=_bg_stop_event,
+        table="query_log",
+        days=LOG_RETENTION_DAYS,
+        engine_factory=_get_db_engine,
+        logger=logger,
+        before=ensure_query_log,
+    )
 
 
 def _cleanup_ema_history() -> None:
