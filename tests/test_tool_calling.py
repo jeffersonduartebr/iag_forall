@@ -142,7 +142,7 @@ async def test_openai_provider_forwards_tools_and_returns_tool_calls(monkeypatch
         )
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
-    monkeypatch.setattr(pa, "AsyncOpenAI", lambda api_key=None: fake_client)
+    monkeypatch.setattr(pa, "AsyncOpenAI", lambda api_key=None, **kwargs: fake_client)
     monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.1)
 
     provider = pa.OpenAIProvider()
@@ -257,7 +257,7 @@ async def test_openai_provider_forwards_response_format(monkeypatch):
         )
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
-    monkeypatch.setattr(pa, "AsyncOpenAI", lambda api_key=None: fake_client)
+    monkeypatch.setattr(pa, "AsyncOpenAI", lambda api_key=None, **kwargs: fake_client)
     monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.1)
 
     provider = pa.OpenAIProvider()
@@ -344,7 +344,7 @@ async def test_anthropic_provider_appends_json_system_suffix(monkeypatch):
         )
 
     fake_client = SimpleNamespace(messages=SimpleNamespace(create=_create))
-    monkeypatch.setattr(pa, "AsyncAnthropic", lambda api_key=None: fake_client)
+    monkeypatch.setattr(pa, "AsyncAnthropic", lambda api_key=None, **kwargs: fake_client)
     monkeypatch.setattr(pa, "get_model_cost", lambda m, p, c: 0.1)
 
     provider = pa.AnthropicProvider()

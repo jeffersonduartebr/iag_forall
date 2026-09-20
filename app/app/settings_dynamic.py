@@ -34,7 +34,7 @@ from sqlalchemy import text
 from app.observability import registry as _observability_registry
 from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
 
-from .config.settings_cache import LRUCache, _lru  # noqa: F401  (singleton partilhado)
+from .config.settings_cache import LRUCache, _lru  # noqa: F401  (reexportados: testes e chamadores externos)
 from .config.settings_catalog import (
     SETTING_METADATA,
     SETTINGS_DEFAULTS,
@@ -42,6 +42,7 @@ from .config.settings_catalog import (
     is_runtime_mutable,
     known_setting_keys,
 )
+from .config.settings_encryption import decrypt, encrypt, is_secret  # noqa: F401  (singleton partilhado)
 from .config.settings_env import DB_HOST_ENV, DB_NAME_ENV, DB_PASS_ENV, DB_PORT_ENV, DB_USER_ENV
 from .config.settings_properties import TypedSettingsMixin
 from .config.settings_sources import decode_redis_value, resolve_setting_value, resolve_setting_value_async
@@ -166,7 +167,7 @@ def _get_from_redis(key: str) -> Optional[str]:
     if not rds:
         return None
     try:
-        return decode_redis_value(rds.get(f"{REDIS_PREFIX}{key}"))
+        return decrypt(decode_redis_value(rds.get(f"{REDIS_PREFIX}{key}")))
     except Exception:
         pass
     return None
@@ -180,7 +181,7 @@ async def _get_from_redis_async(key: str) -> Optional[str]:
         rds = await get_redis_async()
         if not rds:
             return None
-        return decode_redis_value(await rds.get(f"{REDIS_PREFIX}{key}"))
+        return decrypt(decode_redis_value(await rds.get(f"{REDIS_PREFIX}{key}")))
     except Exception:
         return None
 
@@ -206,7 +207,7 @@ def _get_from_db(key: str) -> Optional[str]:
                 {"k": key},
             ).fetchone()
         if r:
-            return r[0]
+            return decrypt(r[0])
     except Exception as exc:
         logger.error(
             f"[settings] Leitura de '{key}' falhou; a reverter para env/default e a "
@@ -229,7 +230,7 @@ def _all_from_db() -> Optional[Dict[str, str]]:
     try:
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT setting_key, setting_value FROM settings_dynamic")).fetchall()
-        return {str(row[0]): row[1] for row in rows}
+        return {str(row[0]): decrypt(row[1]) for row in rows}
     except Exception:
         return None
 
@@ -242,7 +243,7 @@ def _many_from_redis(keys: List[str]) -> Optional[Dict[str, str]]:
     try:
         values = rds.mget([f"{REDIS_PREFIX}{key}" for key in keys])
         decoded = {key: decode_redis_value(raw) for key, raw in zip(keys, values) if raw is not None}
-        return {key: value for key, value in decoded.items() if value is not None}
+        return {key: decrypt(value) for key, value in decoded.items() if value is not None}
     except Exception:
         return None
 
@@ -372,6 +373,9 @@ class DynamicSettings(TypedSettingsMixin):
         local cache entries.
         """
         previous = _get_from_db(key)
+        # Cifra antes de tocar em MariaDB ou Redis. Sem SETTINGS_ENCRYPTION_KEY
+        # configurada isto é a identidade, portanto nada muda.
+        stored = encrypt(key, value)
         try:
             with engine.begin() as conn:
                 conn.execute(
@@ -380,11 +384,11 @@ class DynamicSettings(TypedSettingsMixin):
                         VALUES (:k, :v)
                         ON DUPLICATE KEY UPDATE setting_value = :v
                     """),
-                    {"k": key, "v": value},
+                    {"k": key, "v": stored},
                 )
         except Exception as e:
             logger.warning(f"Falha ao gravar DB ({key}): {e}")
-        _set_to_redis(key, value)
+        _set_to_redis(key, stored)
         _invalidate_cache()
         _audit_setting_change(key, previous, value, actor, source)
         rds = _get_rds()
@@ -581,21 +585,12 @@ def stop_reload_listener() -> None:
     _reload_listener_thread = None
 
 
-#: Chaves cujo valor nunca entra no registo de auditoria. Saber que a chave
-#: mudou, quem a mudou e quando é o que a auditoria precisa; o segredo em si
-#: só transformaria a tabela de auditoria num segundo sítio de onde vazar.
-SECRET_SETTING_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASS")
-
-
-def _is_secret(key: str) -> bool:
-    upper = key.upper()
-    return any(marker in upper for marker in SECRET_SETTING_MARKERS)
-
-
 def _redact(key: str, value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
-    return "<redigido>" if _is_secret(key) else str(value)[:512]
+    # A mesma lista que a redacção da API de admin e a cifra usam: uma chave
+    # não pode ser mascarada num sítio e guardada em claro noutro.
+    return "<redigido>" if is_secret(key) else str(value)[:512]
 
 
 def _audit_setting_change(

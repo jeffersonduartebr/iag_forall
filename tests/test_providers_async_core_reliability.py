@@ -52,7 +52,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     create = _Create()
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create.create)))
 
-    monkeypatch.setattr(pa, "AsyncOpenAI", lambda api_key=None: fake_client)
+    monkeypatch.setattr(pa, "AsyncOpenAI", lambda api_key=None, **kwargs: fake_client)
     monkeypatch.setattr(pa, "get_model_cost", lambda model, p, c: 0.123)
 
     provider = pa.OpenAIProvider()
@@ -84,7 +84,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                 usage=SimpleNamespace(input_tokens=7, output_tokens=9),
             )
 
-    monkeypatch.setattr(pa, "AsyncAnthropic", lambda api_key=None: SimpleNamespace(messages=_Messages()))
+    monkeypatch.setattr(pa, "AsyncAnthropic", lambda api_key=None, **kwargs: SimpleNamespace(messages=_Messages()))
     monkeypatch.setattr(pa, "get_model_cost", lambda model, p, c: 0.5)
 
     provider = pa.AnthropicProvider()

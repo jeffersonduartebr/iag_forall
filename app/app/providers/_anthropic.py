@@ -30,7 +30,8 @@ class AnthropicProvider(BaseProvider):
         """Create the Anthropic client and configure cloud-provider concurrency."""
         if _pa.AsyncAnthropic is None:
             raise ImportError("Anthropic SDK not installed")
-        self.client = _pa.AsyncAnthropic(api_key=_pa.ANTHROPIC_API_KEY)
+        # max_retries=0: o retry é do tenacity, por fora. Ver _openai.py.
+        self.client = _pa.AsyncAnthropic(api_key=_pa.ANTHROPIC_API_KEY, max_retries=0)
         super().__init__("anthropic", concurrency_limit=50)
 
     @guarded_by(CLOUD_BREAKERS["anthropic"])

@@ -36,7 +36,11 @@ class OpenAIProvider(BaseProvider):
         """Create the OpenAI client and configure cloud-provider concurrency."""
         if _pa.AsyncOpenAI is None:
             raise ImportError("OpenAI SDK not installed")
-        self.client = _pa.AsyncOpenAI(api_key=_pa.OPENAI_API_KEY)
+        # max_retries=0: o tenacity já repete por fora (5 tentativas) e o
+        # breaker conta uma falha por pedido. Com os 2 retries internos do SDK
+        # por dentro disso, uma requisição do utilizador podia gerar até 15
+        # chamadas ao upstream — todas facturadas.
+        self.client = _pa.AsyncOpenAI(api_key=_pa.OPENAI_API_KEY, max_retries=0)
         super().__init__("openai", concurrency_limit=100)
 
     # Breaker POR FORA do retry: um pedido do utilizador conta uma falha,
@@ -150,6 +154,7 @@ class OpenRouterProvider(OpenAIProvider):
             os.getenv("OPENROUTER_BASE_URL", "") or OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1"
         ).strip()
         self.client = _pa.AsyncOpenAI(
+            max_retries=0,  # ver acima: o retry é do tenacity, não do SDK
             api_key=api_key,
             base_url=base_url,
             default_headers=default_headers or None,
