@@ -158,16 +158,30 @@ Key settings: `NSGA_W_QUALITY`, `NSGA_W_LATENCY`, `NSGA_W_COST`, `BANDIT_EPSILON
 - Ruff for linting/formatting
 - MyPy for type checking (strict_optional, warn_redundant_casts)
 - Pre-commit hooks enforced (`.pre-commit-config.yaml`)
-- **Max 300 SLOC per file** (logical lines) in `app/app/` and `tests/`.
-  Enforced in CI via `python3 scripts/check_file_length.py`. Existing oversized files
-  are grandfathered in `scripts/sloc_baseline.json` (ratchet: they may shrink, never
-  grow); new files must be ≤300. After shrinking a baselined file, lower its ceiling
-  with `python3 scripts/check_file_length.py --update`. Refactor roadmap in
-  `docs/SLOC_REFACTOR_ROADMAP.md`.
-- **Cyclomatic complexity ≤ 20 per function** (`ruff` C901, `max-complexity = 20`).
-- **CRAP ≤ 30 per function** (CC² × (1 − cov)³ + CC): `pytest --cov=app/app --cov-report=json`
-  then `python3 scripts/crap_report.py` (ratchet in `scripts/crap_baseline.json`, same
-  `--update` flow). Coverage (lines + branches) has a CI floor (`--cov-fail-under`).
+#### The quality gate (all three are required CI checks)
+
+The three limits are one gate with three owners — each metric is enforced in
+exactly one place, so a failure names a single cause.
+
+| Limit | Owner | CI job |
+|---|---|---|
+| **SLOC < 200** per file (logical lines) | `scripts/check_file_length.py` | `lint_typecheck` |
+| **CC < 15** per function | `ruff` C901 (`max-complexity = 14`) | `lint_typecheck` |
+| **CRAP ≤ 30** per function | `scripts/crap_report.py` | `tests_unit` |
+
+CRAP = CC² × (1 − cov)³ + CC, so the three compound: every extra branch costs
+*squared* in risk and has to be paid for in coverage. CRAP lives in `tests_unit`
+because it reads the `coverage.json` that job produces; splitting it out would
+mean running the suite twice.
+
+- **SLOC** is scoped to `app/app/` and `tests/`. The 44 files already over 200
+  are grandfathered in `scripts/sloc_baseline.json` (ratchet: they may shrink,
+  never grow) — **new files must be ≤200**. After shrinking a baselined file,
+  lower its ceiling with `python3 scripts/check_file_length.py --update`.
+  Refactor roadmap in `docs/SLOC_REFACTOR_ROADMAP.md`.
+- **CRAP** has an empty baseline (`scripts/crap_baseline.json` is `{}`): nothing
+  is grandfathered, so the limit is real for every function in the repo.
+- Coverage (lines + branches) has its own CI floor (`--cov-fail-under=80`).
 - Test tooling: fakeredis fixtures (`fake_redis`, `fake_aioredis`), `fake_clock` for TTLs
   (no real sleeps), hypothesis property tests (`tests/test_properties_*.py`), schemathesis
   contract tests (`pytest -m contract tests/contract`), benchmarks
