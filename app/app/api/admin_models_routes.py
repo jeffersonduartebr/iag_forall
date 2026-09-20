@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException
@@ -30,6 +31,8 @@ from ..reliability import get_circuit_breaker_manager
 from ..settings_dynamic import settings
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 class ModelCandidatesUpdate(BaseModel):
@@ -354,4 +357,8 @@ def models_pricing(
             rows = conn.execute(text("SELECT model, cost_input_1k, cost_output_1k FROM model_pricing ORDER BY model")).mappings().all()
         return {"items": [dict(r) for r in rows]}
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Pricing unavailable: {exc}") from exc
+        # A excepção do SQLAlchemy traz o DSN: host, utilizador e base de dados.
+        # Fica no log, onde é útil, e não na resposta, onde é topologia interna
+        # entregue a quem chamou.
+        logger.error(f"[admin] Tabela de preços indisponível: {exc}")
+        raise HTTPException(status_code=503, detail="Tabela de preços indisponível.") from exc

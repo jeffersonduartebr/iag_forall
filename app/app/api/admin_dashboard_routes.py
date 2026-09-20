@@ -31,7 +31,11 @@ async def dashboard_summary(
 @router.get("/admin/dashboard/series", tags=["AdminDashboard"])
 async def dashboard_series(
     window_s: int = Query(3600, ge=60, le=86400),
-    step: str = Query("5s"),
+    # `step` ia sem validação para o `query_range` do Prometheus. Não é uma
+    # expressão PromQL — as consultas são constantes — mas `step=1s` sobre 24 h
+    # pede 86 400 pontos por série, cinco séries de cada vez, e é o chamador que
+    # escolhe. O padrão fixa a forma e o servidor impõe o mínimo.
+    step: str = Query("5s", pattern=r"^[1-9][0-9]{0,4}(ms|s|m|h)$"),
     x_admin_token: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ):
