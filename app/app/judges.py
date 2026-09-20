@@ -68,6 +68,13 @@ from .services.judge_selection import (  # noqa: F401  (reexportados)
     _choose_two,
     _score_candidate,
 )
+from .services.judge_usurpation import (
+    DEFAULT_DISAGREEMENT,
+    apply_calibration,
+    build_usurpation_prompt,
+    rate_usurpation,
+    score_usurpation,
+)
 from .settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
@@ -583,7 +590,9 @@ CORRECT ou INCORRECT
 # 📐 Rubrica de 3 dimensões (clareza, acurácia, alinhamento)
 # ============================================================
 
-async def _llm_rubric_score(query, answer, use_rag, modality, image_b64, reference=None) -> Optional[Dict[str, Any]]:
+async def _llm_rubric_score(
+    query, answer, use_rag, modality, image_b64, reference=None, scaffolding_path=None
+) -> Optional[Dict[str, Any]]:
     """Score one answer on the three-dimension rubric with two judges.
 
     Orchestration (failed judges dropped, meta-judge median on disagreement) lives
@@ -626,8 +635,29 @@ async def _llm_rubric_score(query, answer, use_rag, modality, image_b64, referen
     if rated:
         await asyncio.to_thread(_persist_rated)  # uma ida à thread para todas as gravações
     if payload is not None:
+        payload = await _calibrate_delivery(payload, query, answer, selected, weights, scaffolding_path)
         _rubric_cache.set(query, answer, payload)
     return payload
+
+
+async def _calibrate_delivery(payload, query, answer, selected, weights, scaffolding_path):
+    """Add p_entrega and Q_calibrado, behind ``JUDGE_USURPATION_ENABLED``.
+
+    A separate judge with its own prompt: asking the rubric judge to rate
+    delivery in the same pass would let the pedagogical penalty leak into the
+    accuracy score, and the product would punish the same fact twice.
+    """
+    enabled = _safe_setting_float("JUDGE_USURPATION_ENABLED", 0.0) >= 1.0
+    if not enabled:
+        return apply_calibration(payload, None, {"aggregate": "disabled"}, weights, enabled=False)
+    prompt = build_usurpation_prompt(query, answer, scaffolding_path)
+    p_entrega, info = await score_usurpation(
+        [sj.model for sj in selected],
+        lambda model: rate_usurpation(call_model, model, prompt, TEMP_JUDGE, MAX_TOKENS_JUDGE),
+        meta_model=_resolve_meta_judge_model,
+        disagreement=_safe_setting_float("JUDGE_USURPATION_DISAGREEMENT", DEFAULT_DISAGREEMENT),
+    )
+    return apply_calibration(payload, p_entrega, info, weights)
 
 
 # ============================================================

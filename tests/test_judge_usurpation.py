@@ -370,3 +370,173 @@ def test_the_referees_rating_is_also_reported():
         )
     )
     assert seen == ["a", "b", "referee"]
+
+
+# ---------------------------------------------------------------------------
+# Calibration applied to a rubric payload
+# ---------------------------------------------------------------------------
+
+
+RUBRIC_PAYLOAD = {
+    "quality": 8.0,
+    "dimensions": {"clareza": 10.0, "acuracia": 10.0, "alinhamento": 0.0},
+    "n_judges": 2,
+    "aggregate": "mean",
+}
+
+
+def test_calibration_leaves_the_rubric_quality_untouched():
+    """quality still means what the cache gate and the error predictor expect."""
+    from app.services.judge_usurpation import apply_calibration
+
+    out = apply_calibration(RUBRIC_PAYLOAD, 1.0, {}, DEFAULT_RUBRIC_WEIGHTS)
+    assert out["quality"] == 8.0
+
+
+def test_calibration_adds_the_formative_fields_beside_it():
+    from app.services.judge_usurpation import apply_calibration
+
+    out = apply_calibration(RUBRIC_PAYLOAD, 1.0, {"n_judges": 2}, DEFAULT_RUBRIC_WEIGHTS)
+    assert out["q_tech"] == pytest.approx(10.0)
+    assert out["q_calibrado"] == 0.0
+    assert out["p_entrega"] == 1.0
+    assert out["calibration_status"] == "calibrated"
+
+
+def test_an_unavailable_delivery_leaves_the_calibrated_score_equal_to_q_tech():
+    from app.services.judge_usurpation import apply_calibration
+
+    out = apply_calibration(RUBRIC_PAYLOAD, None, {}, DEFAULT_RUBRIC_WEIGHTS)
+    assert out["calibration_status"] == "unavailable"
+    assert out["q_calibrado"] == pytest.approx(out["q_tech"])
+
+
+def test_a_disabled_judge_is_labelled_as_such_not_as_a_failure():
+    """'disabled' and 'unavailable' must be distinguishable in the report."""
+    from app.services.judge_usurpation import apply_calibration
+
+    out = apply_calibration(RUBRIC_PAYLOAD, None, {}, DEFAULT_RUBRIC_WEIGHTS, enabled=False)
+    assert out["calibration_status"] == "disabled"
+
+
+def test_a_payload_without_dimensions_falls_back_to_its_quality():
+    from app.services.judge_usurpation import apply_calibration
+
+    out = apply_calibration({"quality": 7.0}, 0.0, {}, DEFAULT_RUBRIC_WEIGHTS)
+    assert out["q_tech"] == 7.0
+
+
+# ---------------------------------------------------------------------------
+# Integration, and the flag that keeps it off
+# ---------------------------------------------------------------------------
+
+
+def test_with_the_flag_off_no_extra_judge_is_called(monkeypatch):
+    """The acceptance criterion: flag off means the judging path of today."""
+    from app import judges
+
+    called = []
+    monkeypatch.setattr(judges, "_safe_setting_float", lambda key, default: 0.0 if "USURPATION" in key else default)
+    monkeypatch.setattr(judges, "score_usurpation", lambda *a, **k: called.append(1))
+
+    out = asyncio.run(
+        judges._calibrate_delivery(RUBRIC_PAYLOAD, "q", "a", [], DEFAULT_RUBRIC_WEIGHTS, None)
+    )
+    assert not called
+    assert out["calibration_status"] == "disabled"
+    assert out["quality"] == RUBRIC_PAYLOAD["quality"]
+
+
+def test_with_the_flag_on_the_usurpation_judge_runs(monkeypatch):
+    from app import judges
+
+    async def fake_score(models, rate, **kwargs):
+        return 0.75, {"n_judges": 2}
+
+    monkeypatch.setattr(judges, "_safe_setting_float", lambda key, default: 1.0 if key.endswith("ENABLED") else default)
+    monkeypatch.setattr(judges, "score_usurpation", fake_score)
+
+    out = asyncio.run(
+        judges._calibrate_delivery(RUBRIC_PAYLOAD, "q", "a", [], DEFAULT_RUBRIC_WEIGHTS, None)
+    )
+    assert out["p_entrega"] == 0.75
+    assert out["q_calibrado"] == pytest.approx(10.0 * 0.578125, abs=0.01)
+
+
+def test_the_scaffolding_path_reaches_the_prompt(monkeypatch):
+    """The link between the corpus and the judge: the reference path."""
+    from app import judges
+
+    seen = {}
+
+    async def fake_score(models, rate, **kwargs):
+        await rate("juiz")
+        return 0.5, {}
+
+    async def fake_rate(call_model, model, prompt, temperature, max_tokens):
+        seen["prompt"] = prompt
+        return 0.5, {}
+
+    monkeypatch.setattr(judges, "_safe_setting_float", lambda key, default: 1.0 if key.endswith("ENABLED") else default)
+    monkeypatch.setattr(judges, "score_usurpation", fake_score)
+    monkeypatch.setattr(judges, "rate_usurpation", fake_rate)
+
+    asyncio.run(
+        judges._calibrate_delivery(
+            RUBRIC_PAYLOAD, "q", "a", [], DEFAULT_RUBRIC_WEIGHTS, ["Identificar a formula", "Substituir"]
+        )
+    )
+    assert "CAMINHO IDEAL DE ANDAIME" in seen["prompt"]
+    assert "1. Identificar a formula" in seen["prompt"]
+
+
+# ---------------------------------------------------------------------------
+# One judge call
+# ---------------------------------------------------------------------------
+
+
+def fake_model(result):
+    async def _call(**kwargs):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    return _call
+
+
+def test_one_judge_call_returns_the_level_and_the_metadata():
+    from app.services.judge_usurpation import rate_usurpation
+
+    level, meta = asyncio.run(
+        rate_usurpation(fake_model((reply(2), {"latency": 1.5})), "m", "prompt", 0.0, 512)
+    )
+    assert level == pytest.approx(0.5)
+    assert meta["latency"] == 1.5
+
+
+def test_a_provider_failure_gives_no_level_and_empty_metadata():
+    from app.services.judge_usurpation import rate_usurpation
+
+    level, meta = asyncio.run(
+        rate_usurpation(fake_model(RuntimeError("502")), "m", "prompt", 0.0, 512)
+    )
+    assert level is None
+    assert meta == {}
+
+
+def test_an_unreadable_reply_gives_no_level_but_keeps_the_metadata():
+    """The call cost money and took time; that is still worth recording."""
+    from app.services.judge_usurpation import rate_usurpation
+
+    level, meta = asyncio.run(
+        rate_usurpation(fake_model(("texto solto", {"latency": 2.0})), "m", "prompt", 0.0, 512)
+    )
+    assert level is None
+    assert meta["latency"] == 2.0
+
+
+def test_non_dict_metadata_is_normalised_to_a_dict():
+    from app.services.judge_usurpation import rate_usurpation
+
+    _, meta = asyncio.run(rate_usurpation(fake_model((reply(0), None)), "m", "p", 0.0, 512))
+    assert meta == {}

@@ -104,6 +104,11 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "JUDGE_RUBRIC_WEIGHTS": json.dumps({"clareza": 0.3, "acuracia": 0.5, "alinhamento": 0.2}),
         # Diferença em Q (0-10) entre os dois juízes a partir da qual o meta-juiz desempata.
         "JUDGE_RUBRIC_DISAGREEMENT": "3.0",
+        # Juiz de usurpação (p_entrega). Desligado por omissão: acrescenta uma
+        # terceira chamada de juiz por julgamento e muda a semântica da nota
+        # calibrada, por isso só deve ser ligado com o resto da migração.
+        "JUDGE_USURPATION_ENABLED": "0",
+        "JUDGE_USURPATION_DISAGREEMENT": "0.5",
     },
     "providers": {
         "OPENROUTER_API_KEY": "",

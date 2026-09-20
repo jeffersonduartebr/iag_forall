@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import statistics
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .judge_rubric import _extract_json_object
 
@@ -182,6 +182,71 @@ def calibrated_quality(
 ) -> float:
     """``Q_calibrado = Q_tech * Pi(p_entrega)``, on the same 0-10 scale as Q_tech."""
     return max(0.0, min(10.0, float(q_tech) * annihilation_factor(p_entrega, gamma)))
+
+
+async def rate_usurpation(
+    call_model: Callable[..., Awaitable[Tuple[str, Any]]],
+    model: str,
+    prompt: str,
+    temperature: float,
+    max_tokens: int,
+) -> Tuple[Optional[float], Dict[str, Any]]:
+    """Ask one judge for a delivery level; ``(None, {})`` on call or parse failure.
+
+    The mirror of ``judge_rubric.rate_with_rubric``, and it fails the same way:
+    an unreadable judge is reported as ``None`` and dropped by the aggregator,
+    never coerced into a value.
+    """
+    try:
+        text_out, meta = await call_model(model=model, prompt=prompt, temperature=temperature, max_tokens=max_tokens)
+    except Exception as exc:
+        logger.warning("[Usurpation] Falha juiz %s: %s", model, exc)
+        return None, {}
+    level = parse_delivery_level(text_out)
+    if level is None:
+        logger.warning("[Usurpation] Saida de entrega ilegivel do juiz %s", model)
+    return level, (meta if isinstance(meta, dict) else {})
+
+
+def apply_calibration(
+    payload: Dict[str, Any],
+    p_entrega: Optional[float],
+    info: Dict[str, Any],
+    weights: Mapping[str, float],
+    *,
+    gamma: float = DEFAULT_GAMMA,
+    enabled: bool = True,
+) -> Dict[str, Any]:
+    """Add the formative fields to a rubric payload, leaving ``quality`` alone.
+
+    ``quality`` stays the three-dimension rubric score that the rest of the
+    system already interprets — cache gates, the error predictor, ROI, golden
+    sets. ``q_tech`` and ``q_calibrado`` are added beside it, and only the bandit
+    is meant to learn from the calibrated one.
+
+    ``calibration_status`` is what keeps a failed judgement out of the formative
+    report instead of counting as a well-scaffolded answer.
+    """
+    from .judge_rubric import TECH_DIMENSIONS, weighted_quality
+
+    dimensions = payload.get("dimensions") or {}
+    q_tech = weighted_quality(dimensions, weights, TECH_DIMENSIONS) if dimensions else payload.get("quality", 0.0)
+
+    if not enabled:
+        status = "disabled"
+    elif p_entrega is None:
+        status = "unavailable"
+    else:
+        status = "calibrated"
+
+    return {
+        **payload,
+        "q_tech": q_tech,
+        "p_entrega": p_entrega,
+        "q_calibrado": calibrated_quality(q_tech, p_entrega, gamma),
+        "calibration_status": status,
+        "usurpation": info,
+    }
 
 
 async def score_usurpation(
