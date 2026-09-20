@@ -14,8 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY ./app /app
 
 # Instala requisitos específicos
-COPY ./app/requirements.metaopt.txt /app/requirements.txt
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# uv: resolução e instalação a partir de um lock com hash por pacote.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
+COPY ./app/requirements.metaopt.lock /app/requirements.lock
+RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.lock
 
 ENV PYTHONUTF8=1 \
     PYTHONIOENCODING=UTF-8 \

@@ -61,3 +61,7 @@ tqdm
 tabulate
 
 # Dev / QA: ver requirements-dev.txt na raiz do repositório.
+
+# Instalado ad-hoc no Dockerfile até aqui, portanto sem versão fixa e fora do
+# lock. Declarado para entrar na resolução como o resto.
+gunicorn==23.0.0

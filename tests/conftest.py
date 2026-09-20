@@ -146,86 +146,99 @@ def _isolate_experiment_manifests(monkeypatch, tmp_path):
     monkeypatch.setenv("EXPERIMENT_MANIFEST_DIR", str(tmp_path / "experiment_manifests"))
 
 
-@pytest.fixture(autouse=True)
-def mock_dependencies(monkeypatch):
-    """
-    Mocka automaticamente conexões externas para TODOS os testes.
-    """
-    try:
-        import app.settings_dynamic as settings_dynamic_module
+def _quietly(action, catching=Exception) -> None:
+    """Run one reset step. A module this test never imported is not a failure.
 
-        settings_dynamic_module._lru.clear()
-        settings_dynamic_module._last_prime = 0.0
-    except Exception:
-        pass
+    Isto era uma dúzia de ``try/except`` iguais dentro da fixture: ramos que não
+    decidem nada mas que faziam dela a função mais complexa do repositório.
+    """
     try:
+        action()
+    except catching:
+        pass
+
+
+def _clear_module_caches() -> None:
+    """Process-level caches that would otherwise carry state across tests."""
+
+    def _settings():
+        import app.settings_dynamic as module
+
+        module._lru.clear()
+        module._last_prime = 0.0
+
+    def _cold_contexts():
         from app.services.bandit_stats_store import cold_contexts
 
         cold_contexts.clear()
-    except Exception:
-        pass
-    judges_module = sys.modules.get("app.judges")
-    if judges_module is not None:
-        judges_module._judge_stats_cache.clear()
-    ema_module = sys.modules.get("app.services.ema_store")
-    if ema_module is not None:
-        ema_module.reset_ema_snapshots()
-    calibration_module = sys.modules.get("app.services.judge_calibration")
-    if calibration_module is not None:
-        calibration_module._table_ready = False
 
-    mock_engine = _make_mock_db_engine()
-    try:
+    _quietly(_settings)
+    _quietly(_cold_contexts)
+
+    # Só se o módulo já tiver sido importado: importá-lo aqui mudaria o que o
+    # teste mede.
+    for name, reset in (
+        ("app.judges", lambda m: m._judge_stats_cache.clear()),
+        ("app.services.ema_store", lambda m: m.reset_ema_snapshots()),
+        ("app.services.judge_calibration", lambda m: setattr(m, "_table_ready", False)),
+    ):
+        module = sys.modules.get(name)
+        if module is not None:
+            reset(module)
+
+
+def _mock_database(monkeypatch, engine) -> None:
+    """Point every database entry point at one in-memory fake."""
+
+    def _patch_app_db():
         import app.db as db_module
 
         db_module._engine = None
         db_module._engine_initialized = False
-        monkeypatch.setattr("app.db.get_engine", lambda: mock_engine)
-        monkeypatch.setattr("app.db.check_db_health", lambda: {"healthy": True, "latency_ms": 1.0, "pool_stats": {"status": "ok"}})
-    except Exception:
-        pass
+        monkeypatch.setattr("app.db.get_engine", lambda: engine)
+        monkeypatch.setattr(
+            "app.db.check_db_health",
+            lambda: {"healthy": True, "latency_ms": 1.0, "pool_stats": {"status": "ok"}},
+        )
 
-    # Mock Redis
+    _quietly(_patch_app_db)
+    # Fallback para módulos que ainda chamam create_engine diretamente.
+    _quietly(
+        lambda: monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine),
+        catching=(ModuleNotFoundError, AttributeError),
+    )
+
+
+def _mock_redis(monkeypatch) -> None:
+    """Synchronous Redis becomes a MagicMock; the async client becomes absent."""
     mock_redis = MagicMock()
-    try:
+
+    async def _mock_get_redis_async():
+        return None
+
+    def _patch():
         monkeypatch.setattr("app.utils.redis_client.get_redis", lambda *args: mock_redis)
         monkeypatch.setattr("app.settings_dynamic.get_redis", lambda *args: mock_redis)
-
-        async def _mock_get_redis_async():
-            return None
-
         monkeypatch.setattr("app.utils.redis_client.get_redis_async", _mock_get_redis_async)
         monkeypatch.setattr("app.utils.redis_client._async_redis_client", None)
-    except (ImportError, AttributeError):
-        pass  # Ignora se os módulos não existirem
 
-    # Mock SQLAlchemy Engine (fallback for modules that still call create_engine directly)
-    try:
-        monkeypatch.setattr("sqlalchemy.create_engine", lambda *args, **kwargs: mock_engine)
-    except (ModuleNotFoundError, AttributeError):
-        pass
+    _quietly(_patch, catching=(ImportError, AttributeError))
 
-    # Mock ChromaDB
-    try:
-        monkeypatch.setattr("chromadb.PersistentClient", MagicMock())
-    except (ImportError, AttributeError):
-        pass
 
-    try:
+def _reset_runtime_singletons(monkeypatch) -> None:
+    """Module-level singletons that survive between tests unless reset."""
+
+    def _providers():
         from app.providers_async import reset_provider_runtime_state
 
         reset_provider_runtime_state()
-    except Exception:
-        pass
 
-    try:
+    def _dedup():
         from app.reliability import RequestDeduplicator
 
         RequestDeduplicator._instance = None
-    except Exception:
-        pass
 
-    try:
+    def _resilience():
         async def _noop_record_request_outcome_async(*, settings_getter, success):
             return None
 
@@ -233,8 +246,25 @@ def mock_dependencies(monkeypatch):
             "app.services.router_resilience.record_request_outcome_async",
             _noop_record_request_outcome_async,
         )
-    except Exception:
-        pass
+
+    _quietly(_providers)
+    _quietly(_dedup)
+    _quietly(_resilience)
+
+
+@pytest.fixture(autouse=True)
+def mock_dependencies(monkeypatch):
+    """
+    Mocka automaticamente conexões externas para TODOS os testes.
+    """
+    _clear_module_caches()
+    _mock_database(monkeypatch, _make_mock_db_engine())
+    _mock_redis(monkeypatch)
+    _quietly(
+        lambda: monkeypatch.setattr("chromadb.PersistentClient", MagicMock()),
+        catching=(ImportError, AttributeError),
+    )
+    _reset_runtime_singletons(monkeypatch)
 
     # Mock Settings Defaults para consistência
     monkeypatch.setenv("NSGA_W_QUALITY", "1.0")

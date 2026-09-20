@@ -5,3 +5,5 @@ numpy
 redis
 sqlalchemy
 pymysql
+# Instalado ad-hoc no Dockerfile.db-init até aqui.
+python-dotenv==1.0.1

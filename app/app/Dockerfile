@@ -16,26 +16,19 @@ WORKDIR /app
 
 # Copia os arquivos da aplicação
 COPY ./app /app/app
-COPY ./requirements.txt /app/requirements.txt
 
 # ==============================
 #   STAGE 2 - Dependências
 # ==============================
 FROM base AS deps
 
-# Força atualização e instalação dos pacotes necessários
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir \
-        fastapi \
-        uvicorn[standard] \
-        pydantic==2.12.0 \
-        pydantic-settings==2.5.2 \
-        litellm \
-        numpy \
-        onnxruntime \
-        prometheus_client \
-        aiohttp \
-        httpx
+# uv: resolução e instalação a partir de um lock com hash por pacote.
+# A lista solta que existia aqui divergia de requirements.txt (pydantic 2.12.0
+# contra o pin real), e uma imagem que instala outras versões não reproduz nada.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
+COPY ./requirements.lock /app/requirements.lock
+
+RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.lock
 
 # ==============================
 #   STAGE 3 - Execução

@@ -14,7 +14,7 @@ async def _async_result(value):
 @pytest.mark.asyncio
 async def test_preload_ollama_models_download_flow(monkeypatch):
     """preload_ollama_models should exercise the download path without real IO."""
-    from app import main
+    from app.services import ollama_preload as main
 
     monkeypatch.setenv("CANDIDATE_MODELS_LIST", '["ollama/phi4:latest"]')
     monkeypatch.setenv("JUDGE_MODELS", "[]")
@@ -72,7 +72,7 @@ async def test_preload_ollama_models_download_flow(monkeypatch):
 @pytest.mark.asyncio
 async def test_preload_ollama_models_skips_available_and_handles_lookup_error(monkeypatch):
     """preload_ollama_models should skip cached tags and tolerate tag lookup failures."""
-    from app import main
+    from app.services import ollama_preload as main
 
     monkeypatch.setenv("CANDIDATE_MODELS_LIST", "ollama/phi4:latest")
     monkeypatch.setenv("JUDGE_MODELS", "[]")

@@ -33,12 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # =========================================================
 # 📦 Instala dependências Python
 # =========================================================
-COPY requirements.txt /app/requirements.txt
+# uv: resolução e instalação a partir de um lock com hash por pacote.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
+COPY requirements.lock /app/requirements.lock
 
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.txt && \
-    pip install --no-cache-dir gunicorn && \
-    pip install --no-cache-dir python-dotenv
+RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.lock
 
 # =========================================================
 # 🧩 Configuração de ambiente

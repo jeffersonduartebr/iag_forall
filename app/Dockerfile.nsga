@@ -27,14 +27,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY ./app /app/app
-COPY ./app/requirements.nsga.txt /app/requirements.nsga.txt
+# uv: resolução e instalação a partir de um lock com hash por pacote.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
+COPY ./app/requirements.nsga.lock /app/requirements.nsga.lock
 
 # ---------------------------------------------------------
 # 📦 Instala dependências Python
 # ---------------------------------------------------------
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-RUN pip install -r /app/requirements.nsga.txt
-RUN pip install --no-cache-dir prometheus_client redis sqlalchemy pymysql deap fastapi uvicorn python-dotenv
+RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.nsga.lock
 
 # ---------------------------------------------------------
 # ⚙️ Variáveis de ambiente padrão
