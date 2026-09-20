@@ -39,9 +39,11 @@ class TestLRUCache:
 
     def test_cache_ttl_expiry(self, fake_clock):
         """Test TTL expiry."""
-        import app.settings_dynamic as settings_dynamic
+        # A LRUCache mudou-se para config.settings_cache; o relógio falso tem
+        # de apontar ao módulo onde o `time.monotonic` é realmente chamado.
+        import app.config.settings_cache as settings_cache
 
-        clock = fake_clock(settings_dynamic)
+        clock = fake_clock(settings_cache)
         cache = LRUCache(maxsize=10, ttl_s=1)  # 1 second TTL
 
         cache.set("key1", "value1")

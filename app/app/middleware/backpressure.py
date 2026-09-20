@@ -154,6 +154,16 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
             limit = max(1, int(settings.MAX_CONCURRENT_REQUESTS))
             redis_sem = RedisGlobalSemaphore("global-api", limit)
             acquired = await redis_sem.acquire()
+            if acquired and redis_sem.degraded:
+                # O semáforo distribuído admite em caso de falha do Redis. Sem
+                # a rede de segurança local isso significava que, com o Redis
+                # em baixo, MAX_CONCURRENT_REQUESTS deixava simplesmente de
+                # existir: tudo entrava, tudo ficava à espera no semáforo do
+                # Ollama, e nenhum 503 era devolvido.
+                backpressure = get_backpressure()
+                acquired = await backpressure.acquire()
+                if not acquired:
+                    redis_sem = None
         else:
             backpressure = get_backpressure()
             acquired = await backpressure.acquire()

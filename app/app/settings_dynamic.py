@@ -26,13 +26,15 @@ import logging
 import os
 import threading
 import time
-from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
+from prometheus_client import Counter
 from sqlalchemy import text
 
+from app.observability import registry as _observability_registry
 from app.utils.redis_client import ensure_redis_connected, get_redis_async_safe
 
+from .config.settings_cache import LRUCache, _lru  # noqa: F401  (singleton partilhado)
 from .config.settings_catalog import (
     SETTING_METADATA,
     SETTINGS_DEFAULTS,
@@ -48,6 +50,14 @@ from .config.settings_validation import _read_setting  # noqa: F401  (reexportad
 from .config.settings_validation import validate_critical_settings as _validate_critical_settings
 
 logger = logging.getLogger(__name__)
+
+#: Definida aqui, junto ao consumidor: `observability` está acima do limite de
+#: SLOC e o registry é o mesmo, portanto /metrics não muda.
+SETTINGS_DB_READ_FAILURES = Counter(
+    "settings_db_read_failures_total",
+    "Persisted setting reads that fell back to env/defaults because MariaDB failed",
+    registry=_observability_registry,
+)
 
 # ============================================================
 # Redis / Banco básicos
@@ -135,57 +145,6 @@ except Exception as e:
 # ============================================================
 
 
-class LRUCache:
-    """Small thread-safe cache used to reduce repeated settings lookups.
-
-    The cache stores resolved setting values for a short period because many
-    runtime paths read the same keys on every request. It is deliberately simple
-    and only supports the operations needed by the settings facade.
-    """
-
-    def __init__(self, maxsize: int = 512, ttl_s: int = 30):
-        """Create a bounded cache with LRU eviction and optional TTL."""
-        self.maxsize = maxsize
-        self.ttl_s = ttl_s
-        self._lock = threading.Lock()
-        self._data: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
-
-    def get(self, key: str) -> Optional[Any]:
-        """Return a cached value when present and still fresh."""
-        now = time.time()
-        with self._lock:
-            if key not in self._data:
-                return None
-            value, ts = self._data[key]
-            if self.ttl_s > 0 and (now - ts) > self.ttl_s:
-                try:
-                    del self._data[key]
-                except KeyError:
-                    pass
-                return None
-            self._data.move_to_end(key)
-            return value
-
-    def set(self, key: str, value: Any) -> None:
-        """Insert or refresh one cached setting value."""
-        now = time.time()
-        with self._lock:
-            if key in self._data:
-                self._data.move_to_end(key)
-            self._data[key] = (value, now)
-            if len(self._data) > self.maxsize:
-                self._data.popitem(last=False)
-
-    def clear(self) -> None:
-        """Remove all cached entries immediately."""
-        with self._lock:
-            self._data.clear()
-
-
-SETTINGS_CACHE_SIZE = int(os.getenv("SETTINGS_CACHE_SIZE", "2000"))  # Optimized for high-capacity
-SETTINGS_CACHE_TTL_S = int(os.getenv("SETTINGS_CACHE_TTL_S", "300"))  # 5 min - reduces Redis/DB lookups by ~80%
-
-_lru = LRUCache(maxsize=SETTINGS_CACHE_SIZE, ttl_s=SETTINGS_CACHE_TTL_S)
 
 
 def _invalidate_cache():
@@ -227,7 +186,19 @@ async def _get_from_redis_async(key: str) -> Optional[str]:
 
 
 def _get_from_db(key: str) -> Optional[str]:
-    """Read one persisted setting from MariaDB, returning ``None`` on failure."""
+    """Read one persisted setting from MariaDB.
+
+    ``None`` means "not persisted", and it also meant "the read failed" — the
+    two are indistinguishable to the caller, which then falls back to env and
+    then to the code default. An override an operator had persisted through
+    ``/admin/settings`` (disabling a broken model, say) therefore **reverted to
+    the code default without a word** whenever MariaDB was unreachable, and the
+    broken model went back to serving traffic.
+
+    The value still degrades, because refusing to answer would make every
+    setting read a hard database dependency. What changes is that it is now
+    loud: the error is logged and counted, so the reversion is visible.
+    """
     try:
         with engine.connect() as conn:
             r = conn.execute(
@@ -236,8 +207,14 @@ def _get_from_db(key: str) -> Optional[str]:
             ).fetchone()
         if r:
             return r[0]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error(
+            "[settings] Leitura de '%s' falhou; a reverter para env/default e a IGNORAR "
+            "qualquer override persistido: %s",
+            key,
+            exc,
+        )
+        SETTINGS_DB_READ_FAILURES.inc()
     return None
 
 
