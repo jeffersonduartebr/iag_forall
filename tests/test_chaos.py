@@ -246,66 +246,20 @@ class TestCacheFailureChaos:
         assert cache.get("key4") == "value4"
 
     @pytest.mark.asyncio
-    async def test_redis_unavailable_fallback(self):
-        """System should fallback gracefully when Redis is unavailable."""
-        # Mock Redis to fail
-        with patch('app.utils.redis_client.get_redis', return_value=None):
-            from app.utils.redis_client import get_redis
-            redis = get_redis()
-            assert redis is None
-            # System should continue working without Redis
+    async def test_redis_unavailable_fallback(self, monkeypatch):
+        """A settings read must survive Redis being gone.
+
+        This used to patch ``get_redis`` to return ``None`` and then assert
+        that ``get_redis()`` returned ``None`` — it tested the patch, not the
+        system. What matters is that a caller downstream still gets an answer.
+        """
+        from app.settings_dynamic import settings
+
+        monkeypatch.setattr("app.settings_dynamic._get_rds", lambda: None)
+        assert settings.get("CHAVE_QUE_NAO_EXISTE", "default") == "default"
 
 
-class TestProviderFailureChaos:
-    """Tests provider failure scenarios."""
-
-    @pytest.mark.asyncio
-    async def test_provider_rate_limit_error(self):
-        """System should handle provider rate limit errors."""
-        from app.error_handling import ErrorCategory, classify_exception
-
-        class RateLimitError(Exception):
-            """Represent `RateLimitError` within this module.
-
-The class groups the state and behavior required for RateLimitError."""
-            pass
-
-        category, severity, retry = classify_exception(RateLimitError())
-        # Should be classified appropriately
-        assert retry is True or category == ErrorCategory.UNKNOWN
-
-    @pytest.mark.asyncio
-    async def test_provider_auth_error(self):
-        """System should handle provider auth errors."""
-        from app.error_handling import ErrorCategory, classify_exception
-
-        class AuthenticationError(Exception):
-            """Represent `AuthenticationError` within this module.
-
-The class groups the state and behavior required for AuthenticationError."""
-            pass
-
-        category, severity, retry = classify_exception(AuthenticationError())
-        assert category == ErrorCategory.PROVIDER_AUTH_ERROR
-        assert retry is False  # Auth errors shouldn't be retried
-
-    @pytest.mark.asyncio
-    async def test_fallback_chain_execution(self):
-        """Fallback chain should try alternative models."""
-
-        call_count = {"count": 0}
-
-        async def failing_execute(model: str):
-            """Execute the failing execute routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-            call_count["count"] += 1
-            if call_count["count"] < 3:
-                raise Exception(f"Model {model} failed")
-            return f"Success with {model}"
-
-        # This test verifies the fallback mechanism structure
-        # Actual execution would require model registry setup
+# TestProviderFailureChaos: extraído para tests/test_chaos_providers.py
 
 
 class TestConcurrencyChaos:

@@ -107,6 +107,7 @@ from .services.query_runtime import (  # noqa: F401  (re-export p/ query_http/te
     process_query_request,
     record_query_side_effects,
 )
+from .services.schema_check import verify_schema
 from .services.tenant_context import bind_tenant_to_request
 from .settings_dynamic import settings, start_reload_listener, stop_reload_listener, validate_critical_settings
 from .utils.background import drain as drain_background
@@ -314,6 +315,11 @@ async def startup_event():
     config_errors = validate_critical_settings(settings)
     if config_errors:
         raise RuntimeError("Invalid critical settings: " + "; ".join(config_errors))
+
+    # O db_init não consegue reportar uma migração falhada (o comando do compose
+    # junta os passos com `;` e termina num `echo`), por isso este é o último
+    # sítio onde um esquema desatualizado pode ser apanhado.
+    verify_schema(strict=str(settings.get("ENV", "")).strip() == "production")
 
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
