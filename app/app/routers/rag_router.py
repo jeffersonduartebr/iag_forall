@@ -162,12 +162,22 @@ async def add_doc(
             except Exception as e:
                 logger.error(f"[rag_router] Falha ao inserir fragmento {idx}: {e}")
 
+        # Um upload em que nada entrou é uma falha, não um sucesso com zero.
+        # Devolver 200 aqui é o que fazia o utilizador acreditar que o ficheiro
+        # estava indexado enquanto o ChromaDB estava em baixo.
+        if fragments and inserted_count == 0:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Nenhum dos {len(fragments)} fragmentos foi indexado (vectorstore indisponível)",
+            )
+
         return {
             "file": filename,
             "title": title,
             "summary": summary,
             "fragments_total": len(fragments),
             "fragments_inserted": inserted_count,
+            "partial": inserted_count < len(fragments),
             "collection": "text_embeddings"
         }
 
