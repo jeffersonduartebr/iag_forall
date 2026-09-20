@@ -10,10 +10,9 @@ genuine defect in the router.
 import json
 
 import pytest
+from app.services.error_responses import handle_unexpected
 from fastapi import Request
 from sqlalchemy.exc import OperationalError
-
-from app.services.error_responses import handle_unexpected
 
 
 def a_request():
