@@ -28,9 +28,11 @@ fileConfig(config.config_file_name)
 # -----------------------------------------------------------
 # Construção da URL dinâmica do banco
 # -----------------------------------------------------------
+# A porta vem de DB_PORT: fixá-la em 3306 impedia o alembic de alcançar a base
+# por qualquer porta publicada que não fosse a de dentro da rede do compose.
 DB_URL = (
     f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASS}"
-    f"@{settings.DB_HOST}:3306/{settings.DB_NAME}"
+    f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
 )
 
 target_metadata = None   # Não usamos autogenerate baseado em models.py
@@ -54,6 +56,26 @@ This function coordinates the main execution path for that step."""
 # -----------------------------------------------------------
 # Modo online
 # -----------------------------------------------------------
+#: Alembic creates ``alembic_version.version_num`` as VARCHAR(32) and offers no
+#: way to configure it. This project's revision identifiers are descriptive and
+#: some exceed that — ``0004_openrouter_exploration_stats`` is 33 characters —
+#: so an upgrade fails mid-run with "Data too long for column", after earlier
+#: revisions have already been applied. Widening the column up front makes the
+#: chain runnable on a fresh database as well as on an existing one.
+VERSION_TABLE_DDL = (
+    "CREATE TABLE IF NOT EXISTS alembic_version ("
+    " version_num VARCHAR(255) NOT NULL,"
+    " CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+)
+VERSION_COLUMN_WIDENING = "ALTER TABLE alembic_version MODIFY version_num VARCHAR(255) NOT NULL"
+
+
+def ensure_version_table(connection) -> None:
+    """Make sure the version table can hold this project's revision identifiers."""
+    connection.exec_driver_sql(VERSION_TABLE_DDL)
+    connection.exec_driver_sql(VERSION_COLUMN_WIDENING)
+
+
 def run_migrations_online():
     """Run migrations online.
 
@@ -61,6 +83,8 @@ This function coordinates the main execution path for that step."""
     engine = create_engine(DB_URL, poolclass=pool.NullPool)
 
     with engine.connect() as connection:
+        ensure_version_table(connection)
+        connection.commit()
         context.configure(connection=connection)
 
         with context.begin_transaction():
