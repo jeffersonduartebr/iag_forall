@@ -230,9 +230,8 @@ app.include_router(feedback_router)
 app.include_router(ops_router)
 app.include_router(openai_compat_router)
 
-_cors_origins = os.getenv(
-    "ADMIN_UI_CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:8082,http://127.0.0.1:8082",
+_cors_origins = str(
+    settings.get("ADMIN_UI_CORS_ORIGINS", "http://localhost:5173,http://localhost:8082,http://127.0.0.1:8082")
 )
 app.add_middleware(
     CORSMiddleware,
@@ -530,8 +529,12 @@ async def v1_route_query(req: QueryRequest, request: Request | None = None, auth
     Version one currently preserves the exact behavior of `/query`; the wrapper
     exists so clients can pin to an explicit API version before future route
     evolution introduces incompatible changes.
+
+    ``auth`` era aceite e descartado: o contexto resolvido por
+    ``require_api_auth`` não chegava a jusante, logo o orçamento do tenant e o
+    dono registado num job ficavam vazios para quem entrasse por /v1.
     """
-    return await route_query(req, request)
+    return await route_query(req, request, auth)
 
 
 @v1_router.post("/query", response_model=QueryResponse | QueuedQueryAcceptedResponse)

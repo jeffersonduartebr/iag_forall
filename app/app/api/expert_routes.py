@@ -26,6 +26,7 @@ from ..services.expert_review import (
     submit_expert_assessment,
     update_expert_profile,
 )
+from ..settings_dynamic import settings
 
 router = APIRouter()
 
@@ -34,13 +35,33 @@ _ADMIN_MANAGE_ROLES = ["platform_admin", "eval_admin", "governance_admin", "admi
 
 
 def _expert_id(x_user_id: Optional[str], auth: dict, authorization: Optional[str] = None) -> str:
-    if x_user_id and str(x_user_id).strip():
-        return str(x_user_id).strip()[:128]
+    """Whose data this request acts on.
+
+    O cabeçalho ``X-User-Id`` vinha **primeiro**, antes do JWT. Um perito
+    autenticado bastava enviar o id de outro para ler e escrever como ele: o
+    perfil, o email e o telefone do colega, as avaliações dele, e sobretudo as
+    etiquetas humanas que calibram o juiz. Um cabeçalho que o cliente escolhe
+    não pode ter precedência sobre uma identidade assinada.
+
+    O cabeçalho continua a ser aceite — é como os serviços internos e a
+    federação de identidade se apresentam — mas só quando não há JWT, e só se
+    ``TRUST_HEADER_ROLES`` disser que esta instalação confia em cabeçalhos.
+    """
     jwt_user, _, _ = _roles_from_jwt(authorization)
     if jwt_user:
         return str(jwt_user).strip()[:128]
+    if x_user_id and str(x_user_id).strip() and _header_identity_trusted():
+        return str(x_user_id).strip()[:128]
     username = auth.get("username") or auth.get("authorized_by") or "anonymous"
     return str(username)[:128]
+
+
+def _header_identity_trusted() -> bool:
+    """Whether ``X-User-Id`` may name the acting user on this deployment."""
+    try:
+        return str(settings.get("TRUST_HEADER_ROLES", "0")).strip() == "1"
+    except Exception:
+        return False
 
 
 @router.get("/admin/experts/accounts", tags=["Experts"])

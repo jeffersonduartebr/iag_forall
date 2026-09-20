@@ -35,6 +35,46 @@ from ..tasks import task_execute_eval_run
 router = APIRouter()
 
 
+#: Papéis que podem ler uma corrida de avaliação.
+_RUN_READER_ROLES = ["eval_viewer", "eval_admin", "researcher", "platform_admin"]
+
+
+def _authorized_run(
+    run_id: str,
+    *,
+    admin_token,
+    user_id,
+    user_roles_header,
+    authorization,
+    required_roles,
+):
+    """Authenticate, then load the run, then authorise for the run's tenant.
+
+    A ordem importa. Estes handlers carregavam a corrida **antes** de verificar
+    credenciais, o que dava duas coisas a um chamador anónimo: distinguir 404
+    ("não existe") de 401 ("existe, mas não és tu") — um oráculo de existência
+    sobre ids de corridas — e forçar uma consulta à base de dados em cada
+    pedido, sem credenciais nenhumas.
+
+    Não basta trocar as duas linhas de sítio: a autorização é por tenant, e o
+    tenant só se conhece depois de carregar a corrida. Daí as duas fases —
+    autenticar primeiro sem âmbito, autorizar depois com ele.
+    """
+    kwargs = dict(
+        admin_token=admin_token,
+        user_id=user_id,
+        user_roles_header=user_roles_header,
+        authorization=authorization,
+        required_roles=required_roles,
+    )
+    require_admin_or_role(**kwargs)
+    run = get_eval_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    require_admin_or_role(**kwargs, tenant_id=run.get("tenant_id"))
+    return run
+
+
 @router.post("/admin/evals/runs", tags=["Eval"])
 def create_eval(
     payload: EvalRunCreateRequest,
@@ -132,9 +172,14 @@ def execute_eval(
     authorization: Optional[str] = Header(None),
 ):
     """Enqueue asynchronous eval execution in Celery."""
-    run = get_eval_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    run = _authorized_run(
+        run_id,
+        admin_token=x_admin_token,
+        user_id=x_user_id,
+        user_roles_header=x_user_roles,
+        authorization=authorization,
+        required_roles=["eval_admin", "researcher", "platform_admin"],
+    )
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
@@ -181,16 +226,13 @@ def get_eval(
     authorization: Optional[str] = Header(None),
 ):
     """Get eval run details."""
-    run = get_eval_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
-    require_admin_or_role(
+    run = _authorized_run(
+        run_id,
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
         authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-        tenant_id=run.get("tenant_id"),
+        required_roles=_RUN_READER_ROLES,
     )
     return run
 
@@ -223,16 +265,13 @@ def get_eval_results(
     authorization: Optional[str] = Header(None),
 ):
     """Get individual result rows for one eval run."""
-    run = get_eval_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
-    require_admin_or_role(
+    _authorized_run(
+        run_id,
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
         authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-        tenant_id=run.get("tenant_id"),
+        required_roles=_RUN_READER_ROLES,
     )
     return {"run_id": run_id, "items": list_eval_run_results(run_id, limit=limit)}
 
@@ -246,16 +285,13 @@ def get_eval_significance(
     authorization: Optional[str] = Header(None),
 ):
     """Get significance report for model comparisons in one eval run."""
-    run = get_eval_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
-    require_admin_or_role(
+    _authorized_run(
+        run_id,
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
         authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-        tenant_id=run.get("tenant_id"),
+        required_roles=_RUN_READER_ROLES,
     )
     return eval_significance_report(run_id)
 
@@ -269,16 +305,13 @@ def get_eval_academic_report(
     authorization: Optional[str] = Header(None),
 ):
     """Full academic report: significance, UQ calibration, expert kappa, manifest."""
-    run = get_eval_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
-    require_admin_or_role(
+    run = _authorized_run(
+        run_id,
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
         authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-        tenant_id=run.get("tenant_id"),
+        required_roles=_RUN_READER_ROLES,
     )
     results = list_eval_run_results(run_id, limit=5000)
     metadata = run.get("metadata") or {}
@@ -401,16 +434,13 @@ def get_eval_gate_report(
     authorization: Optional[str] = Header(None),
 ):
     """Evaluate one run against the gates attached to its golden set, when configured."""
-    run = get_eval_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
-    require_admin_or_role(
+    run = _authorized_run(
+        run_id,
         admin_token=x_admin_token,
         user_id=x_user_id,
         user_roles_header=x_user_roles,
         authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-        tenant_id=run.get("tenant_id"),
+        required_roles=_RUN_READER_ROLES,
     )
     metadata = run.get("metadata") or {}
     golden_set_id = metadata.get("golden_set_id")
