@@ -8,6 +8,27 @@ Multi-Objective LLM Router System that intelligently orchestrates multiple langu
 
 ## Common Commands
 
+### Dependencies (uv)
+The `.txt` files are the editable source; the `.lock` files are what CI and every
+image actually install, with a sha256 per package (`--require-hashes`). A `.txt`
+edited without regenerating its lock is silently ignored — the lock still wins.
+
+```bash
+# Install the dev environment from the lock
+uv pip sync --require-hashes requirements-dev.lock
+
+# After editing any requirements*.txt — regenerate and commit the lock
+scripts/lock_requirements.sh              # all of them
+scripts/lock_requirements.sh app/requirements.txt   # just one
+```
+
+| Lock | Source | Consumed by |
+|---|---|---|
+| `requirements-dev.lock` | `requirements-dev.txt` | CI (all 6 jobs) |
+| `app/requirements.lock` | `app/requirements.txt` | `app/Dockerfile`, `Dockerfile.metaopt` |
+| `app/requirements-db.lock` | `app/requirements-db.txt` | `app/Dockerfile.db-init` |
+| `app/requirements.{correlation,dash,nsga}.lock` | matching `.txt` | matching Dockerfile |
+
 ### Running the Application
 ```bash
 # Full stack with Docker Compose

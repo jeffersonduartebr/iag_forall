@@ -25,7 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 📦 Copia arquivos da aplicação
 # ---------------------------------------------------------
 COPY ./app /app/app
-COPY ./app/requirements.dash.txt /app/requirements.dash.txt
+# uv: resolução e instalação a partir de um lock com hash por pacote.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
+COPY ./app/requirements.dash.lock /app/requirements.dash.lock
 COPY ./app/prestart_dash.sh /app/prestart_dash.sh
 
 RUN chmod +x /app/prestart_dash.sh
@@ -33,10 +35,7 @@ RUN chmod +x /app/prestart_dash.sh
 # ---------------------------------------------------------
 # 🧩 Instala dependências Python
 # ---------------------------------------------------------
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install -r /app/requirements.dash.txt && \
-    pip install dash==2.17.1 dash-bootstrap-components==1.6.0 && \
-    pip install gunicorn python-dotenv
+RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.dash.lock
 
 # ---------------------------------------------------------
 # ⚙️ Variáveis padrão

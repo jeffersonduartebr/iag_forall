@@ -33,7 +33,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 WORKDIR /app
 COPY ./app /app/app
-COPY ./app/requirements.correlation.txt /app/requirements.correlation.txt
+# uv: resolução e instalação a partir de um lock com hash por pacote.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
+COPY ./app/requirements.correlation.lock /app/requirements.correlation.lock
 
 # ------------------------------------------------------------
 
@@ -41,9 +43,7 @@ COPY ./app/requirements.correlation.txt /app/requirements.correlation.txt
 
 # ------------------------------------------------------------
 
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel  
-RUN pip install -r /app/requirements.correlation.txt  
-RUN pip install --no-cache-dir prometheus_client pandas numpy redis sqlalchemy pymysql
+RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.correlation.lock  
 
 # ------------------------------------------------------------
 

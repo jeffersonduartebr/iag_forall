@@ -1,5 +1,6 @@
 # Dependências de desenvolvimento e teste (fora da imagem de produção).
-# Uso: pip install -r requirements-dev.txt
+# Uso: uv pip sync --require-hashes requirements-dev.lock
+# (este ficheiro e a fonte; o lock e gerado com scripts/lock_requirements.sh)
 -r app/requirements.txt
 
 # Test runner e cobertura
