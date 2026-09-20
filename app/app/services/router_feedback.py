@@ -12,6 +12,7 @@ import time
 from typing import Any, Dict, Optional
 
 from .feedback_stages import (
+    FeedbackPersistError,
     FeedbackRequest,
     assess_error_risk,
     decide_judging,
@@ -66,7 +67,13 @@ async def process_background_feedback_impl(
         update_ema(deps, state, fb, quality)
         await maybe_store_cache(deps, fb, quality)
         persist_log(deps, fb, quality, decision.should_judge, risk, reward)
+    except FeedbackPersistError:
+        # Já registada e contada em persist_log; propaga para a tarefa falhar.
+        raise
     except Exception as exc:
+        # Um erro inesperado de estágio continua tolerado e registado: propagá-lo
+        # poria a tarefa em retry, e repetir o pipeline volta a pagar os juízes.
+        # Só a falha de escrita do log (acima) é que faz a tarefa falhar.
         quietly(lambda: deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc())
         deps["logger"].exception(f"[Background] Critical fail: {exc}")
     finally:

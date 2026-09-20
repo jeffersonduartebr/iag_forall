@@ -27,7 +27,8 @@ class Metric:
 
 def deps_for_execution():
     metric = Metric()
-    logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
+    logger = SimpleNamespace(info=lambda *a, **k: None, error=lambda *a, **k: None,
+            warning=lambda *a, **k: None)
     settings = SimpleNamespace(
         MAX_TOKENS_DEFAULT=128,
         TEMPERATURE_DEFAULT=0.3,

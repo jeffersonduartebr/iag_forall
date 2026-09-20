@@ -26,12 +26,13 @@ from .roadmap_features import (
     get_eval_run,
     update_eval_run_status,
 )
-
-# Importamos a lógica do core aqui dentro para evitar ciclos de importação no topo
-# se o router_core importar tasks.py
 from .router_core import process_background_feedback
 from .schemas import QueryJobStatus
 from .services.eval_runner import EvalRunOptions, frozen_settings, run_eval_prompts, summarize
+
+# Importamos a lógica do core aqui dentro para evitar ciclos de importação no topo
+# se o router_core importar tasks.py
+from .services.feedback_stages import FeedbackPersistError
 
 logger = logging.getLogger("celery_tasks")
 
@@ -140,6 +141,12 @@ def task_process_feedback(
         )
         logger.info(f"[Celery] Feedback concluído com sucesso para {chosen_model}.")
 
+    except FeedbackPersistError as e:
+        # A linha não foi escrita, mas os juízes já correram e já foram pagos.
+        # Repetir o pipeline compraria a mesma linha duas vezes, por isso a
+        # tarefa falha sem retry: o valor aqui é deixar de reportar SUCCESS.
+        logger.error(f"[Celery] Feedback não persistido para {chosen_model}: {e}")
+        raise
     except Exception as e:
         logger.error(f"[Celery] Falha ao processar feedback: {e}")
         # Re-lança para o Celery tentar novamente (retry) com backoff exponencial

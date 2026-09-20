@@ -101,13 +101,21 @@ class EMABatchQueue:
         """Hook for metrics update in router_core."""
 
     def _flush_locked(self) -> int:
+        """Persist first, clear second.
+
+        The order was the other way round: the queue was emptied and only then
+        handed to ``_persist_batch``. A two-second blip in MariaDB therefore
+        discarded up to ``max_size`` EMA observations that were already in
+        memory and could simply have been retried on the next flush.
+        """
         if not self._queue:
             return 0
         items = list(self._queue.items())
+        persisted = self._persist_batch(items)
         self._queue.clear()
         self._on_queue_size_changed(0)
         self._last_flush = time.time()
-        return self._persist_batch(items)
+        return persisted
 
     def _persist_batch(self, items: list) -> int:
         """Hook for persistence in router_core."""

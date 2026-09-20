@@ -6,6 +6,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from app.services.feedback_stages import FeedbackPersistError
 from app.services.router_feedback import process_background_feedback_impl
 from router_fakes import Metric
 
@@ -65,7 +66,8 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
         "compute_judge_probability": lambda **kwargs: 1.0,
         "settings": SimpleNamespace(JUDGE_MIN_SAMPLE_RATE=0.0),
         "logger": SimpleNamespace(
-            info=lambda *a, **k: None, warning=lambda *a, **k: None, exception=lambda *a, **k: None
+            info=lambda *a, **k: None, error=lambda *a, **k: None,
+            warning=lambda *a, **k: None, exception=lambda *a, **k: None
         ),
         "judge_answer": _judge_answer,
         "compute_reward": lambda *a, **k: 0.7,
@@ -149,7 +151,8 @@ async def test_router_feedback_skips_judge_when_background_is_throttled():
             get=lambda key, default=None: {"JUDGE_BACKGROUND_THROTTLE_ENABLED": "1"}.get(key, default),
         ),
         "logger": SimpleNamespace(
-            info=lambda *a, **k: None, warning=lambda *a, **k: None, exception=lambda *a, **k: None
+            info=lambda *a, **k: None, error=lambda *a, **k: None,
+            warning=lambda *a, **k: None, exception=lambda *a, **k: None
         ),
         "judge_answer": lambda *a, **k: (_ for _ in ()).throw(RuntimeError("judge should not run")),
         "compute_reward": lambda *a, **k: 0.5,
@@ -210,7 +213,8 @@ async def test_router_feedback_skips_judge_when_query_backlog_exists():
             }.get(key, default),
         ),
         "logger": SimpleNamespace(
-            info=lambda *a, **k: None, warning=lambda *a, **k: None, exception=lambda *a, **k: None
+            info=lambda *a, **k: None, error=lambda *a, **k: None,
+            warning=lambda *a, **k: None, exception=lambda *a, **k: None
         ),
         "judge_answer": lambda *a, **k: (_ for _ in ()).throw(RuntimeError("judge should not run")),
         "compute_reward": lambda *a, **k: 0.5,
@@ -295,6 +299,7 @@ async def test_router_feedback_covers_failure_branches():
         "settings": SimpleNamespace(JUDGE_MIN_SAMPLE_RATE=0.0),
         "logger": SimpleNamespace(
             info=lambda *a, **k: None,
+            error=lambda *a, **k: None,
             warning=lambda msg: warnings.append(msg),
             exception=lambda msg: exceptions.append(msg),
         ),
@@ -312,19 +317,25 @@ async def test_router_feedback_covers_failure_branches():
         "FEEDBACK_BACKLOG_AGE": metric,
         "FEEDBACK_TASK_FAILURES": metric,
     }
-    await process_background_feedback_impl(
-        deps=deps,
-        state={"EMA_HISTORY": _History()},
-        query="q",
-        answer="a",
-        chosen_model="ollama/m1",
-        modality="text",
-        latency_s=0.2,
-        cost_val=0.01,
-    )
+    # Todos os estágios falham neste cenário; o último a falhar é a escrita do
+    # log, e é a única falha que passa a propagar.
+    with pytest.raises(FeedbackPersistError):
+        await process_background_feedback_impl(
+            deps=deps,
+            state={"EMA_HISTORY": _History()},
+            query="q",
+            answer="a",
+            chosen_model="ollama/m1",
+            modality="text",
+            latency_s=0.2,
+            cost_val=0.01,
+        )
     assert warnings
 
     deps["_get_ctx_stats"] = lambda _ctx: (_ for _ in ()).throw(RuntimeError("ctx fail"))
+    # Um erro inesperado num estágio inicial continua tolerado e registado:
+    # propagá-lo poria a tarefa em retry, e repetir o pipeline volta a pagar
+    # os juízes. Só a escrita do log é que faz a tarefa falhar.
     await process_background_feedback_impl(
         deps=deps,
         state={"EMA_HISTORY": _History()},
