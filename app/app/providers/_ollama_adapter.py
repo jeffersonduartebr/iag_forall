@@ -9,7 +9,7 @@ import json
 import re
 import time
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -38,6 +38,19 @@ from ._ollama import (
 )
 
 
+def _split_reasoning(raw_text: str, raw_thinking: str) -> Tuple[str, Optional[str]]:
+    """Separate an inline ``<think>`` block from the answer.
+
+    Some models emit the reasoning inside the response text, others return it
+    on Ollama's own ``thinking`` field. The inline block wins when both exist,
+    because it is the one that would otherwise leak into the answer.
+    """
+    match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
+    if match:
+        return re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip(), match.group(1).strip()
+    return raw_text, raw_thinking or None
+
+
 class OllamaProvider(BaseProvider):
     """Call local Ollama models with adaptive timeout and concurrency controls.
 
@@ -60,6 +73,71 @@ class OllamaProvider(BaseProvider):
             self.semaphore = asyncio.Semaphore(new_limit)
             logger.info("[ollama] Updated concurrency limit to %s", new_limit)
 
+    async def _chat_call(self, client, *, model, prompt, image_b64, options, timeout, ollama_format, is_reasoning, kwargs):
+        """POST ``/api/chat`` — the multi-turn and tool-calling path.
+
+        ``is_reasoning`` is accepted and ignored: this endpoint has no separate
+        thinking channel, and taking the same arguments as
+        :meth:`_generate_call` is what lets the caller pick one without a
+        branch around every parameter.
+        """
+        canonical_messages = ptools.build_provider_messages(
+            prompt, kwargs.get("system_prompt"), kwargs.get("messages"), image_b64
+        )
+        chat_payload: Dict[str, Any] = {
+            "model": model,
+            "messages": ptools.to_ollama_messages(canonical_messages),
+            "stream": False,
+            "options": options,
+        }
+        tools = kwargs.get("tools")
+        if tools and not ptools.tools_disabled(kwargs.get("tool_choice")):
+            chat_payload["tools"] = tools
+        if ollama_format is not None:
+            chat_payload["format"] = ollama_format
+        resp = await client.post(f"{self.host}/api/chat", json=chat_payload, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        text_out, tool_calls, finish_reason = ptools.from_ollama_chat(data)
+        return data, text_out, tool_calls, finish_reason, None
+
+    async def _generate_call(self, client, *, model, prompt, image_b64, options, timeout, ollama_format, is_reasoning, kwargs):
+        """POST ``/api/generate`` — the single-turn path, with a reasoning channel."""
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            # Avoid empty final answers on models that support a separate
+            # thinking channel (for example qwen3.5) unless we explicitly
+            # want reasoning output.
+            "think": is_reasoning,
+            "options": options,
+        }
+        if image_b64:
+            payload["images"] = [image_b64]
+        if ollama_format is not None:
+            payload["format"] = ollama_format
+        resp = await client.post(f"{self.host}/api/generate", json=payload, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        text_out, reasoning = _split_reasoning(
+            data.get("response", "").strip(), data.get("thinking", "").strip()
+        )
+        return data, text_out, None, "stop", reasoning
+
+    def _record_load(self, model: str, load_sec: float) -> None:
+        """Model-load telemetry. A metrics backend must never break a response."""
+        if load_sec > 0:
+            try:
+                _pa.OLLAMA_MODEL_LOAD_SECONDS.labels(model=model).observe(load_sec)
+            except Exception:
+                pass
+        try:
+            _pa.OLLAMA_MODEL_LOADED.labels(model=model).set(1)
+        except Exception:
+            pass
+        _mark_ollama_model_state(model, loaded=True, load_seconds=load_sec)
+
     @COMMON_RETRY_STRATEGY
     @local_breaker
     async def generate(self, prompt: str, image_b64: Optional[str] = None, **kwargs) -> LLMResponse:
@@ -69,7 +147,6 @@ class OllamaProvider(BaseProvider):
         self._refresh_concurrency_limit()
 
         tools = kwargs.get("tools")
-        tool_choice = kwargs.get("tool_choice")
         messages = kwargs.get("messages")
         # Structured outputs: Ollama usa o campo ``format`` ("json" ou JSON Schema).
         ollama_format = ptools.to_ollama_format(kwargs.get("response_format"))
@@ -104,59 +181,18 @@ class OllamaProvider(BaseProvider):
             )
             client = await get_http_client()
 
-            tool_calls = None
-            finish_reason = "stop"
-
-            if use_chat:
-                canonical_messages = ptools.build_provider_messages(
-                    prompt, kwargs.get("system_prompt"), messages, image_b64
-                )
-                chat_payload: Dict[str, Any] = {
-                    "model": model,
-                    "messages": ptools.to_ollama_messages(canonical_messages),
-                    "stream": False,
-                    "options": options,
-                }
-                if tools and not ptools.tools_disabled(tool_choice):
-                    chat_payload["tools"] = tools
-                if ollama_format is not None:
-                    chat_payload["format"] = ollama_format
-                resp = await client.post(f"{self.host}/api/chat", json=chat_payload, timeout=timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                text_out, tool_calls, finish_reason = ptools.from_ollama_chat(data)
-                reasoning = None
-            else:
-                payload = {
-                    "model": model,
-                    "prompt": final_prompt,
-                    "stream": False,
-                    # Avoid empty final answers on models that support a separate
-                    # thinking channel (for example qwen3.5) unless we explicitly
-                    # want reasoning output.
-                    "think": is_reasoning_model,
-                    "options": options,
-                }
-                if image_b64:
-                    payload["images"] = [image_b64]
-                if ollama_format is not None:
-                    payload["format"] = ollama_format
-                resp = await client.post(f"{self.host}/api/generate", json=payload, timeout=timeout)
-                resp.raise_for_status()
-                data = resp.json()
-
-                raw_text = data.get("response", "").strip()
-                raw_thinking = data.get("thinking", "").strip()
-
-                reasoning = None
-                text_out = raw_text
-
-                think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
-                if think_match:
-                    reasoning = think_match.group(1).strip()
-                    text_out = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-                elif raw_thinking:
-                    reasoning = raw_thinking
+            call = self._chat_call if use_chat else self._generate_call
+            data, text_out, tool_calls, finish_reason, reasoning = await call(
+                client,
+                model=model,
+                prompt=prompt if use_chat else final_prompt,
+                image_b64=image_b64,
+                options=options,
+                timeout=timeout,
+                ollama_format=ollama_format,
+                is_reasoning=is_reasoning_model,
+                kwargs=kwargs,
+            )
 
             load_ns = data.get("load_duration", 0)
             load_sec = float(load_ns) / 1_000_000_000.0
@@ -171,16 +207,7 @@ class OllamaProvider(BaseProvider):
 
             self._record_metrics(model, latency, cost, True)
             self._record_generation_metrics(model, c_tok, latency)
-            if load_sec > 0:
-                try:
-                    _pa.OLLAMA_MODEL_LOAD_SECONDS.labels(model=model).observe(load_sec)
-                except Exception:
-                    pass
-            try:
-                _pa.OLLAMA_MODEL_LOADED.labels(model=model).set(1)
-            except Exception:
-                pass
-            _mark_ollama_model_state(model, loaded=True, load_seconds=load_sec)
+            self._record_load(model, load_sec)
 
             return LLMResponse(
                 text=text_out,

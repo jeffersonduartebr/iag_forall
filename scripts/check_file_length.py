@@ -16,7 +16,8 @@ into more logical lines and never merges them, the on-disk logical count is alwa
 Recording the baseline needs ruff (a developer action); it falls back to the
 on-disk logical count if ruff is unavailable.
 
-Scope: ``app/app/**/*.py`` and ``tests/**/*.py``.
+Scope: ``app/app/**/*.py`` and ``tests/**/*.py``. Limit: 200 logical lines —
+a file that no longer fits on a couple of screens is one nobody reviews whole.
 
 Modes:
 - (default)   Fail if any in-scope file exceeds its allowed SLOC. The allowance is
@@ -41,7 +42,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = ROOT / "scripts" / "sloc_baseline.json"
-MAX_SLOC = 300
+MAX_SLOC = 200
 SCAN_ROOTS = [ROOT / "app" / "app", ROOT / "tests"]
 EXCLUDED_DIR_NAMES = {"__pycache__"}
 

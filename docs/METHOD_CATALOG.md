@@ -153,23 +153,6 @@ Resumo do arquivo: correlation_metrics.py — Cálculo, exposição e armazename
 - `persist_correlations(corr_data)` (`app/app/correlation_metrics.py:306`): Salva correlações no banco de dados (correlation_history).
 - `main()` (`app/app/correlation_metrics.py:338`): Executa main.
 
-## `app/app/dash_control_panel.py`
-
-Resumo do arquivo: Módulo principal: descreve responsabilidades e integrações deste arquivo.
-
-### Funções de módulo
-
-- `get_system_status()` (`app/app/dash_control_panel.py:46`): Obtém system status.
-- `get_dynamic_settings()` (`app/app/dash_control_panel.py:63`): CORRIGIDO: Lê as configurações do módulo centralizado (Redis > DB > .env).
-- `save_dynamic_settings(data)` (`app/app/dash_control_panel.py:74`): CORRIGIDO: Salva usando settings.set() para persistir em Redis + DB.
-- `fetch_query_history(limit)` (`app/app/dash_control_panel.py:90`): CORRIGIDO: Lê da tabela 'query_log' e colunas corretas.
-- `get_nsga_weights()` (`app/app/dash_control_panel.py:108`): NOTA: Esta função lê uma tabela 'nsga_weights' com colunas 'objective' e 'weight'.
-- `update_nsga_weight(objective, new_value)` (`app/app/dash_control_panel.py:130`): CORRIGIDO: Adicionado conn.commit()
-- `render_content(tab)` (`app/app/dash_control_panel.py:174`): Executa render content.
-- `save_variables(n_clicks, temp, tokens, top_p, bandit)` (`app/app/dash_control_panel.py:261`): Executa save variables.
-- `refresh_history(n_clicks)` (`app/app/dash_control_panel.py:280`): Executa refresh history.
-- `update_nsga_weights_callback(n, w_acc, w_lat, w_cost)` (`app/app/dash_control_panel.py:293`): Executa update nsga weights callback.
-
 ## `app/app/db.py`
 
 Resumo do arquivo: db.py — Centralized Database Connection Management

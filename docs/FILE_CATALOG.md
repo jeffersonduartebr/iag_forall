@@ -14,7 +14,6 @@ Escopo: código Python do projeto (`app/app`, `app`, `alembic`, `tests`).
 | `app/app/config/constants.py` | constants.py — Application Constants | 0 | 0 |
 | `app/app/correlation.py` | correlation.py — Request Correlation ID Infrastructure | 1 | 4 |
 | `app/app/correlation_metrics.py` | correlation_metrics.py — Cálculo, exposição e armazenamento histórico das correlações multiobjetivo (NSGA-II) | 0 | 10 |
-| `app/app/dash_control_panel.py` | Módulo principal: descreve responsabilidades e integrações deste arquivo. | 0 | 10 |
 | `app/app/db.py` | db.py — Centralized Database Connection Management | 1 | 6 |
 | `app/app/db_manager.py` | db_manager.py (FULL SCHEMA + PRICING SEED) | 0 | 5 |
 | `app/app/drift_detector.py` | drift_detector.py — Query Distribution Drift Detection | 1 | 2 |

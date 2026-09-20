@@ -11,8 +11,10 @@ select = ["E", "F", "W", "I", "N", "C901"]
 ignore = ["E501", "E701", "E731"]
 
 [tool.ruff.lint.mccabe]
-# Portão de complexidade ciclomática: nenhuma função acima de 20 (ver scripts/crap_report.py).
-max-complexity = 20
+# Portão de complexidade ciclomática: CC < 15, ou seja nenhuma função acima de 14.
+# Entra no CRAP como CC² · (1 − cov)³ + CC, por isso cada ramo a mais custa ao
+# quadrado em risco e obriga a mais cobertura para o compensar (scripts/crap_report.py).
+max-complexity = 14
 
 [tool.ruff.lint.per-file-ignores]
 # Propriedades de settings usam UPPER_CASE para espelhar as chaves de ambiente.

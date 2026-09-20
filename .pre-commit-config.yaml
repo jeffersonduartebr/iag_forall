@@ -1,5 +1,5 @@
 # Pre-commit hooks para o Roteador Multiobjetivo de LLMs.
-# Uso: pip install pre-commit && pre-commit install && pre-commit run --all-files
+# Uso: uv tool install pre-commit && pre-commit install && pre-commit run --all-files
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.20

@@ -30,11 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # =========================================================
 # 📦 Instala dependências Python
 # =========================================================
-COPY requirements-db.txt /app/requirements-db.txt
+COPY requirements-db.txt /app/requirements-db.lock
 
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements-db.txt && \
-    pip install --no-cache-dir python-dotenv
+RUN uv pip install --system --no-cache --require-hashes -r /app/requirements-db.lock
 
 # =========================================================
 # 🧩 Configuração de ambiente
