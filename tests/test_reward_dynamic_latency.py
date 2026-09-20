@@ -170,3 +170,19 @@ def test_the_feedback_stage_passes_the_token_count():
 
     source = inspect.getsource(feedback_stages.update_bandit)
     assert "completion_tokens=fb.completion_tokens" in source
+
+
+def test_a_failing_metric_does_not_break_the_reward(monkeypatch):
+    """Observability is best-effort; a broken gauge must not stop a routing decision."""
+
+    class Exploding:
+        def labels(self, **kwargs):
+            raise RuntimeError("registry indisponivel")
+
+    import app.observability as observability
+
+    monkeypatch.setattr(observability, "REWARD_WEIGHT", Exploding())
+    monkeypatch.setattr(observability, "REWARD_WEIGHTS_SOURCE", Exploding())
+    weights, source = reward.load_reward_weights("text")
+    assert len(weights) == 3
+    assert source

@@ -289,3 +289,84 @@ def test_without_a_path_the_prompt_makes_no_reference_to_one():
 def test_the_prompt_warns_that_length_is_not_delivery():
     prompt = build_usurpation_prompt("q", "a")
     assert "longa" in prompt and "curta" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Remaining defensive branches
+# ---------------------------------------------------------------------------
+
+
+def test_a_non_numeric_level_falls_through_to_the_fraction():
+    """A judge that wrote a word where a number belonged is not silently zero."""
+    assert parse_delivery_level('<entrega>{"nivel_entrega": "alto"}</entrega>') is None
+
+
+def test_a_non_numeric_level_with_a_usable_fraction_is_recovered():
+    text = '<entrega>{"nivel_entrega": "alto", "p_entrega": 0.6}</entrega>'
+    assert parse_delivery_level(text) == pytest.approx(0.6)
+
+
+def test_a_non_numeric_fraction_is_rejected():
+    assert parse_delivery_level('<entrega>{"p_entrega": "muito"}</entrega>') is None
+
+
+def test_a_nan_fraction_is_rejected():
+    assert parse_delivery_level('<entrega>{"p_entrega": NaN}</entrega>') is None
+
+
+def test_no_referee_is_called_when_none_is_configured():
+    """Without a meta-judge the two disagreeing judges are simply aggregated."""
+    value, info = asyncio.run(score_usurpation(["a", "b"], rater({"a": 0.0, "b": 1.0})))
+    assert info["n_judges"] == 2
+    assert value == pytest.approx(0.5)
+
+
+def test_a_referee_resolver_that_returns_nothing_is_respected():
+    value, info = asyncio.run(
+        score_usurpation(["a", "b"], rater({"a": 0.0, "b": 1.0}), meta_model=lambda: None)
+    )
+    assert info["n_judges"] == 2
+
+
+def test_a_referee_that_answers_unreadably_is_dropped():
+    value, info = asyncio.run(
+        score_usurpation(
+            ["a", "b"],
+            rater({"a": 0.0, "b": 1.0, "referee": None}),
+            meta_model=lambda: "referee",
+        )
+    )
+    assert info["n_judges"] == 2
+
+
+def test_three_judges_are_not_sent_to_a_referee():
+    """The referee exists to break a tie between two, not to add a fourth opinion."""
+    called = []
+    value, info = asyncio.run(
+        score_usurpation(
+            ["a", "b", "c"],
+            rater({"a": 0.0, "b": 1.0, "c": 0.5}),
+            meta_model=lambda: called.append(1) or "referee",
+        )
+    )
+    assert info["n_judges"] == 3
+    assert not called
+
+
+def test_the_dispersion_of_the_judges_is_reported():
+    _, info = asyncio.run(score_usurpation(["a", "b"], rater({"a": 0.25, "b": 1.0})))
+    assert info["dispersion"] == pytest.approx(0.75)
+
+
+def test_the_referees_rating_is_also_reported():
+    """The caller persists every judge's rating, the referee included."""
+    seen = []
+    asyncio.run(
+        score_usurpation(
+            ["a", "b"],
+            rater({"a": 0.0, "b": 1.0, "referee": 0.5}),
+            meta_model=lambda: "referee",
+            on_rating=lambda m, v, i: seen.append(m),
+        )
+    )
+    assert seen == ["a", "b", "referee"]
