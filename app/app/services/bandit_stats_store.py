@@ -19,9 +19,19 @@ import time
 from collections import OrderedDict
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
+from prometheus_client import Counter
 from sqlalchemy import text
 
+from app.observability import registry as _registry
+
 logger = logging.getLogger("app.bandits")
+
+#: Divergência Redis/MariaDB: enquanto o Redis viver, ninguém repara.
+BANDIT_DB_PERSIST_FAILURES = Counter(
+    "bandit_db_persist_failures_total",
+    "Bandit posteriors written to Redis but not to MariaDB",
+    registry=_registry,
+)
 
 ModelStats = Dict[str, float]
 ContextStats = Dict[str, ModelStats]
@@ -148,7 +158,12 @@ def upsert_stats_db(get_engine: Callable[[], Any], updates: Iterable[Tuple[str, 
         with get_engine().begin() as conn:
             conn.execute(_UPSERT_SQL, params)
     except Exception as e:
-        logger.warning(f"[bandit] Falha no batch upsert DB ({len(params)} rows): {e}")
+        # `error`, não `warning`: a leitura prefere o Redis, por isso uma
+        # escrita falhada aqui não se nota — até o Redis ser limpo, altura em
+        # que todos os posteriores regridem para o último estado que chegou a
+        # disco e o routing simplesmente piora, sem erro em lado nenhum.
+        BANDIT_DB_PERSIST_FAILURES.inc(len(params))
+        logger.error(f"[bandit] {len(params)} posteriores NÃO foram persistidos no DB: {e}")
 
 
 class ColdContextCache:

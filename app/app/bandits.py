@@ -201,9 +201,6 @@ def _get_ctx_stats_from_db(ctx: str) -> Dict[str, Dict[str, float]]:
     return load_stats_from_db(_get_db_engine, namespaced(ctx))
 
 
-_parse_ctx_stats_from_redis = parse_redis_stats
-
-
 def _ctx_stats_db_fallback(ctx: str) -> Dict[str, Dict[str, float]]:
     """DB read for a context missing from Redis (write-back + short negative cache)."""
     return db_fallback(ctx, _get_ctx_stats_from_db, _set_ctx_stats)
@@ -229,17 +226,26 @@ def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
 
 async def _get_ctx_stats_async(ctx: str) -> Dict[str, Dict[str, float]]:
     """Load contextual stats using async Redis with DB fallback in a worker thread."""
-    stats = _parse_ctx_stats_from_redis(await redis_hgetall_map(_ctx_key(ctx)))
+    stats = parse_redis_stats(await redis_hgetall_map(_ctx_key(ctx)))
     if stats:
         return stats
     return await asyncio.to_thread(_ctx_stats_db_fallback, ctx)
 
 
 def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
-    """Persist one context's bandit statistics to Redis."""
+    """Persist one context's bandit statistics to Redis.
+
+    Redis e MariaDB não partilham transação, o que é tolerável — perder uma
+    actualização não corrompe um posterior — desde que seja **visível**. Não
+    era: sem Redis esta função saía sem uma linha de log, e uma escrita de DB
+    falhada passava despercebida até o Redis ser limpo, altura em que todos os
+    posteriores aprendidos regrediam para o último estado que chegou a disco.
+    O routing simplesmente piorava, sem erro em lado nenhum.
+    """
     cold_contexts.forget(ctx)
     rds = _get_rds()
     if not rds:
+        logger.warning(f"[bandit] Redis indisponível: ctx={ctx} fica só no DB")
         return
     try:
         pipe = rds.pipeline()
