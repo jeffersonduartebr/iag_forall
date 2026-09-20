@@ -25,7 +25,6 @@ SOURCES=(
   app/requirements.txt
   app/requirements-db.txt
   app/requirements.correlation.txt
-  app/requirements.dash.txt
   app/requirements.metaopt.txt
   app/requirements.nsga.txt
 )

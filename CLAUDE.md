@@ -27,7 +27,7 @@ scripts/lock_requirements.sh app/requirements.txt   # just one
 | `requirements-dev.lock` | `requirements-dev.txt` | CI (all 6 jobs) |
 | `app/requirements.lock` | `app/requirements.txt` | `app/Dockerfile`, `Dockerfile.metaopt` |
 | `app/requirements-db.lock` | `app/requirements-db.txt` | `app/Dockerfile.db-init` |
-| `app/requirements.{correlation,dash,nsga}.lock` | matching `.txt` | matching Dockerfile |
+| `app/requirements.{correlation,nsga}.lock` | matching `.txt` | matching Dockerfile |
 
 ### Running the Application
 ```bash
