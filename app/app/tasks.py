@@ -184,9 +184,16 @@ def task_execute_eval_run(
     from .services.frozen_policy import frozen_policy_context
 
     try:
-        with frozen_policy_context(run_id, snapshot=frozen_snapshot) if frozen else nullcontext():
+        applied_policy: dict[str, Any] = {}
+        with frozen_policy_context(run_id, snapshot=frozen_snapshot) if frozen else nullcontext() as ctx:
+            applied_policy = dict(ctx or {})
             totals = run_async(run_eval_prompts(run_id, run, opts, add_eval_result))
         summary: dict[str, Any] = summarize(len(prompts), totals)
+        # A política sob a qual a corrida decorreu, gravada de forma durável.
+        # O snapshot só existia no Redis com TTL de 24 h e não era lido por
+        # nenhum caminho de análise: passadas 24 horas não havia como afirmar
+        # sob que pesos um resultado tinha sido produzido.
+        summary["frozen_policy"] = applied_policy or {"active": False}
         update_eval_run_status(run_id, "completed", summary)
         _apply_eval_feedback(run_id, summary, run_metadata)
         _count_eval_run("completed")

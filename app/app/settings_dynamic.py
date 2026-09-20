@@ -209,10 +209,8 @@ def _get_from_db(key: str) -> Optional[str]:
             return r[0]
     except Exception as exc:
         logger.error(
-            "[settings] Leitura de '%s' falhou; a reverter para env/default e a IGNORAR "
-            "qualquer override persistido: %s",
-            key,
-            exc,
+            f"[settings] Leitura de '{key}' falhou; a reverter para env/default e a "
+            f"IGNORAR qualquer override persistido: {exc}"
         )
         SETTINGS_DB_READ_FAILURES.inc()
     return None
@@ -373,6 +371,7 @@ class DynamicSettings(TypedSettingsMixin):
         published on the reload channel so all running processes can evict stale
         local cache entries.
         """
+        previous = _get_from_db(key)
         try:
             with engine.begin() as conn:
                 conn.execute(
@@ -387,6 +386,7 @@ class DynamicSettings(TypedSettingsMixin):
             logger.warning(f"Falha ao gravar DB ({key}): {e}")
         _set_to_redis(key, value)
         _invalidate_cache()
+        _audit_setting_change(key, previous, value, actor, source)
         rds = _get_rds()
         if rds:
             try:
@@ -579,3 +579,52 @@ def stop_reload_listener() -> None:
     if _reload_listener_thread and _reload_listener_thread.is_alive():
         _reload_listener_thread.join(timeout=1.0)
     _reload_listener_thread = None
+
+
+#: Chaves cujo valor nunca entra no registo de auditoria. Saber que a chave
+#: mudou, quem a mudou e quando é o que a auditoria precisa; o segredo em si
+#: só transformaria a tabela de auditoria num segundo sítio de onde vazar.
+SECRET_SETTING_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASS")
+
+
+def _is_secret(key: str) -> bool:
+    upper = key.upper()
+    return any(marker in upper for marker in SECRET_SETTING_MARKERS)
+
+
+def _redact(key: str, value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return "<redigido>" if _is_secret(key) else str(value)[:512]
+
+
+def _audit_setting_change(
+    key: str, previous: Optional[str], value: str, actor: str, source: str
+) -> None:
+    """Record who changed which setting, when, and from what.
+
+    ``set`` já recebia ``actor`` e ``source`` de todos os chamadores — a API de
+    admin, o updater NSGA-II, o explorador OpenRouter, o feedback de avaliação —
+    e deitava-os fora. Sem isto, qualquer resultado experimental é
+    irreprodutível: não há forma de saber que configuração estava activa no
+    instante de uma linha de query_log, nem de ver que alguém a mudou a meio.
+
+    A escrita é best-effort: uma auditoria indisponível não pode impedir uma
+    mudança de configuração, sobretudo a que desactiva um modelo avariado.
+    """
+    try:
+        from app.roadmap_features import log_audit_event
+
+        log_audit_event(
+            actor=actor,
+            action="settings.set",
+            resource=key,
+            metadata={
+                "source": source,
+                "previous": _redact(key, previous),
+                "value": _redact(key, value),
+                "changed": previous != value,
+            },
+        )
+    except Exception as exc:
+        logger.warning(f"[settings] Falha ao auditar a alteração de '{key}': {exc}")
