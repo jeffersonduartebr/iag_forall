@@ -177,13 +177,28 @@ def _auto_context_labels(query: str, modality: str = "text") -> List[str]:
 # ============================================================
 
 def _ctx_key(ctx: str) -> str:
-    """Build the Redis hash key used to store one context's model statistics."""
-    return f"{R_CTX_PREFIX}:{ctx}"
+    """Build the Redis hash key used to store one context's model statistics.
+
+    The context is qualified with the active quality semantics, so posteriors
+    learned from the rubric mean and from the calibrated score never share a
+    key. Under the default semantics this is the identity, and every existing
+    key keeps the name it already has.
+    """
+    from app.services.quality_semantics import namespaced
+
+    return f"{R_CTX_PREFIX}:{namespaced(ctx)}"
 
 
 def _get_ctx_stats_from_db(ctx: str) -> Dict[str, Dict[str, float]]:
-    """Load contextual bandit stats from MariaDB."""
-    return load_stats_from_db(_get_db_engine, ctx)
+    """Load contextual bandit stats from MariaDB.
+
+    ``bandit_context_stats`` is keyed by ``context_label``, a free-form string,
+    so the namespace goes into the value: no schema change, and rows written
+    under the previous semantics stay exactly where they are.
+    """
+    from app.services.quality_semantics import namespaced
+
+    return load_stats_from_db(_get_db_engine, namespaced(ctx))
 
 
 _parse_ctx_stats_from_redis = parse_redis_stats
@@ -236,8 +251,14 @@ def _set_ctx_stats(ctx: str, stats: Dict[str, Dict[str, float]]) -> None:
 
 
 def _batch_upsert_ctx_db(updates: list[tuple[str, str, Dict[str, float]]]) -> None:
-    """Persist multiple contextual statistics in one DB transaction."""
-    upsert_stats_db(_get_db_engine, updates)
+    """Persist multiple contextual statistics in one DB transaction.
+
+    The context label is namespaced on write for the same reason it is on read:
+    posteriors from two quality semantics must not land on the same row.
+    """
+    from app.services.quality_semantics import namespaced
+
+    upsert_stats_db(_get_db_engine, [(namespaced(ctx), model, stats) for ctx, model, stats in updates])
 
 
 # ============================================================

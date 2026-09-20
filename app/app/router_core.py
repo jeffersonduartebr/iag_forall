@@ -252,24 +252,31 @@ class EMABatchQueue(BaseEMABatchQueue):
         return len(rows)
 
 
+# `semantics` entra na chave única (model, modality, semantics): sem ela, as EMAs
+# aprendidas com a nota calibrada sobrescreveriam as da rubrica na mesma linha, e
+# as duas nunca poderiam ser comparadas nem revertidas.
 _EMA_UPSERT_SQL = text("""
-    INSERT INTO ema_history (modality, model, ema_latency, ema_quality, ema_cost, ema_alignment)
-    VALUES (:mod, :m, :lat, :q, :c, :align)
+    INSERT INTO ema_history (modality, model, semantics, ema_latency, ema_quality, ema_cost, ema_alignment)
+    VALUES (:mod, :m, :sem, :lat, :q, :c, :align)
     ON DUPLICATE KEY UPDATE
         ema_latency = VALUES(ema_latency), ema_quality = VALUES(ema_quality), ema_cost = VALUES(ema_cost),
         ema_alignment = VALUES(ema_alignment), updated_at = CURRENT_TIMESTAMP
 """)  # executemany: o PyMySQL não substitui parâmetros após VALUES (...); daí VALUES(coluna)
 # Histórico amostrado (1 a cada 10 atualizações) para reduzir escritas.
 _EMA_LOG_SQL = text("""
-    INSERT INTO ema_history_log (modality, model, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
-    VALUES (:mod, :m, :lat, :c, :q, :align, :u)
+    INSERT INTO ema_history_log
+        (modality, model, semantics, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
+    VALUES (:mod, :m, :sem, :lat, :c, :q, :align, :u)
 """)
 
 
 def _ema_row(modality: str, model: str, record: dict) -> dict:
+    from app.services.quality_semantics import current_semantics
+
     return {
         "mod": modality,
         "m": model,
+        "sem": current_semantics(),
         "lat": record["ema_latency"],
         "q": record["ema_quality"],
         "c": record["ema_cost"],

@@ -136,7 +136,11 @@ def _rubric_summary(judge_scores: List[Dict[str, Any]]) -> Optional[Dict[str, An
     entry = next((s for s in judge_scores if s.get("judge_id") == "llm_rubric"), None)
     if entry is None:
         return None
-    return {k: entry.get(k) for k in ("score", "dimensions", "dispersion", "n_judges", "judges")}
+    keys = (
+        "score", "dimensions", "dispersion", "n_judges", "judges",
+        "q_tech", "q_calibrado", "p_entrega", "calibration_status",
+    )
+    return {k: entry.get(k) for k in keys}
 
 
 def _learn_from_judgment(risk: ErrorRisk, quality: float) -> None:
@@ -172,13 +176,36 @@ def proxy_quality(risk: ErrorRisk) -> Quality:
     return Quality(max(0.0, min(10.0, risk.model_stats.get("mean", 0.5) * 10.0)), "bandit_proxy")
 
 
+def learned_quality(quality: Quality) -> float:
+    """The score the bandit learns from: calibrated under formative semantics.
+
+    This is the only place the switch actually changes what is optimised. The
+    error predictor and the cache gate keep reading ``quality.value``, because
+    they answer "does this answer serve?" and not "did it teach?" — feeding
+    usurpation into the error predictor would make it forecast pedagogical
+    failure, which is not what the router uses to decide effort.
+
+    Falls back to ``quality.value`` whenever the calibrated score is missing, so
+    a judged row never loses its reward because the usurpation judge was down.
+    """
+    from .quality_semantics import is_formative
+
+    if not is_formative():
+        return quality.value
+    rubric = quality.judge_rubric or {}
+    calibrated = rubric.get("q_calibrado")
+    if calibrated is None or rubric.get("calibration_status") != "calibrated":
+        return quality.value
+    return float(calibrated)
+
+
 def update_bandit(deps: Dict[str, Any], fb: FeedbackRequest, quality: Quality) -> float:
     """Reward from quality/latency/cost (per 1k tokens) and the contextual bandit update."""
     try:
         cost_per_1k = cost_per_1k_from_total(fb.cost_val, fb.prompt_tokens, fb.completion_tokens)
         reward = deps["compute_reward"](
             fb.chosen_model,
-            quality.value,
+            learned_quality(quality),
             fb.latency_s,
             cost_per_1k,
             modality=fb.modality,
@@ -305,6 +332,25 @@ def _reliability_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _formative_fields(quality: Quality, fb: FeedbackRequest) -> Dict[str, Any]:
+    """The formative columns for one query_log row.
+
+    ``quality_semantics`` records which meaning ``quality`` carries on this row,
+    so a later analysis never has to guess whether a number came from the rubric
+    mean or from the calibrated score.
+    """
+    from .quality_semantics import current_semantics
+
+    rubric = quality.judge_rubric or {}
+    return {
+        "quality_semantics": current_semantics(),
+        "q_tech": rubric.get("q_tech"),
+        "q_calibrado": rubric.get("q_calibrado"),
+        "p_entrega": rubric.get("p_entrega"),
+        "detected_complexity": fb.payload.get("detected_complexity"),
+    }
+
+
 def persist_log(
     deps: Dict[str, Any],
     fb: FeedbackRequest,
@@ -343,6 +389,7 @@ def persist_log(
             judge_sampled=judged,
             predicted_error_prob=float(risk.predicted_error_prob),
             reward=reward,
+            **_formative_fields(quality, fb),
             context_label="async_processed",
             tenant_id=fb.payload.get("tenant_id"),
             raw_payload=raw_payload,

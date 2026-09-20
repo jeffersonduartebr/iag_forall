@@ -720,6 +720,12 @@ async def judge_answer(
                 "dispersion": rubric["dispersion"],
                 "n_judges": rubric["n_judges"],
                 "judges": rubric.get("judges", []),
+                # Campos formativos: presentes mesmo com o juiz desligado, caso em
+                # que calibration_status diz "disabled" e q_calibrado == q_tech.
+                "q_tech": rubric.get("q_tech"),
+                "q_calibrado": rubric.get("q_calibrado"),
+                "p_entrega": rubric.get("p_entrega"),
+                "calibration_status": rubric.get("calibration_status"),
             })
         elif mode == "llm":
             # Nenhum juiz LLM respondeu: aproximação heurística, sinalizada como tal.

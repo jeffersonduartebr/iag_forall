@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 
 EMA_ALPHA = 0.2
 EMA_KEY = "ema:{modality}"
+
+
+def _ema_key(modality: str) -> str:
+    """Redis key for one modality's EMAs, qualified by the quality semantics.
+
+    Identity under the default semantics, so existing keys are untouched.
+    """
+    from .quality_semantics import namespaced
+
+    return EMA_KEY.format(modality=namespaced(modality))
 SNAPSHOT_TTL_S = 5.0
 MIN_UPDATES_FOR_ROUTING = 3
 
@@ -68,7 +78,7 @@ def update_shared_ema(
     rds = rds if rds is not None else _get_rds()
     if not rds:
         return None
-    key = EMA_KEY.format(modality=modality)
+    key = _ema_key(modality)
     for _ in range(retries):
         try:
             with rds.pipeline() as pipe:
@@ -95,7 +105,7 @@ def load_ema_snapshot(modality: str, rds: Any = None) -> Dict[str, Dict[str, Any
     snapshot: Dict[str, Dict[str, Any]] = {}
     rds = rds if rds is not None else _get_rds()
     try:
-        raw_map = rds.hgetall(EMA_KEY.format(modality=modality)) if rds else {}
+        raw_map = rds.hgetall(_ema_key(modality)) if rds else {}
         for field, raw in (raw_map if isinstance(raw_map, dict) else {}).items():
             entry = _decode(raw)
             if entry is not None:

@@ -112,6 +112,21 @@ def _safe_json(obj: dict | list | str | None) -> str:
 # DDL — tabela multimodal EXTENDIDA
 # ============================================================
 
+def _current_semantics() -> str:
+    """The active quality semantics, resolved defensively.
+
+    A row whose semantics is unknown is unattributable later, so this never
+    returns empty: an unreadable setting falls back to the legacy value rather
+    than leaving the column to guesswork.
+    """
+    try:
+        from app.services.quality_semantics import current_semantics
+
+        return current_semantics()
+    except Exception:
+        return "rubric_v1"
+
+
 def ensure_query_log() -> None:
     """Create the `query_log` table when it does not already exist.
 
@@ -214,6 +229,21 @@ def ensure_query_log() -> None:
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status VARCHAR(32) DEFAULT NULL"))
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS estimated_cost_usd FLOAT NULL"))
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(128) NULL"))
+            # Avaliação formativa (migração 0006). `quality` mantém o significado
+            # que o resto do sistema já interpreta; q_tech e q_calibrado ficam ao
+            # lado, e quality_semantics diz qual dos dois a linha representa.
+            conn.execute(
+                text(
+                    "ALTER TABLE query_log ADD COLUMN IF NOT EXISTS "
+                    "quality_semantics VARCHAR(16) NOT NULL DEFAULT 'rubric_v1'"
+                )
+            )
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS q_tech FLOAT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS q_calibrado FLOAT NULL"))
+            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS p_entrega FLOAT NULL"))
+            conn.execute(
+                text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS detected_complexity VARCHAR(16) NULL")
+            )
         logger.info("[query_service] Tabela 'query_log' pronta (EXTENDIDA multimodal).")
     except SQLAlchemyError as exc:
         logger.warning("[query_service] Falha ao criar tabela query_log: %s", exc)
@@ -237,6 +267,11 @@ def insert_query_log(
     reward: float,
     quality_source: str = "unknown",
     judge_sampled: bool = False,
+    quality_semantics: Optional[str] = None,
+    q_tech: Optional[float] = None,
+    q_calibrado: Optional[float] = None,
+    p_entrega: Optional[float] = None,
+    detected_complexity: Optional[str] = None,
     predicted_error_prob: Optional[float] = None,
     confidence_score: Optional[float] = None,
     confidence_band: Optional[str] = None,
@@ -275,6 +310,7 @@ def insert_query_log(
                      confidence_score, confidence_band, abstained, abstain_reason,
                      grounded, verification_status, knowledge_version, review_status,
                      latency_s, estimated_cost_usd, cost_per_1k, reward,
+                     quality_semantics, q_tech, q_calibrado, p_entrega, detected_complexity,
                      context_label, tenant_id, raw_payload)
                     VALUES
                      (:q, :m, :mod, :ip,
@@ -284,6 +320,7 @@ def insert_query_log(
                      :confidence_score, :confidence_band, :abstained, :abstain_reason,
                      :grounded, :verification_status, :knowledge_version, :review_status,
                      :lat, :estimated_cost_usd, :cost, :rew,
+                     :quality_semantics, :q_tech, :q_calibrado, :p_entrega, :detected_complexity,
                      :ctx, :tenant_id, :payload)
                 """),
                 {
@@ -311,6 +348,11 @@ def insert_query_log(
                     "estimated_cost_usd": estimated_cost_usd,
                     "cost": estimated_cost_usd,
                     "rew": reward,
+                    "quality_semantics": quality_semantics or _current_semantics(),
+                    "q_tech": q_tech,
+                    "q_calibrado": q_calibrado,
+                    "p_entrega": p_entrega,
+                    "detected_complexity": detected_complexity,
                     "ctx": context_label,
                     "tenant_id": tenant_id,
                     "payload": _safe_json(raw_payload),

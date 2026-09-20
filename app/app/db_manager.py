@@ -109,6 +109,14 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "quality_source": "VARCHAR(32) DEFAULT 'unknown'",
             "judge_sampled": "TINYINT DEFAULT 0",
             "predicted_error_prob": "FLOAT NULL",
+            # Semântica da coluna `quality` nesta linha. Nunca NULL: uma linha
+            # sem ela seria inatribuível, e misturar semânticas em silêncio é
+            # precisamente o risco que isto existe para evitar.
+            "quality_semantics": "VARCHAR(16) NOT NULL DEFAULT 'rubric_v1'",
+            "q_tech": "FLOAT NULL",
+            "q_calibrado": "FLOAT NULL",
+            "p_entrega": "FLOAT NULL",
+            "detected_complexity": "VARCHAR(16) NULL",
             "confidence_score": "FLOAT NULL",
             "confidence_band": "VARCHAR(16) DEFAULT NULL",
             "abstained": "TINYINT DEFAULT 0",
@@ -132,14 +140,18 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
                 model VARCHAR(255) NOT NULL,
                 modality ENUM('text','vision','multimodal') NOT NULL DEFAULT 'text',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY uniq_model_modality (model, modality)
+                semantics VARCHAR(16) NOT NULL DEFAULT 'rubric_v1',
+                UNIQUE KEY uniq_model_modality_semantics (model, modality, semantics)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """,
         "columns": {
             "ema_latency": "FLOAT NOT NULL DEFAULT 0",
             "ema_cost": "FLOAT NOT NULL DEFAULT 0",
             "ema_quality": "FLOAT NOT NULL DEFAULT 0",
-            "ema_alignment": "FLOAT NOT NULL DEFAULT 0"
+            "ema_alignment": "FLOAT NOT NULL DEFAULT 0",
+            # Namespace das EMAs aprendidas: sem ela, as calibradas sobrescreviam
+            # as da rubrica no mesmo (model, modality).
+            "semantics": "VARCHAR(16) NOT NULL DEFAULT 'rubric_v1'"
         }
     },
 
@@ -158,7 +170,8 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "ema_cost": "FLOAT NOT NULL",
             "ema_quality": "FLOAT NOT NULL",
             "ema_alignment": "FLOAT NOT NULL",
-            "update_num": "INT NOT NULL DEFAULT 0"
+            "update_num": "INT NOT NULL DEFAULT 0",
+            "semantics": "VARCHAR(16) NOT NULL DEFAULT 'rubric_v1'"
         }
     },
 
@@ -210,7 +223,8 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "modality": "VARCHAR(32) DEFAULT 'text'",
             "image_hash": "VARCHAR(128) NULL",
             # Notas por dimensão da rubrica (clareza, acurácia, alinhamento) em JSON.
-            "rubric_json": "TEXT NULL"
+            "rubric_json": "TEXT NULL",
+            "delivery_level": "FLOAT NULL"
         }
     },
 
