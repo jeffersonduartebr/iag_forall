@@ -605,3 +605,4 @@ async def test_router_execution_cache_hit_reports_cache_lookup_timing():
     )
     assert out["model"] == "semantic_cache"
     assert "cache_lookup" in out["metadata"]["stage_timings_ms"]
+

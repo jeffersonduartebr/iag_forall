@@ -253,6 +253,17 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "REQUEST_HEDGE_DELAY_MS": "0",
         "REQUEST_HEDGE_EMA_FACTOR": "1.3",
         "REQUEST_HEDGE_MAX_PARALLEL": "2",
+        # Cadeia de fallback: quando o modelo escolhido falha, tenta os
+        # alternativos do registry antes de devolver erro ao utilizador. Estava
+        # a ser lida com default False e **não existia no catálogo**, por isso
+        # um pedido falhado devolvia 502/503/504 com outros modelos saudáveis
+        # configurados — e o CascadeDetector nunca disparava, porque conta
+        # breakers que só `execute_with_fallback` alimenta.
+        # Ao contrário do hedging, não custa chamadas extra: só corre depois de
+        # uma falha, e `_fallback_budget` devolve 0 quando o deadline restante
+        # não dá para outra tentativa.
+        "REQUEST_FALLBACK_ENABLED": "1",
+        "REQUEST_MAX_FALLBACKS": "2",
         "CIRCUIT_BREAKER_FAIL_MAX": "5",
         "CIRCUIT_BREAKER_RESET_TIMEOUT": "60",
         "CIRCUIT_BREAKER_LOCAL_FAIL_MAX": "3",

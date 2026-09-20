@@ -855,12 +855,6 @@ EMBEDDING_CACHE_HIT_RATE = Gauge(
     "Embedding L1 cache hit rate",
     registry=registry,
 )
-VECTORSTORE_DIMENSION_MISMATCH_TOTAL = Counter(
-    "vectorstore_dimension_mismatch_total",
-    "Queries rejected because the collection was written with another embedding model",
-    ["collection"],
-    registry=registry,
-)
 SEMANTIC_CACHE_LOOKUP_TOTAL = Counter(
     "semantic_cache_lookup_total",
     "Outcomes of semantic cache lookup attempts",

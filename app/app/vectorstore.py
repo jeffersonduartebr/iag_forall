@@ -27,7 +27,6 @@ import chromadb
 import numpy as np
 
 from .embeddings import embed_image, embed_multimodal, embed_text
-from .observability import VECTORSTORE_DIMENSION_MISMATCH_TOTAL
 from .settings_dynamic import settings
 from .sparse_index import sparse_index  # Integração com BM25
 
@@ -384,7 +383,6 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int, where
                 f"a coleção foi escrita com outro modelo de embeddings, ou o modelo actual "
                 f"falhou a carregar. A coleção NÃO foi apagada. {e}"
             )
-            VECTORSTORE_DIMENSION_MISMATCH_TOTAL.labels(collection=collection_name).inc()
             return {}
 
         logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
