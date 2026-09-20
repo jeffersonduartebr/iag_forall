@@ -54,9 +54,46 @@ def test_reward_monotonic_in_quality(weights, q1, q2, lat, c):
 
 
 @given(weights=weights3, q=score10, l1=latency, l2=latency, c=cost)
-def test_reward_non_increasing_in_latency(weights, q, l1, l2, c):
+def test_reward_non_increasing_in_latency_at_fixed_tokens(weights, q, l1, l2, c):
+    """Monotonicity in latency holds *for answers of the same length*.
+
+    With a length-dependent deadline this is the honest statement of the
+    property: comparing two latencies across answers of different sizes compares
+    two different deadlines, and the reward is not expected to be monotone
+    across those.
+    """
     fast, slow = sorted((l1, l2))
     assert _reward(weights, q, slow, c) <= _reward(weights, q, fast, c) + 1e-12
+
+
+@given(n1=st.integers(min_value=0, max_value=20000), n2=st.integers(min_value=0, max_value=20000))
+def test_latency_threshold_never_shrinks_when_the_answer_grows(n1, n2):
+    """A longer answer is never given a tighter deadline than a shorter one."""
+    from app.services.reward import latency_threshold_s
+
+    small, large = sorted((n1, n2))
+    assert latency_threshold_s(small) <= latency_threshold_s(large) + 1e-12
+
+
+@given(
+    lat=st.floats(min_value=0.0, max_value=120.0, allow_nan=False),
+    n1=st.integers(min_value=0, max_value=8000),
+    n2=st.integers(min_value=0, max_value=8000),
+)
+def test_a_longer_answer_is_not_punished_for_its_length(lat, n1, n2):
+    """The requirement that discursive domains are not penalised for verbosity.
+
+    At a *fixed* latency, generating more tokens can only keep the latency score
+    the same or raise it. This is the property that replaces the old
+    unconditional monotonicity, and it states the intent directly: the score
+    measures whether the answer met its own fair deadline, not how long it was.
+    """
+    from app.services.reward import latency_score, latency_threshold_s
+
+    small, large = sorted((n1, n2))
+    score_small = latency_score(lat, x0=latency_threshold_s(small))
+    score_large = latency_score(lat, x0=latency_threshold_s(large))
+    assert score_large >= score_small - 1e-12
 
 
 @given(

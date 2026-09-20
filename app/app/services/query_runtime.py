@@ -333,6 +333,10 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
 
     combined_payload = {
         "uncertainty_score": uncertainty_score,
+        # Estimated before any model was chosen; the feedback loop needs it to
+        # cross the routing decision with the quality that came out of it.
+        "detected_complexity": metadata.get("detected_complexity"),
+        "workload_class": metadata.get("workload_class"),
         "queue_enqueued_at": time.time(),
         "tenant_id": req.tenant_id,
         "confidence_score": confidence_score,

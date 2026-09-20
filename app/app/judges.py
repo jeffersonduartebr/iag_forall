@@ -122,6 +122,28 @@ def _safe_setting_int(key: str, default: int) -> int:
         return int(default)
 
 
+def _judge_cost_per_1k(meta: Dict[str, Any], default: float) -> float:
+    """Cost per 1k tokens of one judge call.
+
+    ``judge_performance_log.avg_cost`` is divided by ``avg_score`` in the judge
+    fitness (``services.judge_selection._score_candidate``), so it has to be a
+    *rate*. The provider metadata exposes the total call cost — historically
+    under a key named ``cost_per_1k``, which is why this was read at the wrong
+    scale — so it is converted here, from the token counts that sit in the same
+    dict. Falls back to the caller's default when the tokens are unknown.
+    """
+    from .services.reward import cost_per_1k_from_total
+
+    total = meta.get("call_cost_usd", meta.get("cost_per_1k"))
+    rate = cost_per_1k_from_total(total, meta.get("prompt_tokens"), meta.get("completion_tokens"))
+    if rate is not None:
+        return rate
+    try:
+        return float(total) if total is not None else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 ALPHA_DECAY = _safe_setting_float("JUDGES_FITNESS_DECAY", 0.90)
 CONSIST_WINDOW_MIN = _safe_setting_int("JUDGES_WINDOW_MIN", 180)
 
@@ -488,7 +510,7 @@ CORRECT ou INCORRECT
             score01 = score10 / 10.0
 
             lat = float(meta.get("latency", 2.0))
-            cost = float(meta.get("cost_per_1k", 0.001))
+            cost = _judge_cost_per_1k(meta, default=0.001)
 
             speed_term = 1.0 - min(lat, 10.0) / 10.0
             fitness = (score01 * 0.7) + (speed_term * 0.3)
@@ -587,7 +609,7 @@ async def _llm_rubric_score(query, answer, use_rag, modality, image_b64, referen
             q01 = weighted_quality(ratings, weights) / 10.0
             lat = float(meta.get("latency", 2.0) or 2.0)
             fit = q01 * 0.7 + (1.0 - min(lat, 10.0) / 10.0) * 0.3
-            cost = float(meta.get("cost_per_1k", 0.0) or 0.0)
+            cost = _judge_cost_per_1k(meta, default=0.0)
             _persist_judge_metrics(judge_model=model, score=q01, latency=lat, cost=cost, consistency=1.0, fitness=fit)
             _persist_judge_log(query, answer, model, q01 * 10.0, modality, rubric=ratings)
 

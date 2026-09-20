@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from .ema_store import next_ema, update_shared_ema
+from .formative_observability import record_routing_cell
 from .reward import cost_per_1k_from_total
 from .router_services import spawn_via_deps
 from .router_stages import quietly
@@ -175,7 +176,14 @@ def update_bandit(deps: Dict[str, Any], fb: FeedbackRequest, quality: Quality) -
     """Reward from quality/latency/cost (per 1k tokens) and the contextual bandit update."""
     try:
         cost_per_1k = cost_per_1k_from_total(fb.cost_val, fb.prompt_tokens, fb.completion_tokens)
-        reward = deps["compute_reward"](fb.chosen_model, quality.value, fb.latency_s, cost_per_1k, modality=fb.modality)
+        reward = deps["compute_reward"](
+            fb.chosen_model,
+            quality.value,
+            fb.latency_s,
+            cost_per_1k,
+            modality=fb.modality,
+            completion_tokens=fb.completion_tokens,
+        )
     except Exception:
         reward = 0.0
     try:
@@ -309,6 +317,14 @@ def persist_log(
     quietly(lambda: deps["ROUTER_QUALITY_AVG"].labels(model=fb.chosen_model).set(quality.value))
     if "ollama" in fb.chosen_model:
         quietly(lambda: deps["ROUTER_LOCAL_USAGE_RATIO"].set(1.0))
+    quietly(
+        lambda: record_routing_cell(
+            fb.chosen_model,
+            fb.payload.get("detected_complexity"),
+            quality.value,
+            quality.source,
+        )
+    )
     raw_payload = fb.raw_payload
     if quality.judge_rubric is not None and isinstance(raw_payload, dict):
         raw_payload = {**raw_payload, "judge_rubric": quality.judge_rubric}

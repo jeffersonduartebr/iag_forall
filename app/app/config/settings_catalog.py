@@ -209,6 +209,16 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "NSGA_W_LATENCY": "0.5",
         "NSGA_W_COST": "100.0",
         "NSGA_W_ALIGNMENT": "1.0",
+        # Inclinação da transferência logística de latência.
+        "REWARD_LATENCY_K": "0.12",
+        # Limiar logístico dinâmico: x0(N) = TTFT + N/taxa, o prazo justo de uma
+        # resposta daquele comprimento. Desligado por omissão: ligá-lo desloca a
+        # distribuição da recompensa e obriga a recalibrar o gate de promoção
+        # por quantil, não por valor absoluto.
+        "REWARD_DYNAMIC_LATENCY_ENABLED": "0",
+        "REWARD_LATENCY_TTFT_BUDGET_S": "5.0",
+        "REWARD_LATENCY_TOKENS_PER_S": "25.0",
+        "REWARD_DEFAULT_COMPLETION_TOKENS": "375",
         # C_base da recompensa (USD/1k tokens); derivação em app.services.reward.
         "REWARD_COST_BASELINE_PER_1K": "0.007",
         # Parcela mínima de cada objetivo nos pesos da recompensa publicados pelo NSGA-II.

@@ -1,0 +1,30 @@
+version: '2.0'
+seed: 42
+total: 352
+by_partition:
+  canonical: 120
+  dense: 48
+  parametric_twin: 30
+  rag_anchored: 29
+  semantic_outlier: 65
+  verbosity_trap: 60
+by_discipline:
+  matematica: 114
+  organizacao_computadores: 123
+  projeto_bd: 115
+by_complexity_gold:
+  ALTA: 78
+  BAIXA: 198
+  MEDIA: 76
+by_answer_type:
+  exact: 62
+  numeric: 243
+  rubric: 3
+  set: 29
+  sql: 15
+outlier_share: 0.1847
+verifiable_share: 0.9915
+anchor_documents:
+- norma_bd
+- politica_hardware
+- reg_avaliacao

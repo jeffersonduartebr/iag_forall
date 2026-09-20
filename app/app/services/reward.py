@@ -45,6 +45,23 @@ DEFAULT_COST_INPUT_SHARE = 0.75
 # Latency transfer: inverted logistic with slope k and inflection x0 (seconds).
 LATENCY_K = 0.12
 LATENCY_X0_S = 20.0
+
+# Dynamic inflection: x0(N) = TTFT budget + N / target rate, i.e. the *fair
+# deadline* for an answer of that length. With a fixed x0 the same 20 s window
+# was given to an 80-token arithmetic answer and to an 800-token discursive one,
+# so a humanities item was penalised for being long rather than for being slow.
+#
+# DEFAULT_COMPLETION_TOKENS is chosen so that x0(375) = 5.0 + 375/25 = 20.0 s,
+# exactly the constant above. Every call site that does not know the token count
+# therefore keeps the previous behaviour bit for bit, and the new normalisation
+# is the identity at the point where the old calibration sat.
+LATENCY_TTFT_BUDGET_S = 5.0
+LATENCY_TOKENS_PER_S = 25.0
+DEFAULT_COMPLETION_TOKENS = 375
+
+# Beyond this, more tokens stop buying deadline: without a ceiling a model could
+# pad its answer to widen its own window, and latency would stop discriminating.
+MAX_BUDGETED_COMPLETION_TOKENS = 8000
 # Cost transfer floor: expensive models are never excluded from exploration.
 COST_SCORE_FLOOR = 0.3
 
@@ -244,9 +261,49 @@ def calibrate_cost_baseline(
     return math.exp(sum(math.log(b) for b in positive) / len(positive))
 
 
-def latency_score(latency_s: float) -> float:
-    """Inverted logistic: ~1 for fast answers, 0.5 at ``LATENCY_X0_S``, → 0 when slow."""
-    z = LATENCY_K * (float(latency_s) - LATENCY_X0_S)
+def latency_threshold_s(
+    completion_tokens: Optional[int] = None,
+    *,
+    ttft: Optional[float] = None,
+    tokens_per_s: Optional[float] = None,
+) -> float:
+    """The fair deadline for an answer of this length: TTFT budget + generation time.
+
+    An unknown, negative or non-finite token count falls back to
+    ``DEFAULT_COMPLETION_TOKENS``, which reproduces the former static threshold
+    exactly. The count is capped so a verbose answer cannot buy itself an
+    unbounded window.
+    """
+    budget = LATENCY_TTFT_BUDGET_S if ttft is None else ttft
+    rate = LATENCY_TOKENS_PER_S if tokens_per_s is None else tokens_per_s
+    if rate <= 0 or not math.isfinite(rate):
+        rate = LATENCY_TOKENS_PER_S
+    try:
+        tokens = int(completion_tokens) if completion_tokens is not None else DEFAULT_COMPLETION_TOKENS
+    except (TypeError, ValueError):
+        tokens = DEFAULT_COMPLETION_TOKENS
+    if tokens < 0:
+        tokens = DEFAULT_COMPLETION_TOKENS
+    tokens = min(tokens, MAX_BUDGETED_COMPLETION_TOKENS)
+    return float(budget) + tokens / float(rate)
+
+
+def latency_score(
+    latency_s: float,
+    completion_tokens: Optional[int] = None,
+    *,
+    k: Optional[float] = None,
+    x0: Optional[float] = None,
+) -> float:
+    """Inverted logistic: ~1 when well inside the deadline, 0.5 at it, → 0 beyond.
+
+    ``x0`` may be passed in already resolved. :func:`compute_reward` does that so
+    the settings are read once per reward rather than once per transfer — this
+    function is on the hot path and is covered by a benchmark.
+    """
+    slope = LATENCY_K if k is None else k
+    midpoint = latency_threshold_s(completion_tokens) if x0 is None else x0
+    z = slope * (float(latency_s) - midpoint)
     if z > 700:  # math.exp overflow guard
         return 0.0
     return max(0.0, min(1.0, 1.0 / (1.0 + math.exp(z))))
@@ -267,18 +324,46 @@ def compute_reward(
     latency_s: float,
     cost_per_1k: Optional[float] = None,
     modality: str = "text",
+    *,
+    completion_tokens: Optional[int] = None,
 ) -> float:
     """Convert observed metrics into a reward in [0, 1] (thesis eq. ``eq:recompensa``).
 
     ``quality`` is on the 0-10 judge scale, ``latency_s`` in seconds and
     ``cost_per_1k`` in USD per 1k tokens (``None`` means unknown and is neutral).
     Weights come from :func:`load_reward_weights`.
+
+    ``completion_tokens`` is keyword-only on purpose: every existing caller, and
+    every test double that mirrors this signature positionally, keeps working
+    untouched. When it is omitted the latency threshold falls back to the value
+    that reproduces the former static calibration.
+
+    The dynamic threshold is applied only when ``REWARD_DYNAMIC_LATENCY_ENABLED``
+    is on. It shifts the reward distribution substantially — a short answer gets
+    a much tighter deadline than before — and the promotion gate downstream is an
+    absolute threshold, so the two have to be moved together.
     """
     try:
         (w_q, w_l, w_c), _source = load_reward_weights(modality)
         q = max(0.0, min(10.0, float(quality))) / 10.0
         baseline = _setting_float("REWARD_COST_BASELINE_PER_1K", DEFAULT_COST_BASELINE_PER_1K)
-        reward = w_q * q + w_l * latency_score(latency_s) + w_c * cost_score(cost_per_1k, baseline)
+
+        # Resolved once per reward: latency_score sits on the hot path.
+        slope = _setting_float("REWARD_LATENCY_K", LATENCY_K)
+        if _setting_float("REWARD_DYNAMIC_LATENCY_ENABLED", 0.0) >= 1.0:
+            midpoint = latency_threshold_s(
+                completion_tokens,
+                ttft=_setting_float("REWARD_LATENCY_TTFT_BUDGET_S", LATENCY_TTFT_BUDGET_S),
+                tokens_per_s=_setting_float("REWARD_LATENCY_TOKENS_PER_S", LATENCY_TOKENS_PER_S),
+            )
+        else:
+            midpoint = LATENCY_X0_S
+
+        reward = (
+            w_q * q
+            + w_l * latency_score(latency_s, k=slope, x0=midpoint)
+            + w_c * cost_score(cost_per_1k, baseline)
+        )
         return max(0.0, min(1.0, float(reward)))
     except Exception as exc:
         logger.warning("[reward] Falha em compute_reward (%s): %s", model, exc)

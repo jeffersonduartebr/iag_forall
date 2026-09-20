@@ -110,7 +110,12 @@ def _build_response_meta(result: "LLMResponse") -> Dict[str, Any]:
     return {
         "latency": result.latency,
         "load_time": result.load_time,
-        "cost_per_1k": result.cost,
+        # ``result.cost`` e o custo TOTAL da chamada, em USD. A chave
+        # ``cost_per_1k`` mente sobre isso desde sempre e e lida como total por
+        # todo o accounting a jusante, por isso fica onde esta; o nome correto
+        # passa a existir ao lado, e todo o codigo novo usa-o.
+        "call_cost_usd": result.cost,
+        "cost_per_1k": result.cost,  # DEPRECATED: e o custo total, nao por 1k
         "cost_imputed_usd": result.cost_imputed,
         "quality": heuristic_quality_estimate(result.text),
         "raw_payload": result.raw_payload,
