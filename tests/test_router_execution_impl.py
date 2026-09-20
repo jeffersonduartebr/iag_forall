@@ -133,17 +133,15 @@ async def test_router_execution_covers_cache_uq_and_metadata_error_paths():
     async def _cache(*args, **kwargs):
         return {"text": "cached", "similarity": 0.91}
 
-    class _Breaker:
-        current_state = "closed"
+    class _UQBreakerDown:
+        """Só o breaker de UQ falha; o da cache é um pybreaker real."""
 
-        async def call_async(self, fn, *args, **kwargs):
-            return await fn(*args, **kwargs)
+        current_state = "closed"
 
         def call(self, fn, *args, **kwargs):
             raise RuntimeError("uq down")
 
-    deps["_dep_cache_breaker"] = _Breaker()
-    deps["_dep_uq_breaker"] = _Breaker()
+    deps["_dep_uq_breaker"] = _UQBreakerDown()
     deps["check_cache"] = _cache
     deps["DEPENDENCY_FAILURES"] = inc_metric
     deps["logger"] = SimpleNamespace(info=lambda *a, **k: None, warning=lambda msg: warnings.append(msg))

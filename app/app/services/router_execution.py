@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
+from app.services.router_cache_stage import try_cache_hit
 from app.services.router_provider_stage import build_result, execute_provider
 from app.services.router_services import spawn_via_deps
 from app.services.router_stages import (
@@ -21,7 +22,6 @@ from app.services.router_stages import (
     resolve_candidates,
     restrict_to_tool_models,
     select_route,
-    try_cache_hit,
 )
 
 
