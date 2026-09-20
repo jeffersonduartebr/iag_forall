@@ -208,7 +208,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     qdim_client = _Client(_QDimFail())
     monkeypatch.setattr(vs, "chroma_client", qdim_client)
     assert vs._query_embedding_sync("cq", [1, 2], 3) == {}
-    assert qdim_client.deleted == ["cq"]
+    # Esta asserção era `== ["cq"]`: codificava a destruição de dados pelo
+    # caminho de leitura. Uma consulta devolve vazio e não apaga nada.
+    assert qdim_client.deleted == []
 
     class _QOtherFail(_ColOK):
         """Represent `_QOtherFail` within this module.
@@ -224,17 +226,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     monkeypatch.setattr(vs, "chroma_client", qother_client)
     assert vs._query_embedding_sync("cq2", [1, 2], 3) == {}
 
-    class _QDeleteFail(_ColOK):
-        def query(self, **kwargs):
-            raise RuntimeError("dimension does not match")
-
-    class _DeleteFailClient(_Client):
-        def delete_collection(self, name):
-            raise RuntimeError("delete failed")
-
-    qdelete_client = _DeleteFailClient(_QDeleteFail())
-    monkeypatch.setattr(vs, "chroma_client", qdelete_client)
-    assert vs._query_embedding_sync("cq3", [1, 2], 3) == {}
+    # O ramo "o delete da consulta também falhou" deixou de existir: a consulta
+    # já não apaga nada, portanto não há delete que possa falhar.
 
 
 @pytest.mark.asyncio
@@ -356,3 +349,27 @@ def test_insert_embedding_sync_reports_a_failed_heal(monkeypatch):
 
     monkeypatch.setattr(vs, "get_chroma_client", lambda: _AlwaysDimensionError())
     assert vs._insert_embedding_sync("col", "d1", "t", [0.1], None) is False
+
+
+def test_a_query_never_deletes_the_collection(monkeypatch):
+    """A read must not destroy data.
+
+    The dimension mismatch that triggered this used to call
+    ``delete_collection`` from the *query* path, and its usual cause is the
+    local embedding model failing to load, so ``embed_text`` returns a
+    zero vector of the wrong size. One user question therefore wiped the whole
+    RAG corpus, and the only warning came after the damage.
+    """
+    deleted = []
+
+    class _DimensionMismatch:
+        def get_or_create_collection(self, **kwargs):
+            raise RuntimeError("Collection expecting embedding with dimension of 768, got 384")
+
+        def delete_collection(self, name):
+            deleted.append(name)
+
+    monkeypatch.setattr(vs, "get_chroma_client", lambda: _DimensionMismatch())
+
+    assert vs._query_embedding_sync("meu_corpus", [0.1, 0.2], 3) == {}
+    assert deleted == [], "uma consulta apagou a coleção"

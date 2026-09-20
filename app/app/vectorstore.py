@@ -27,6 +27,7 @@ import chromadb
 import numpy as np
 
 from .embeddings import embed_image, embed_multimodal, embed_text
+from .observability import VECTORSTORE_DIMENSION_MISMATCH_TOTAL
 from .settings_dynamic import settings
 from .sparse_index import sparse_index  # Integração com BM25
 
@@ -370,14 +371,21 @@ def _query_embedding_sync(collection_name: str, embedding, n_results: int, where
         return col.query(**kwargs)
     except Exception as e:
         msg = str(e).lower()
-        # AUTO-HEALING: Se a dimensão não bater na consulta, a coleção está suja.
+        # Uma consulta NUNCA destrói dados. Isto apagava a coleção inteira
+        # quando a dimensão não batia — e a causa habitual da dimensão não
+        # bater é o modelo de embeddings local ter falhado a carregar e
+        # `embed_text` ter devolvido um vetor de zeros do tamanho errado. Ou
+        # seja: uma pergunta do utilizador apagava o corpus RAG todo, e o único
+        # aviso aparecia depois do estrago. O auto-healing na escrita é
+        # defensável, porque aí já se está a mexer na coleção; na leitura não é.
         if "dimension" in msg and "match" in msg:
-            logger.warning(f"[vectorstore] Dimensão incompatível na consulta '{collection_name}'. Deletando coleção corrompida.")
-            try:
-                get_chroma_client().delete_collection(collection_name)
-                return {}
-            except Exception as del_err:
-                logger.debug(f"[vectorstore] Falha ao deletar coleção: {del_err}")
+            logger.error(
+                f"[vectorstore] Dimensão incompatível na consulta '{collection_name}': "
+                f"a coleção foi escrita com outro modelo de embeddings, ou o modelo actual "
+                f"falhou a carregar. A coleção NÃO foi apagada. {e}"
+            )
+            VECTORSTORE_DIMENSION_MISMATCH_TOTAL.labels(collection=collection_name).inc()
+            return {}
 
         logger.error(f"[vectorstore] Falha na consulta ({collection_name}): {e}")
         return {}
