@@ -126,7 +126,11 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "knowledge_version": "VARCHAR(255) DEFAULT NULL",
             "review_status": "VARCHAR(32) DEFAULT NULL",
             "estimated_cost_usd": "FLOAT NULL",
-            "tenant_id": "VARCHAR(128) NULL"
+            "tenant_id": "VARCHAR(128) NULL",
+            # Registo auditável da decisão de routing: candidatos com os três
+            # objectivos, frente de Pareto e pesos NSGA-II em vigor.
+            "decision_json": "LONGTEXT NULL",
+            "correlation_id": "VARCHAR(64) NULL"
         }
     },
 

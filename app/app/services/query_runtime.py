@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
@@ -21,6 +20,7 @@ from ..observability import (
 from ..providers_async import ProviderCallError, ProviderCircuitOpenError
 from ..roadmap_features import create_response_review
 from ..router_core import route_and_answer
+from ..services.feedback_payload import build_feedback_payload
 from ..services.governance_runtime import (
     check_runtime_budget_async,
     get_runtime_active_policy_async,
@@ -317,43 +317,10 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     metadata = result.get("metadata", {})
     prompt_tokens = metadata.get("prompt_tokens", 0)
     completion_tokens = metadata.get("completion_tokens", 0)
-    raw_payload_str = metadata.get("raw_payload")
-    uncertainty_score = metadata.get("uncertainty_score", 0.5)
     perf_mode_enabled = str(settings.get("ROUTER_PERF_MODE", "0")).strip() == "1"
-    confidence_score = metadata.get("confidence_score")
-    confidence_band = metadata.get("confidence_band")
-    grounded = bool(metadata.get("grounded"))
-    abstained = bool(metadata.get("abstained"))
-    abstain_reason = metadata.get("abstain_reason")
-    verification_status = metadata.get("verification_status")
-    knowledge_version = metadata.get("knowledge_version")
-    review_status = metadata.get("review_status")
-    citations = metadata.get("citations") or []
-    evidence_snippets = metadata.get("evidence_snippets") or []
-
-    combined_payload = {
-        "uncertainty_score": uncertainty_score,
-        # Estimated before any model was chosen; the feedback loop needs it to
-        # cross the routing decision with the quality that came out of it.
-        "detected_complexity": metadata.get("detected_complexity"),
-        "workload_class": metadata.get("workload_class"),
-        "queue_enqueued_at": time.time(),
-        "tenant_id": req.tenant_id,
-        "confidence_score": confidence_score,
-        "confidence_band": confidence_band,
-        "grounded": grounded,
-        "abstained": abstained,
-        "abstain_reason": abstain_reason,
-        "verification_status": verification_status,
-        "knowledge_version": knowledge_version,
-        "review_status": review_status,
-        "citations": citations,
-        "evidence_snippets": evidence_snippets,
-        "openrouter_exploration": bool(metadata.get("openrouter_exploration")),
-        "exploration_info": metadata.get("exploration_info") or {},
-    }
-    if not perf_mode_enabled and raw_payload_str:
-        combined_payload["raw_payload"] = raw_payload_str
+    combined_payload = build_feedback_payload(
+        result, tenant_id=req.tenant_id, include_raw=not perf_mode_enabled
+    )
 
     # Turno de tool call não tem resposta em texto para julgar: pular juízes/reward
     # (evita envenenar os juízes com um "answer" vazio). Uso/cobrança são mantidos abaixo.
@@ -405,7 +372,9 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     except Exception as exc:
         logger.warning(f"[query] Failed to record tenant usage: {exc}")
 
-    if review_status == "needs_review":
+    if combined_payload.get("review_status") == "needs_review":
+        confidence = combined_payload.get("confidence_score")
+        verification = combined_payload.get("verification_status")
         try:
             create_response_review(
                 correlation_id=metadata.get("correlation_id"),
@@ -413,16 +382,16 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
                 query_text=req.query,
                 answer=result["answer"],
                 chosen_model=chosen_model,
-                confidence_score=float(confidence_score) if confidence_score is not None else None,
-                confidence_band=str(confidence_band) if confidence_band else None,
-                grounded=grounded,
-                verification_status=str(verification_status) if verification_status else None,
-                review_reason=str(abstain_reason or verification_status or "low_confidence"),
+                confidence_score=float(confidence) if confidence is not None else None,
+                confidence_band=str(combined_payload["confidence_band"] or "") or None,
+                grounded=combined_payload["grounded"],
+                verification_status=str(verification) if verification else None,
+                review_reason=str(combined_payload.get("abstain_reason") or verification or "low_confidence"),
                 metadata={
-                    "citations": citations,
-                    "evidence_snippets": evidence_snippets,
-                    "knowledge_version": knowledge_version,
-                    "workload_class": metadata.get("workload_class"),
+                    "citations": combined_payload["citations"],
+                    "evidence_snippets": combined_payload["evidence_snippets"],
+                    "knowledge_version": combined_payload.get("knowledge_version"),
+                    "workload_class": combined_payload.get("workload_class"),
                 },
             )
         except Exception as exc:

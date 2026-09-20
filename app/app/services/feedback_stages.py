@@ -343,6 +343,11 @@ def _formative_fields(quality: Quality, fb: FeedbackRequest) -> Dict[str, Any]:
 
     rubric = quality.judge_rubric or {}
     return {
+        # Auditoria da decisão: os candidatos e a frente de Pareto tal como
+        # existiam no momento da escolha. `{}` só quando não houve comparação
+        # (cache hit, modo de emergência) — nunca por se ter deitado fora.
+        "decision": fb.payload.get("decision") or None,
+        "correlation_id": fb.payload.get("correlation_id"),
         "quality_semantics": current_semantics(),
         "q_tech": rubric.get("q_tech"),
         "q_calibrado": rubric.get("q_calibrado"),

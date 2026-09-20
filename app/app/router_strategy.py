@@ -24,6 +24,7 @@ from app.config.constants import DEFAULT_UNCERTAINTY_THRESHOLD
 from app.model_registry import is_vision_only_model, model_supports_vision
 from app.reliability import get_cascade_detector, get_circuit_breaker_manager
 from app.services.ema_store import load_ema_snapshot, routing_latency_cost
+from app.services.route_decision import Candidate
 from app.settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
@@ -114,14 +115,14 @@ def model_score(quality: float, latency_s: float, cost_usd: float, weights: Tupl
     return quality * w_q - latency_s * w_l - cost_usd * w_c
 
 
-def choose_top2_models(
+def score_candidates(
     candidates: List[str],
     weights: Dict[str, float],  # Pesos do NSGA-II (w_quality, w_latency, w_cost)
     query_text: str,
     modality: str = "text",
     uncertainty_score: float = 0.0,
     min_quality: float = 0.0,  # Legacy
-) -> List[str]:
+) -> List[Candidate]:
 
     # ==================================================================
     # 🚨 CASCADE DETECTION - Emergency routing check
@@ -134,7 +135,10 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         emergency_model = cascade_detector.get_emergency_fallback()
         if emergency_model:
             logger.warning(f"[Strategy] 🚨 EMERGENCY MODE: Using fallback {emergency_model}")
-            return [emergency_model]
+            # Sem pontuação: em emergência não houve comparação nenhuma, e
+            # inventar objectivos aqui seria registar uma decisão que não
+            # aconteceu.
+            return [Candidate(emergency_model, 0.0, 0.0, 0.0, 1.0, 0.0)]
 
     snapshot = get_snapshot()
     ema_snapshot = load_ema_snapshot(modality)
@@ -152,7 +156,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     w = (weights.get("w_quality", 1.0), weights.get("w_latency", 0.5), weights.get("w_cost", 50.0))
     risks = (settings.RISK_FACTOR_SOTA_HIGH_UQ, settings.RISK_FACTOR_LOCAL_HIGH_UQ, settings.RISK_FACTOR_LOCAL_LOW_UQ)
 
-    scores = []
+    scored: List[Candidate] = []
     for model in candidates:
         risk = _risk_factor(model, is_high_uncertainty, risks) * _get_circuit_breaker_penalty(model)
         # Latência e custo estimados: EMA compartilhada (feedback de todos os workers);
@@ -161,14 +165,39 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             ema_snapshot.get(model), is_local=_is_local(model), is_sota=_is_sota(model)
         )
         # Qualidade base (0-10) via Thompson Sampling, ajustada pelo risco
-        score = model_score(sampled_qs.get(model, 5.0) * risk, avg_latency, est_cost, w)
-        scores.append((model, score))
+        quality = sampled_qs.get(model, 5.0)
+        scored.append(
+            Candidate(
+                model=model,
+                quality=round(float(quality), 4),
+                latency_s=round(float(avg_latency), 4),
+                cost_usd=round(float(est_cost), 6),
+                risk=round(float(risk), 4),
+                score=round(float(model_score(quality * risk, avg_latency, est_cost, w)), 6),
+            )
+        )
 
-    # Ordena e pega top 2
-    scores.sort(key=lambda x: x[1], reverse=True)
-    top2 = [s[0] for s in scores[:2]]
+    scored.sort(key=lambda c: c.score, reverse=True)
 
     if is_high_uncertainty:
-        logger.info(f"[Strategy] ⚠️ Alta Incerteza ({uncertainty_score:.2f}). Top2: {top2}")
+        logger.info(f"[Strategy] ⚠️ Alta Incerteza ({uncertainty_score:.2f}). Top2: {[c.model for c in scored[:2]]}")
 
-    return top2
+    return scored
+
+
+def choose_top2_models(
+    candidates: List[str],
+    weights: Dict[str, float],
+    query_text: str,
+    modality: str = "text",
+    uncertainty_score: float = 0.0,
+    min_quality: float = 0.0,
+) -> List[str]:
+    """Top-2 by scalarised score. Façade over :func:`score_candidates`.
+
+    Kept because the whole routing pipeline, the tests and the dependency dict
+    address it by this name; the scoring detail it used to discard is now
+    available from ``score_candidates`` for the audit record.
+    """
+    scored = score_candidates(candidates, weights, query_text, modality, uncertainty_score, min_quality)
+    return [c.model for c in scored[:2]]

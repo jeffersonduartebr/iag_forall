@@ -283,7 +283,8 @@ def build_result(
             "modality_selected": ctx.modality,
             "is_multimodal_route": bool(ctx.image_b64),
             "objectives": {"latency": latency_s, "cost": total_cost, "uncertainty": uncertainty},
-            "pareto_front": [],
+            "pareto_front": choice.decision.get("pareto_front", []),
+            "strategy_weights": choice.decision.get("weights", {}),
             "explanation": (
                 f"OpenRouter exploration: {chosen}"
                 if choice.exploration_mode
@@ -291,5 +292,10 @@ def build_result(
             ),
             "fallback": {"used": outcome.fallback_used, "models_tried": outcome.models_tried, "errors": outcome.errors},
         },
-        "candidates": [],
+        # Os candidatos considerados, com os três objectivos de cada um e a
+        # marca de quem está na frente de Pareto. Isto era `[]` literal: sem
+        # ele não havia forma de reconstruir *porquê* um modelo foi escolhido,
+        # só qual.
+        "candidates": choice.decision.get("candidates", []),
+        "decision": choice.decision,
     }

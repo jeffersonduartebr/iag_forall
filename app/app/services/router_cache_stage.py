@@ -51,6 +51,9 @@ def _cache_hit_result(ctx: RouteContext, cached: Dict[str, Any]) -> Dict[str, An
         "route": {
             "chosen_model": "semantic_cache",
             "objectives": {"latency": 0, "cost": 0, "uncertainty": 0},
+            # Vazio com razão: um cache hit não fez comparação nenhuma, logo
+            # não há decisão de routing para registar. Isto é diferente do
+            # caminho normal, onde o vazio era informação deitada fora.
             "pareto_front": [],
             "explanation": "Cache",
             "fallback": {"used": False, "models_tried": ["semantic_cache"], "errors": []},

@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.model_registry import filter_configured_model_names, filter_tool_capable_model_names
 from app.native_tools import filter_native_tool_capable_model_names, split_tools
 from app.services.adversarial_governance import advgov_escalate
+from app.services.route_decision import decision_record
 
 _CLOUD_PREFIXES = ("openrouter/", "openai/", "anthropic/", "gemini/")
 
@@ -53,6 +54,9 @@ class RouteContext:
     response_format: Optional[dict] = None
     start_time: float = field(default_factory=time.time)
     stage_timings_ms: Dict[str, float] = field(default_factory=dict)
+    #: Preenchidos pelo estágio de selecção, para o registo auditável da decisão.
+    scored_candidates: List[Any] = field(default_factory=list)
+    strategy_weights: Dict[str, float] = field(default_factory=dict)
 
     @property
     def hints(self) -> Dict[str, Any]:
@@ -77,6 +81,10 @@ class RouteChoice:
     top2: List[str]
     exploration_mode: bool = False
     exploration_info: Dict[str, Any] = field(default_factory=dict)
+    #: Candidatos pontuados e frente de Pareto desta decisão. Vazio só quando
+    #: não houve comparação (modo de emergência) — nunca por a informação ter
+    #: sido deitada fora, que era o que acontecia antes.
+    decision: Dict[str, Any] = field(default_factory=dict)
 
 
 def _record_breakers(deps: Dict[str, Any]) -> None:
@@ -186,13 +194,26 @@ def restrict_to_tool_models(ctx: RouteContext, models: List[str]) -> List[str]:
     return candidates
 
 
+async def _scored_top2(ctx: RouteContext, models: List[str], uncertainty: float) -> Tuple[List[str], List[Any], Dict[str, float]]:
+    """Top-2 by NSGA-weighted score, plus the scoring detail behind it."""
+    deps = ctx.deps
+    weights = await deps["get_dynamic_strategy_weights_async"](ctx.modality)
+    scorer = deps.get("score_candidates")
+    if scorer is None:  # contrato antigo: só os nomes
+        top2 = await deps["asyncio"].to_thread(
+            deps["choose_top2_models"], models, weights, ctx.query, ctx.modality, uncertainty
+        )
+        return top2, [], weights
+    scored = await deps["asyncio"].to_thread(scorer, models, weights, ctx.query, ctx.modality, uncertainty)
+    return [c.model for c in scored[:2]], list(scored), weights
+
+
 async def _top2_and_pick(ctx: RouteContext, models: List[str], uncertainty: float) -> Tuple[List[str], str]:
     """NSGA-weighted top-2 followed by the bandit's choice between them."""
     deps = ctx.deps
-    weights = await deps["get_dynamic_strategy_weights_async"](ctx.modality)
-    top2 = await deps["asyncio"].to_thread(
-        deps["choose_top2_models"], models, weights, ctx.query, ctx.modality, uncertainty
-    )
+    top2, scored, weights = await _scored_top2(ctx, models, uncertainty)
+    ctx.scored_candidates = scored
+    ctx.strategy_weights = weights
     select_async = deps.get("select_model_async")
     if select_async is not None:
         return top2, await select_async(top2, ctx.query, ctx.modality)
@@ -232,7 +253,20 @@ async def select_route(ctx: RouteContext, models: List[str], uncertainty: float)
     # Governança adversarial (roadmap #17): cluster de alto risco ou incerteza alta
     # pode escalar para um candidato mais forte; no-op sem ADVGOV_ENABLED.
     chosen, top2 = advgov_escalate(ctx.deps, chosen, top2, models, uncertainty, ctx.runtime_hints)
-    return RouteChoice(chosen=chosen, top2=top2)
+    return RouteChoice(chosen=chosen, top2=top2, decision=_decision_record(ctx, chosen, top2, uncertainty))
+
+
+def _decision_record(ctx: RouteContext, chosen: str, top2: List[str], uncertainty: float) -> Dict[str, Any]:
+    """The audit record of this decision, or ``{}`` when there was no comparison."""
+    if not ctx.scored_candidates:
+        return {}
+    return decision_record(
+        ctx.scored_candidates,
+        chosen=chosen,
+        top2=top2,
+        weights=ctx.strategy_weights,
+        uncertainty=uncertainty,
+    )
 
 
 def _empty_bundle(ctx: RouteContext, reason: str, default_mode: str) -> Dict[str, Any]:
