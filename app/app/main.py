@@ -26,7 +26,6 @@ os.environ["SCARF_NO_ANALYTICS"] = "true"
 
 import asyncio
 import concurrent.futures
-import json
 import logging
 import resource
 import time
@@ -81,14 +80,10 @@ from .observability import (
 from .prometheus_setup import setup_prometheus
 from .providers_async import (
     close_http_client,
-    fetch_ollama_tags,
-    get_configured_ollama_warm_models,
-    get_http_client,
     get_ollama_admission_snapshot,
     log_process_file_descriptor_limit,
     start_provider_runtime_services,
     stop_provider_runtime_services,
-    warm_ollama_model_runtime,
 )
 from .query_jobs import (  # noqa: F401  (enqueue_query_job re-export p/ query_http/tests)
     enqueue_query_job,
@@ -104,6 +99,7 @@ from .schemas import (
     QueuedQueryAcceptedResponse,
 )
 from .services.governance_runtime import ensure_runtime_support_tables
+from .services.ollama_preload import preload_ollama_models
 from .services.query_http import execute_query, execute_query_stream
 from .services.query_response_builder import build_query_response  # noqa: F401  (re-export p/ query_http/tests)
 from .services.query_runtime import (  # noqa: F401  (re-export p/ query_http/tests)
@@ -287,98 +283,6 @@ app.add_middleware(BackpressureMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_SIZE)
 
-
-OLLAMA_HOST = os.getenv(
-    "OLLAMA_HOST",
-    os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
-)
-VLM_OLLAMA_MODELS = list(getattr(settings, "VLM_OLLAMA_MODELS", []))
-
-
-async def preload_ollama_models():
-    """
-    Preload Ollama models asynchronously using the shared provider HTTP client.
-
-    Model discovery and downloads are routed through the provider runtime so
-    startup warmup does not create extra ad hoc HTTP clients or duplicate
-    `/api/tags` polling pressure.
-    """
-    try:
-        logger.info("[ollama-preload] Iniciando verificação...")
-        candidates_raw = os.getenv("CANDIDATE_MODELS_LIST", "[]")
-        judges_raw = os.getenv("JUDGE_MODELS", "[]")
-        main_model = os.getenv("OLLAMA_MODEL", "")
-        embed_model = settings.get("EMBED_TEXT_MODEL", "all-minilm")
-
-        configured_warm_models = get_configured_ollama_warm_models()
-        all_models = list(configured_warm_models)
-        for raw in (candidates_raw, judges_raw):
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    all_models.extend(parsed)
-            except json.JSONDecodeError:
-                all_models.extend(raw.split(","))
-
-        if main_model:
-            all_models.append(main_model)
-
-        for name in VLM_OLLAMA_MODELS:
-            all_models.append(f"ollama/{name}")
-
-        if embed_model:
-            if not embed_model.startswith("ollama/"):
-                all_models.append(f"ollama/{embed_model}")
-            else:
-                all_models.append(embed_model)
-
-        all_models.append("ollama/all-minilm")
-
-        all_models = [m.strip() for m in all_models if m.strip().startswith("ollama/")]
-        all_models = list(dict.fromkeys(all_models))
-
-        if not all_models:
-            return
-
-        try:
-            available = {m["name"] for m in await fetch_ollama_tags(force_refresh=False)}
-        except Exception:
-            available = set()
-
-        for model in all_models:
-            name = model.split("/", 1)[1]
-            if any(name in avail for avail in available) or f"{name}:latest" in available:
-                logger.info(f"[ollama-preload] '{name}' já disponível.")
-                continue
-
-            logger.info(f"[ollama-preload] Baixando '{name}'...")
-            try:
-                client = await get_http_client()
-                async with client.stream(
-                    "POST",
-                    f"{OLLAMA_HOST}/api/pull",
-                    json={"name": name},
-                    timeout=1200.0,
-                ) as response:
-                    response.raise_for_status()
-                    # Consume the stream to complete the download
-                    async for _ in response.aiter_lines():
-                        pass
-                logger.info(f"[ollama-preload] '{name}' OK.")
-            except Exception as e:
-                logger.error(f"[ollama-preload] Falha ao baixar '{name}': {e}")
-
-        if str(settings.get("OLLAMA_WARMUP_GENERATE_ENABLED", "1")).strip() == "1":
-            warm_targets = configured_warm_models or all_models[: max(1, min(3, len(all_models)))]
-            for model in warm_targets:
-                try:
-                    await warm_ollama_model_runtime(model)
-                except Exception as e:
-                    logger.warning(f"[ollama-preload] Falha ao aquecer runtime '{model}': {e}")
-
-        logger.info("[ollama-preload] Concluído.")
-    except Exception as e:
-        logger.exception(f"[ollama-preload] Erro geral: {e}")
 
 
 app.include_router(rag_router.router)

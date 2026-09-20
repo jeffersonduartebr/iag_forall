@@ -210,6 +210,83 @@ async def _make_embedding(query: str, modality: str, image_b64: Optional[str]):
         logger.warning(f"[semantic_cache] Embed fail: {e}")
         return None
 
+def _observe_lookup(result: str, started_at: float, *, l1_size: bool = False) -> None:
+    """Record one lookup outcome. Métricas nunca podem derrubar uma consulta.
+
+    Isto existia como oito blocos ``try/except: pass`` repetidos dentro de
+    ``check_cache``: oito ramos de excepção que não decidem nada, mas que
+    dominavam a complexidade ciclomática da única função no caminho quente.
+    """
+    try:
+        if l1_size:
+            L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
+        SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result=result).inc()
+        SEMANTIC_CACHE_LATENCY.labels(result=result).observe(time.time() - started_at)
+    except Exception:
+        pass
+
+
+def _observe_l1(hit: bool) -> None:
+    """Record an L1 hit or miss and the resulting cache size."""
+    try:
+        (L1_CACHE_HITS if hit else L1_CACHE_MISSES).inc()
+        L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
+    except Exception:
+        pass
+
+
+def _l1_key(norm_query: str, modality: str, tenant_ns: str, image_b64: Optional[str]) -> str:
+    """Exact-match key: tenant, modality, normalised query and image digest."""
+    img_hash = hashlib.sha256(image_b64.encode()).hexdigest() if image_b64 else "no_img"
+    return f"{tenant_ns}:{modality}:{_compute_sha256(norm_query)}:{img_hash}"
+
+
+def _hit_payload(meta: Dict, similarity: float) -> Optional[Dict]:
+    """Rebuild the provider-shaped response from a cached row; ``None`` if empty."""
+    answer_text = meta.get("answer_payload", "")
+    if not answer_text:
+        return None
+    return {
+        "text": answer_text,
+        "similarity": float(similarity),
+        "model_used": meta.get("model_used", "unknown"),
+        "image_output_b64": meta.get("image_output_b64", None),
+    }
+
+
+async def _semantic_lookup(q_emb, tenant_ns: str, started_at: float, full_hash: str) -> Optional[Dict]:
+    """L2 stage: nearest neighbour in Chroma, above the dynamic threshold."""
+    results = await query_embedding(
+        modality="cache",
+        embedding=q_emb,
+        n_results=1,
+        where={"tenant_id": tenant_ns} if tenant_ns != "global" else None,
+    )
+    if not results:
+        _observe_lookup("miss", started_at)
+        return None
+
+    distance, meta = _extract_first_result(results)
+    if distance is None or meta is None:
+        _observe_lookup("empty_result", started_at)
+        return None
+
+    # Chroma devolve distância de cosseno; similaridade = 1 - distância.
+    similarity = 1.0 - distance
+    if similarity < get_cache_threshold():
+        _observe_lookup("below_threshold", started_at)
+        return None
+
+    res = _hit_payload(meta, similarity)
+    if res is None:
+        return None
+
+    _l1_cache.store(full_hash, res)
+    logger.debug(f"[semantic_cache] L1 cache stored for hash {full_hash[:16]}...")
+    _observe_lookup("hit", started_at, l1_size=True)
+    return res
+
+
 async def check_cache(
     query: str,
     modality: str = "text",
@@ -230,113 +307,29 @@ async def check_cache(
     modality = _normalize_modality(modality)
     lookup_started_at = time.time()
 
-    # 1. L1 Cache (Exact Match em RAM)
     norm_query = _normalize_query(query)
     tenant_ns = (tenant_id or "global").strip()
-    img_hash = hashlib.sha256(image_b64.encode()).hexdigest() if image_b64 else "no_img"
-    full_hash = f"{tenant_ns}:{modality}:{_compute_sha256(norm_query)}:{img_hash}"
+    full_hash = _l1_key(norm_query, modality, tenant_ns, image_b64)
 
     if cached := _l1_cache.get(full_hash):
         logger.info("[semantic_cache] L1 RAM Hit")
-        try:
-            L1_CACHE_HITS.inc()
-            L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
-            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="hit").inc()
-            SEMANTIC_CACHE_LATENCY.labels(result="hit").observe(time.time() - lookup_started_at)
-        except Exception:
-            pass
+        _observe_l1(True)
+        _observe_lookup("hit", lookup_started_at)
         return cached
-    try:
-        L1_CACHE_MISSES.inc()
-        L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
-    except Exception:
-        pass
+    _observe_l1(False)
 
-    # 2. Gera Embedding (na forma normalizada, simétrica ao store)
+    # Embedding na forma normalizada, simétrico ao store.
     q_emb = await _make_embedding(norm_query, modality, image_b64)
     if q_emb is None:
-        try:
-            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="error").inc()
-            SEMANTIC_CACHE_LATENCY.labels(result="error").observe(time.time() - lookup_started_at)
-        except Exception:
-            pass
+        _observe_lookup("error", lookup_started_at)
         return None
 
-    # 3. L2 Cache (Semantic Search no Chroma)
     try:
-        # Busca na coleção de cache ("cache" é mapeado para semantic_cache_v2 no vectorstore.py)
-        results = await query_embedding(
-            modality="cache",
-            embedding=q_emb,
-            n_results=1,
-            where={"tenant_id": tenant_ns} if tenant_ns != "global" else None,
-        )
-
-        if not results:
-            try:
-                SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="miss").inc()
-                SEMANTIC_CACHE_LATENCY.labels(result="miss").observe(time.time() - lookup_started_at)
-            except Exception:
-                pass
-            return None
-
-        distance, meta = _extract_first_result(results)
-        if distance is None or meta is None:
-            try:
-                SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="empty_result").inc()
-                SEMANTIC_CACHE_LATENCY.labels(result="empty_result").observe(time.time() - lookup_started_at)
-            except Exception:
-                pass
-            return None
-
-        # Chroma retorna 'distances' (Cosine Distance).
-        # Similarity = 1 - Distance.
-        similarity = 1.0 - distance
-
-        # Use dynamic threshold (Phase 5)
-        threshold = get_cache_threshold()
-        if similarity >= threshold:
-            # O texto do documento é a Query original
-            # A resposta está no metadata
-            answer_text = meta.get("answer_payload", "")
-
-            if not answer_text:
-                return None
-
-            # Reconstrói objeto de resposta
-            res = {
-                "text": answer_text,
-                "similarity": float(similarity),
-                "model_used": meta.get("model_used", "unknown"),
-                "image_output_b64": meta.get("image_output_b64", None) # Se houver
-            }
-
-            # Atualiza L1
-            _l1_cache.store(full_hash, res)
-            logger.debug(f"[semantic_cache] L1 cache stored for hash {full_hash[:16]}...")
-            try:
-                L1_CACHE_SIZE.set(_l1_cache.stats()["size"])
-                SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="hit").inc()
-                SEMANTIC_CACHE_LATENCY.labels(result="hit").observe(time.time() - lookup_started_at)
-            except Exception:
-                pass
-            return res
-        try:
-            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="below_threshold").inc()
-            SEMANTIC_CACHE_LATENCY.labels(result="below_threshold").observe(time.time() - lookup_started_at)
-        except Exception:
-            pass
-
+        return await _semantic_lookup(q_emb, tenant_ns, lookup_started_at, full_hash)
     except Exception as e:
         logger.warning(f"[semantic_cache] Chroma lookup fail: {e}")
-        try:
-            SEMANTIC_CACHE_LOOKUP_TOTAL.labels(result="error").inc()
-            SEMANTIC_CACHE_LATENCY.labels(result="error").observe(time.time() - lookup_started_at)
-        except Exception:
-            pass
+        _observe_lookup("error", lookup_started_at)
         return None
-
-    return None
 
 async def store_cache(
     query: str,
