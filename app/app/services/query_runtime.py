@@ -21,6 +21,7 @@ from ..providers_async import ProviderCallError, ProviderCircuitOpenError
 from ..roadmap_features import create_response_review
 from ..router_core import route_and_answer
 from ..services.feedback_payload import build_feedback_payload
+from ..services.governance_degradation import resolve_budget, resolve_policy
 from ..services.governance_runtime import (
     check_runtime_budget_async,
     get_runtime_active_policy_async,
@@ -271,11 +272,9 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     pre_budget, active_policy = await asyncio.gather(
         check_tenant_budget(req.tenant_id), get_active_policy(), return_exceptions=True
     )
-    if isinstance(pre_budget, BaseException):
-        raise pre_budget
-    _raise_if_budget_exceeded(req, pre_budget)
-    if isinstance(active_policy, BaseException):
-        raise active_policy
+    # Um blip do MariaDB não pode derrubar um caminho que não precisa dele.
+    _raise_if_budget_exceeded(req, resolve_budget(pre_budget, req.tenant_id))
+    active_policy = resolve_policy(active_policy)
 
     modality, image_input = _resolve_modality(req)
     profile = apply_query_runtime_profile(req, modality=modality, image_input=image_input)

@@ -35,7 +35,6 @@ from fastapi import APIRouter, Depends, FastAPI, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.gzip import GZipMiddleware
 
 from .api import (
     admin_auth_router,
@@ -98,6 +97,7 @@ from .schemas import (
     QueryResponse,
     QueuedQueryAcceptedResponse,
 )
+from .services.app_wiring import install_middleware
 from .services.governance_runtime import ensure_runtime_support_tables
 from .services.ollama_preload import preload_ollama_models
 from .services.query_http import execute_query, execute_query_stream
@@ -276,12 +276,11 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             clear_correlation_id()
 
 
-# Add middleware in order (last added = first executed)
-app.add_middleware(CorrelationIdMiddleware)
-app.add_middleware(TenantRateLimitMiddleware)
-app.add_middleware(BackpressureMiddleware)
-app.add_middleware(RateLimitMiddleware)
-app.add_middleware(GZipMiddleware, minimum_size=GZIP_MIN_SIZE)
+install_middleware(
+    app,
+    (CorrelationIdMiddleware, TenantRateLimitMiddleware, BackpressureMiddleware, RateLimitMiddleware),
+    gzip_min_size=GZIP_MIN_SIZE,
+)
 
 
 

@@ -20,6 +20,7 @@ from ._infra import (
     CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
 )
+from ._timeouts import resolve_timeout
 
 
 class AnthropicProvider(BaseProvider):
@@ -71,6 +72,7 @@ class AnthropicProvider(BaseProvider):
                     if anth_tool_choice:
                         create_args["tool_choice"] = anth_tool_choice
 
+            create_args["timeout"] = resolve_timeout(kwargs)
             resp = await self.client.messages.create(**create_args)
 
             # Itera blocos (text + tool_use) em vez de assumir content[0].text.

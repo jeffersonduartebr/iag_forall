@@ -26,6 +26,7 @@ from ._infra import (
     OPENROUTER_BASE_URL,
     OPENROUTER_HTTP_REFERER,
 )
+from ._timeouts import resolve_timeout
 
 
 class OpenAIProvider(BaseProvider):
@@ -80,6 +81,9 @@ class OpenAIProvider(BaseProvider):
                 api_args["max_tokens"] = max_tokens
                 api_args["temperature"] = temperature
 
+            # Sem isto o SDK usa o seu default de 600 s e o `timeout_seconds`
+            # calculado pelo router era simplesmente ignorado.
+            api_args["timeout"] = resolve_timeout(kwargs)
             resp = await self.client.chat.completions.create(**api_args)
 
             choice = resp.choices[0]
