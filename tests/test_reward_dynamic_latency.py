@@ -19,7 +19,6 @@ from app.services.reward import (
     latency_threshold_s,
 )
 
-
 # ---------------------------------------------------------------------------
 # The identity that makes the change safe
 # ---------------------------------------------------------------------------

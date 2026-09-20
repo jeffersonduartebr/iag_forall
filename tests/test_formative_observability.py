@@ -14,7 +14,6 @@ from app.services.formative_observability import (
     routing_verdict,
 )
 
-
 # ---------------------------------------------------------------------------
 # Model classification
 # ---------------------------------------------------------------------------

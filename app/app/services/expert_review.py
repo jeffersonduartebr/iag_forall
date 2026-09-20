@@ -217,6 +217,44 @@ def expert_judge_agreement_report(
         "mean_absolute_error": sum(abs_errors) / len(abs_errors),
         "pairs": len(pairs),
         "by_theme": _kappa_by_theme(pairs),
+        "delivery": delivery_agreement_report(assessments),
+    }
+
+
+def delivery_agreement_report(assessments: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Agreement between the usurpation judge and the human ``scaffolding`` score.
+
+    The human rubric has scored ``scaffolding`` on 0-10 since it was introduced
+    (``schemas.ExpertRubricScores``), it is stored in ``expert_assessments.rubric_json``
+    and it has never been aggregated anywhere. It is the ground truth for
+    ``p_entrega``, available without a schema change.
+
+    The two run in opposite directions — high scaffolding is good, high delivery
+    is bad — so the human score is inverted before comparison. Reporting this
+    kappa is what turns "our usurpation factor works" from a claim into a
+    measurement.
+    """
+    pairs = [
+        (a["rubric"]["scaffolding"], a["p_entrega"])
+        for a in assessments
+        if isinstance(a.get("rubric"), dict)
+        and a["rubric"].get("scaffolding") is not None
+        and a.get("p_entrega") is not None
+    ]
+    if len(pairs) < 2:
+        return {"kappa": None, "n": len(pairs), "method": "insufficient_pairs"}
+
+    def _delivery_bucket(p: float) -> int:
+        """Back to the five ordinal levels the judge chooses between."""
+        return min(4, max(0, int(round(float(p) * 4))))
+
+    human = [_delivery_bucket(1.0 - float(scaffolding) / 10.0) for scaffolding, _ in pairs]
+    judge = [_delivery_bucket(float(p)) for _, p in pairs]
+    errors = [abs(h - j) for h, j in zip(human, judge)]
+    return {
+        **cohens_kappa(human, judge),
+        "mean_absolute_levels": sum(errors) / len(errors),
+        "pairs": len(pairs),
     }
 
 

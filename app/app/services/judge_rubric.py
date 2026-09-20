@@ -34,6 +34,12 @@ OnRatingFn = Callable[[str, Rating, Dict[str, Any]], None]
 RUBRIC_DIMENSIONS = ("clareza", "acuracia", "alinhamento")
 DEFAULT_RUBRIC_WEIGHTS: Dict[str, float] = {"clareza": 0.3, "acuracia": 0.5, "alinhamento": 0.2}
 
+#: The two dimensions that measure the *answer*, as opposed to how it was
+#: delivered. Q_tech renormalises them over their own weights (0.3 + 0.5 = 0.8),
+#: which is what makes the formative score a product of a technical term and a
+#: delivery term rather than a sum that lets one pay for the other.
+TECH_DIMENSIONS = ("clareza", "acuracia")
+
 _ALIASES = {
     "clareza": "clareza",
     "clareza_coesao": "clareza",
@@ -108,8 +114,8 @@ def _canonical_key(key: Any) -> Optional[str]:
     return _ALIASES.get(text)
 
 
-def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-    match = re.search(r"<scores>\s*(.*?)\s*</scores>", text, re.IGNORECASE | re.DOTALL)
+def _extract_json_object(text: str, tag: str = "scores") -> Optional[Dict[str, Any]]:
+    match = re.search(rf"<{tag}>\s*(.*?)\s*</{tag}>", text, re.IGNORECASE | re.DOTALL)
     candidates = [match.group(1)] if match else []
     candidates += re.findall(r"\{[^{}]*\}", text)
     for raw in candidates:
@@ -169,12 +175,22 @@ def parse_rubric_weights(raw: Any) -> Dict[str, float]:
     return weights
 
 
-def weighted_quality(scores: Mapping[str, float], weights: Mapping[str, float]) -> float:
-    """``Q = sum(w_i * d_i) / sum(w_i)`` over the rubric dimensions (0-10 scale)."""
-    total = sum(weights[d] for d in RUBRIC_DIMENSIONS)
+def weighted_quality(
+    scores: Mapping[str, float],
+    weights: Mapping[str, float],
+    dims: Sequence[str] = RUBRIC_DIMENSIONS,
+) -> float:
+    """``Q = sum(w_i * d_i) / sum(w_i)`` over ``dims`` (0-10 scale).
+
+    ``dims`` defaults to the full rubric, so every existing caller is unchanged.
+    Passing :data:`TECH_DIMENSIONS` yields Q_tech: the same weights renormalised
+    over clarity and accuracy alone, which is the technical half of the
+    formative score.
+    """
+    total = sum(weights[d] for d in dims)
     if total <= 0:
-        weights, total = DEFAULT_RUBRIC_WEIGHTS, 1.0
-    return sum(weights[d] * scores[d] for d in RUBRIC_DIMENSIONS) / total
+        weights, total = DEFAULT_RUBRIC_WEIGHTS, sum(DEFAULT_RUBRIC_WEIGHTS[d] for d in dims)
+    return sum(weights[d] * scores[d] for d in dims) / total
 
 
 def combine_ratings(
