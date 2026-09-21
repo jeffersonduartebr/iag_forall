@@ -27,8 +27,7 @@ def test_feedback_routes_success_and_errors(monkeypatch):
     assert exc.value.status_code == 500
 
     monkeypatch.setattr(fr, "get_feedback_stats", lambda model=None, hours=24: {"model": model, "hours": hours})
-    monkeypatch.setattr(fr, "require_admin", lambda token: None)
-    assert fr.feedback_stats(model="ollama/x", hours=12, x_admin_token="any") == {"model": "ollama/x", "hours": 12}
+    assert fr.feedback_stats(model="ollama/x", hours=12) == {"model": "ollama/x", "hours": 12}
 
 
 def test_celery_app_builds_urls_from_env(monkeypatch):

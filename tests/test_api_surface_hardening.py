@@ -130,15 +130,14 @@ def client():
     _invalidate_cache()
 
 
-@pytest.mark.parametrize("step", ["5s", "30s", "1m", "2h", "500ms"])
-def test_a_sane_dashboard_step_reaches_the_auth_check(client, step):
-    """401, não 422: a forma é aceite e o pedido chega às credenciais.
+#: O conftest fixa-o antes de a app ser importada.
+ADMIN = {"X-Admin-Token": "test-admin-token-for-ci"}
 
-    Isto apoia-se na ordenação que o próprio `test_admin_surface_auth` fixa —
-    a validação corre antes da autenticação — e usa-a para distinguir "rejeitado
-    pelo formato" de "rejeitado por falta de credenciais".
-    """
-    assert client.get(f"/admin/dashboard/series?step={step}").status_code in {401, 403}
+
+@pytest.mark.parametrize("step", ["5s", "30s", "1m", "2h", "500ms"])
+def test_a_sane_dashboard_step_is_accepted(client, step):
+    """Não 422: a forma passa e o pedido segue para o handler."""
+    assert client.get(f"/admin/dashboard/series?step={step}", headers=ADMIN).status_code != 422
 
 
 @pytest.mark.parametrize("step", ["0s", "1", "abc", "5s; drop", "-1s", "1y", "999999s"])
@@ -146,7 +145,18 @@ def test_a_nonsense_dashboard_step_is_rejected(client, step):
     """Ia sem validação para o `query_range` do Prometheus. Não é PromQL — as
     cinco consultas são constantes — mas `step=1s` sobre 24 h pede 86 400
     pontos por série, cinco séries de cada vez, e é o chamador que escolhe."""
-    assert client.get(f"/admin/dashboard/series?step={step}").status_code == 422
+    assert client.get(f"/admin/dashboard/series?step={step}", headers=ADMIN).status_code == 422
+
+
+def test_an_anonymous_caller_cannot_probe_the_validation(client):
+    """A prova de que a autenticação passou a preceder a validação.
+
+    Antes, um `step` inválido devolvia 422 a quem não tivesse credenciais —
+    ou seja, dava para enumerar as regras de validação de cada rota sem
+    autenticação nenhuma. Agora a resposta é a mesma, válido ou não: 401.
+    """
+    assert client.get("/admin/dashboard/series?step=lixo").status_code in {401, 403}
+    assert client.get("/admin/dashboard/series?step=5s").status_code in {401, 403}
 
 
 # ---------------------------------------------------------------------------

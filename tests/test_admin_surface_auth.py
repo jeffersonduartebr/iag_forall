@@ -18,24 +18,23 @@ from fastapi.testclient import TestClient
 
 REFUSAL = {401, 403}
 
-#: O FastAPI valida o corpo do pedido **antes** de o handler correr, e a
-#: autenticação do admin é a primeira linha do handler. Um POST/PUT com corpo
-#: inválido devolve 422 sem nunca chegar à verificação de credenciais — o que
-#: também significa que um chamador anónimo consegue sondar quais os campos
-#: obrigatórios de cada rota. É um vazamento pequeno, mas é real, e impede que
-#: o teste distinga "sem credenciais" de "corpo inválido".
-#:
-#: A propriedade que se pode afirmar sempre, e que é a que interessa, é mais
-#: forte do que o código exacto: **nunca uma resposta de sucesso**.
-NEVER_SUCCEEDS = REFUSAL | {404, 405, 422}
-
-#: Rotas de autenticação: são a porta de entrada, têm de aceitar quem ainda não
-#: tem credenciais. Devolvem 401/422 por outras razões, não por falta de sessão.
+#: Rotas de autenticação: são a porta de entrada e têm de aceitar quem ainda
+#: não tem credenciais.
 PUBLIC_ADMIN_ROUTES = {
     ("POST", "/admin/auth/login"),
     ("POST", "/admin/auth/expert-login"),
     ("POST", "/admin/auth/logout"),
 }
+
+#: Depois de a autenticação passar a ser uma dependência, a afirmação pode ser
+#: exacta em **todas** as rotas, não só nas sem corpo. O FastAPI resolve as
+#: dependências antes de levantar os erros de validação acumulados, por isso um
+#: 401 chega primeiro que um 422 — verificado: a mesma rota responde 401 como
+#: dependência e 422 como primeira linha do handler.
+#:
+#: Isto fecha também o vazamento que a versão anterior deste ficheiro
+#: documentava: um chamador anónimo já não consegue sondar quais os campos
+#: obrigatórios de cada rota enviando um corpo inválido.
 
 
 def admin_routes():
@@ -91,18 +90,36 @@ def test_the_admin_surface_is_not_empty():
 
 
 @pytest.mark.parametrize("method,path", admin_routes())
-def test_an_admin_route_never_succeeds_for_an_anonymous_caller(client, method, path):
-    response = client.request(method, concrete(path), json={})
-    assert response.status_code in NEVER_SUCCEEDS, (
+def test_an_admin_route_refuses_an_anonymous_caller(client, method, path):
+    """401/403, mesmo com um corpo inválido: a autenticação corre primeiro."""
+    response = client.request(method, concrete(path), json={"campo": "invalido"})
+    assert response.status_code in REFUSAL, (
         f"{method} {path} respondeu {response.status_code} sem credenciais"
     )
 
 
 @pytest.mark.parametrize("method,path", admin_routes())
-def test_an_admin_route_never_succeeds_with_a_wrong_token(client, method, path):
-    response = client.request(method, concrete(path), json={}, headers={"X-Admin-Token": "errado"})
-    assert response.status_code in NEVER_SUCCEEDS, (
+def test_an_admin_route_refuses_a_wrong_token(client, method, path):
+    response = client.request(
+        method, concrete(path), json={"campo": "invalido"}, headers={"X-Admin-Token": "errado"}
+    )
+    assert response.status_code in REFUSAL, (
         f"{method} {path} respondeu {response.status_code} com um token inválido"
+    )
+
+
+@pytest.mark.parametrize("method,path", admin_routes())
+def test_the_body_is_never_validated_before_the_credentials(client, method, path):
+    """A prova de que a correcção estrutural funcionou.
+
+    Antes, um corpo inválido dava 422 a quem não tivesse credenciais — ou seja,
+    dava para enumerar as regras de validação de toda a superfície de admin
+    sem autenticação nenhuma. Agora a resposta é a mesma, o corpo seja válido
+    ou não.
+    """
+    response = client.request(method, concrete(path), json={"campo": "invalido"})
+    assert response.status_code != 422, (
+        f"{method} {path} validou o corpo antes de verificar as credenciais"
     )
 
 

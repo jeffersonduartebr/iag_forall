@@ -68,7 +68,6 @@ def test_governance_routes(monkeypatch):
         TenantBudgetUpdateRequest,
     )
 
-    monkeypatch.setattr(gr, "require_admin", lambda token: None)
     monkeypatch.setattr(gr, "require_admin_or_role", lambda **kwargs: {"authorized_by": "rbac", "roles": ["platform_admin"]})
     monkeypatch.setattr(gr, "set_tenant_budget", lambda **kwargs: None)
     monkeypatch.setattr(gr, "get_tenant_budget", lambda tenant_id: {"tenant_id": tenant_id, "enabled": True})
@@ -85,29 +84,29 @@ def test_governance_routes(monkeypatch):
     monkeypatch.setattr(gr, "update_response_review", lambda review_id, **kwargs: review_id == 9)
     monkeypatch.setattr(gr, "log_audit_event", lambda **kwargs: None)
 
-    assert gr.upsert_tenant_budget("t1", TenantBudgetUpdateRequest(daily_usd_limit=1, monthly_usd_limit=2), "abc", "u1", "platform_admin")["status"] == "updated"
-    assert gr.get_budget("t1", "abc", "u1", "platform_admin")["tenant_id"] == "t1"
-    assert gr.get_quota_usage("t1", "abc", "u1", "platform_admin")["tenant_id"] == "t1"
-    assert gr.get_audit_events(10, "abc", "u1", "platform_admin")["items"][0]["id"] == 1
-    assert gr.create_policy(PolicyCreateRequest(version="v1", config={}), "abc", "u1", "platform_admin")["status"] == "created_or_updated"
-    assert gr.activate_policy("v1", "abc", "u1", "platform_admin")["status"] == "activated"
-    assert gr.list_policies("abc", "u1", "platform_admin")["active"]["version"] == "v1"
-    assert gr.create_role_grant(RoleGrantRequest(user_id="u1", role_name="platform_admin"), "abc")["status"] == "granted"
-    assert gr.delete_role_grant(RoleRevokeRequest(user_id="u1", role_name="platform_admin"), "abc")["status"] == "revoked"
-    assert gr.get_rbac_roles("u1", "abc")["items"][0]["user_id"] == "u1"
-    assert gr.get_response_reviews("needs_review", 10, "abc", "u1", "platform_admin")["items"][0]["id"] == 9
-    assert gr.apply_response_review(9, ResponseReviewUpdateRequest(review_status="reviewed"), "abc", "u1", "platform_admin")["status"] == "updated"
+    assert gr.upsert_tenant_budget("t1", TenantBudgetUpdateRequest(daily_usd_limit=1, monthly_usd_limit=2))["status"] == "updated"
+    assert gr.get_budget("t1")["tenant_id"] == "t1"
+    assert gr.get_quota_usage("t1")["tenant_id"] == "t1"
+    assert gr.get_audit_events(10)["items"][0]["id"] == 1
+    assert gr.create_policy(PolicyCreateRequest(version="v1", config={}), auth={"roles": ["platform_admin"]})["status"] == "created_or_updated"
+    assert gr.activate_policy("v1", auth={"roles": ["platform_admin"]})["status"] == "activated"
+    assert gr.list_policies()["active"]["version"] == "v1"
+    assert gr.create_role_grant(RoleGrantRequest(user_id="u1", role_name="platform_admin"))["status"] == "granted"
+    assert gr.delete_role_grant(RoleRevokeRequest(user_id="u1", role_name="platform_admin"))["status"] == "revoked"
+    assert gr.get_rbac_roles("u1")["items"][0]["user_id"] == "u1"
+    assert gr.get_response_reviews("needs_review", 10)["items"][0]["id"] == 9
+    assert gr.apply_response_review(9, ResponseReviewUpdateRequest(review_status="reviewed"), auth={"roles": ["platform_admin"]})["status"] == "updated"
 
     with pytest.raises(ValidationError):
         PolicyCreateRequest(version="", config={})
     with pytest.raises(ValidationError):
         PolicyCreateRequest(version="v1", config=[])
     with pytest.raises(HTTPException):
-        gr.activate_policy("missing", "abc", "u1", "platform_admin")
+        gr.activate_policy("missing", auth={"roles": ["platform_admin"]})
     with pytest.raises(ValidationError):
         RoleGrantRequest(user_id="", role_name="")
     with pytest.raises(HTTPException):
-        gr.apply_response_review(9, ResponseReviewUpdateRequest(review_status="reviewed", reviewer_notes=None, corrected_answer=None).model_copy(update={"review_status": "invalid"}), "abc", "u1", "platform_admin")
+        gr.apply_response_review(9, ResponseReviewUpdateRequest(review_status="reviewed", reviewer_notes=None, corrected_answer=None).model_copy(update={"review_status": "invalid"}), auth={"roles": ["platform_admin"]})
 
 
 def test_eval_routes(monkeypatch):
@@ -139,24 +138,24 @@ def test_eval_routes(monkeypatch):
     monkeypatch.setattr(er, "AsyncResult", lambda task_id, app=None: SimpleNamespace(state="SUCCESS", ready=lambda: True, successful=lambda: True, result={"ok": True}))
     monkeypatch.setattr(er.celery_app.control, "revoke", lambda task_id, terminate=False: None)
 
-    created = er.create_eval(EvalRunCreateRequest(prompts=["a"], run_id="run-1", tenant_id="t1"), "abc", "u1", "researcher")
+    created = er.create_eval(EvalRunCreateRequest(prompts=["a"], run_id="run-1", tenant_id="t1"))
     assert created["status"] == "queued"
-    golden_created = er.create_eval(EvalRunCreateRequest(golden_set_id="education_core_v1", run_id="run-2", tenant_id="t1"), "abc", "u1", "researcher")
+    golden_created = er.create_eval(EvalRunCreateRequest(golden_set_id="education_core_v1", run_id="run-2", tenant_id="t1"))
     assert golden_created["prompt_count"] == 2
-    queued = er.execute_eval("run-1", EvalRunExecuteRequest(), "abc", "u1", "researcher")
+    queued = er.execute_eval("run-1", EvalRunExecuteRequest())
     assert queued["task_id"] == "task-1"
-    assert er.get_eval("run-1", "abc", "u1", "researcher")["id"] == "run-1"
-    assert er.list_evals("abc", "u1", "researcher")["items"][0]["id"] == "r1"
-    assert er.get_eval_results("run-1", 100, "abc", "u1", "researcher")["items"][0]["run_id"] == "run-1"
-    assert er.get_eval_significance("run-1", "abc", "u1", "researcher")["run_id"] == "run-1"
-    assert er.get_builtin_golden_sets("abc", "u1", "researcher")["items"][0]["id"] == "education_core_v1"
-    assert er.get_builtin_golden_set("education_core_v1", "abc", "u1", "researcher")["id"] == "education_core_v1"
-    assert er.get_eval_gate_report("run-1", "abc", "u1", "researcher")["gate_report"]["passed"] is True
-    assert er.get_eval_task_status("task-1", "abc", "u1", "researcher")["successful"] is True
-    assert er.cancel_eval_task("task-1", True, "abc", "u1", "platform_admin")["status"] == "revoked"
+    assert er.get_eval("run-1")["id"] == "run-1"
+    assert er.list_evals()["items"][0]["id"] == "r1"
+    assert er.get_eval_results("run-1", 100)["items"][0]["run_id"] == "run-1"
+    assert er.get_eval_significance("run-1")["run_id"] == "run-1"
+    assert er.get_builtin_golden_sets()["items"][0]["id"] == "education_core_v1"
+    assert er.get_builtin_golden_set("education_core_v1")["id"] == "education_core_v1"
+    assert er.get_eval_gate_report("run-1")["gate_report"]["passed"] is True
+    assert er.get_eval_task_status("task-1")["successful"] is True
+    assert er.cancel_eval_task("task-1", True, auth={"roles": ["platform_admin"]})["status"] == "revoked"
 
     with pytest.raises(HTTPException):
-        er.create_eval(EvalRunCreateRequest(prompts=[]), "abc", "u1", "researcher")
+        er.create_eval(EvalRunCreateRequest(prompts=[]))
     monkeypatch.setattr(er, "get_eval_run", lambda run_id: None)
     with pytest.raises(HTTPException):
-        er.execute_eval("missing", EvalRunExecuteRequest(), "abc", "u1", "researcher")
+        er.execute_eval("missing", EvalRunExecuteRequest())

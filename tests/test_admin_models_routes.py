@@ -9,10 +9,6 @@ from app.api.admin_models_routes import ModelCandidatesUpdate
 from fastapi import HTTPException
 
 
-def _auth(monkeypatch):
-    monkeypatch.setattr(routes, "resolve_admin_session", lambda **kwargs: {"username": "jefferson.silva"})
-
-
 def _fake_settings(**kwargs):
     base = {
         "CANDIDATE_MODELS_LIST": [],
@@ -27,7 +23,6 @@ def _fake_settings(**kwargs):
 
 def test_list_models(monkeypatch):
     """List models should merge registry and candidate lists."""
-    _auth(monkeypatch)
     monkeypatch.setattr(
         routes,
         "settings",
@@ -58,7 +53,6 @@ def test_list_models(monkeypatch):
 
 def test_update_model_candidates(monkeypatch):
     """PUT candidates should persist via settings.set."""
-    _auth(monkeypatch)
     fake = _fake_settings()
     calls = []
     fake.set = lambda key, value: calls.append((key, value))
@@ -71,7 +65,6 @@ def test_update_model_candidates(monkeypatch):
 
 def test_models_health(monkeypatch):
     """Health endpoint should report circuit breaker state."""
-    _auth(monkeypatch)
     monkeypatch.setattr(routes, "settings", _fake_settings(CANDIDATE_MODELS_LIST=["m1"]))
     monkeypatch.setattr(
         routes,
@@ -88,7 +81,6 @@ def test_models_health(monkeypatch):
 
 def test_models_pricing_db_error(monkeypatch):
     """Pricing endpoint should return 503 when DB is unavailable."""
-    _auth(monkeypatch)
 
     class _BrokenEngine:
         def connect(self):
@@ -100,21 +92,22 @@ def test_models_pricing_db_error(monkeypatch):
     assert exc.value.status_code == 503
 
 
-def test_models_requires_auth(monkeypatch):
-    """Unauthorized access should be rejected."""
+def test_models_requires_auth():
+    """Unauthorized access should be rejected.
 
-    def _deny(**kwargs):
-        raise HTTPException(status_code=401, detail="Não autorizado.")
+    Pela app, não pela função: a autenticação é agora uma dependência do
+    router.
+    """
+    from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(routes, "resolve_admin_session", _deny)
-    with pytest.raises(HTTPException) as exc:
-        routes.list_models()
-    assert exc.value.status_code == 401
+    from app import main
+
+    with TestClient(main.app) as client:
+        assert client.get("/admin/models").status_code in {401, 403}
 
 
 def test_update_openrouter_exploration(monkeypatch):
     """PUT exploration should persist runtime settings."""
-    _auth(monkeypatch)
     calls = []
     fake = _fake_settings()
     fake.set = lambda key, value: calls.append((key, value))
@@ -133,7 +126,6 @@ def test_update_openrouter_exploration(monkeypatch):
 
 def test_openrouter_credentials_roundtrip(monkeypatch):
     """Credentials endpoints should store and mask OpenRouter API key."""
-    _auth(monkeypatch)
     store = {}
     fake = _fake_settings()
 

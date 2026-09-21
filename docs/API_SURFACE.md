@@ -83,30 +83,44 @@ pontos por série, cinco séries de cada vez, e é o chamador que escolhe.
 
 ## 2. Duas propriedades que o teste agora fixa
 
-### 2.1 A autenticação do admin é uma primeira linha, não uma dependência
+### 2.1 A autenticação é uma dependência (corrigido)
 
-Cada handler chama `_auth(...)` ou `resolve_admin_session(...)` ele próprio.
-Funciona, e é frágil de uma forma específica: **uma rota nova que se esqueça da
-chamada fica pública**, e nada no sistema de tipos, no router ou no diff de
-revisão aponta para isso. A análise estática também não resolve — alguns
-handlers delegam num helper que autentica, e procurar a chamada produz falsos
-positivos.
+Cada handler chamava `_auth(...)` ou `resolve_admin_session(...)` ele próprio —
+uma linha que tinha de ser repetida 85 vezes e que, faltando, deixava a rota
+**pública**. Nada no sistema de tipos, no router ou no diff de revisão apontava
+para isso, e a análise estática também não resolvia: alguns handlers delegavam
+num helper que autenticava, o que produzia falsos positivos.
 
-`tests/test_admin_surface_auth.py` enumera as rotas a partir da própria app e
-exige uma recusa em cada uma. Uma rota acrescentada amanhã fica coberta sem
-ninguém se lembrar disso.
+Passou a ser uma dependência do FastAPI:
 
-### 2.2 A validação precede a autenticação
+- **Ao nível do router** onde a autorização é uniforme — `admin_routes`,
+  `admin_dashboard_routes` e `admin_models_routes`. Aí não há nada para
+  esquecer: uma rota acrescentada amanhã fica protegida por construção.
+- **Por rota**, com `require_roles(...)`, onde os papéis variam — eval,
+  governança e o portal de peritos.
+- **`admin_token_only`** para as quatro rotas que rejeitam JWT de propósito
+  (as primitivas de RBAC e as estatísticas de feedback). Dar-lhes uma
+  dependência própria evita que sejam silenciosamente alargadas.
 
-O FastAPI valida a entrada antes de o handler correr. Um POST com corpo
-inválido, ou um GET com um parâmetro de query obrigatório em falta, devolve 422
-**sem nunca chegar à verificação de credenciais**. Um chamador anónimo consegue
-por isso sondar quais os campos obrigatórios de cada rota.
+Seis handlers mantêm uma chamada no corpo, e não é duplicação: a dependência
+autentica e verifica os papéis **sem âmbito**, e a chamada interior acrescenta
+o âmbito do tenant, que só se conhece depois de ler o caminho ou carregar a
+corrida. O comentário no código diz isso, para que ninguém apague uma das duas.
 
-É um vazamento pequeno e é inerente ao framework: mudá-lo exigiria mover a
-autenticação para uma dependência, o que é a correcção certa a prazo. Até lá, a
-propriedade que se pode afirmar sempre é mais forte do que o código exacto:
-**nunca uma resposta de sucesso sem credenciais**.
+`tests/test_admin_surface_auth.py` enumera as rotas a partir da própria app —
+**285 asserções** — e exige 401/403 em todas.
+
+### 2.2 A validação já não precede a autenticação (corrigido)
+
+O FastAPI valida a entrada antes de o handler correr, por isso um POST com
+corpo inválido devolvia 422 **sem nunca chegar às credenciais**. Um chamador
+anónimo conseguia assim enumerar os campos obrigatórios de toda a superfície de
+admin.
+
+As dependências são resolvidas **antes** de os erros de validação acumulados
+serem levantados, por isso o 401 chega primeiro. Verificado com uma app mínima:
+a mesma rota responde **401 como dependência** e **422 como primeira linha**. O
+teste fixa-o em todas as rotas — `test_the_body_is_never_validated_before_the_credentials`.
 
 ---
 
@@ -201,11 +215,6 @@ recompensa aberto a qualquer um.
 ---
 
 ## 6. O que fica por decidir
-
-**A autenticação devia ser uma dependência, não uma primeira linha.** Move a
-verificação para antes da validação, elimina o vazamento de esquema da §2.2, e
-torna impossível esquecer. É uma refactorização de ~85 handlers: o teste da §2.1
-é a rede que a torna segura de fazer, mas não a substitui.
 
 **`PUT /admin/settings` merece ser dividido.** Uma lista permitida de chaves
 operacionais seria nível A; as do domínio `auth` continuariam C. Hoje é tudo ou

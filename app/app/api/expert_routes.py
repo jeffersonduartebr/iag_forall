@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
-from ..api.deps import _roles_from_jwt, require_admin_or_role
+from ..api.deps import _roles_from_jwt
 from ..roadmap_features import log_audit_event
 from ..schemas import (
     ExpertAccountCreateRequest,
@@ -27,6 +27,7 @@ from ..services.expert_review import (
     update_expert_profile,
 )
 from ..settings_dynamic import settings
+from .dependencies import require_roles
 
 router = APIRouter()
 
@@ -64,40 +65,19 @@ def _header_identity_trusted() -> bool:
         return False
 
 
-@router.get("/admin/experts/accounts", tags=["Experts"])
-def list_expert_accounts_route(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get("/admin/experts/accounts", tags=["Experts"], dependencies=[Depends(require_roles(*_ADMIN_MANAGE_ROLES))])
+def list_expert_accounts_route():
     """List registered expert accounts (admin only)."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_ADMIN_MANAGE_ROLES,
-    )
     return {"items": list_expert_accounts_public()}
 
 
 @router.post("/admin/experts/accounts", tags=["Experts"])
 def create_expert_account_route(
     payload: ExpertAccountCreateRequest,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_ADMIN_MANAGE_ROLES)),
 ):
     """Register a new expert with name, phone, email and password."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_ADMIN_MANAGE_ROLES,
-    )
     try:
         account = register_expert_account(
             display_name=payload.display_name,
@@ -120,19 +100,10 @@ def create_expert_account_route(
 def update_expert_account_route(
     account_id: int,
     payload: ExpertAccountUpdateRequest,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_ADMIN_MANAGE_ROLES)),
 ):
     """Update expert account fields or reset password."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_ADMIN_MANAGE_ROLES,
-    )
     try:
         account = update_expert_account_admin(
             account_id,
@@ -154,39 +125,19 @@ def update_expert_account_route(
     return {"status": "updated", "account": account}
 
 
-@router.get("/admin/experts/themes", tags=["Experts"])
-def get_expert_themes(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get("/admin/experts/themes", tags=["Experts"], dependencies=[Depends(require_roles(*_EXPERT_ROLES))])
+def get_expert_themes():
     """List benchmark themes available for expert area selection."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_EXPERT_ROLES,
-    )
     return {"items": list_available_themes()}
 
 
 @router.get("/admin/experts/profile", tags=["Experts"])
 def get_profile(
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_EXPERT_ROLES)),
 ):
     """Return the authenticated expert's profile."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_EXPERT_ROLES,
-    )
     expert_id = _expert_id(x_user_id, auth, authorization)
     return ensure_expert_profile(expert_id)
 
@@ -194,19 +145,11 @@ def get_profile(
 @router.put("/admin/experts/profile", tags=["Experts"])
 def put_profile(
     payload: ExpertProfileUpdateRequest,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_EXPERT_ROLES)),
 ):
     """Update expert areas of expertise and display name."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_EXPERT_ROLES,
-    )
     expert_id = _expert_id(x_user_id, auth, authorization)
     profile = update_expert_profile(
         expert_id,
@@ -228,19 +171,11 @@ def next_review_item(
     eval_run_id: Optional[str] = None,
     split: Optional[str] = "held_out",
     seed: Optional[int] = None,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_EXPERT_ROLES)),
 ):
     """Fetch the next catalog or eval item awaiting expert analysis."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_EXPERT_ROLES,
-    )
     expert_id = _expert_id(x_user_id, auth, authorization)
     item = get_next_review_item(expert_id, eval_run_id=eval_run_id, split=split, seed=seed)
     if not item:
@@ -251,19 +186,11 @@ def next_review_item(
 @router.post("/admin/experts/assessments", tags=["Experts"])
 def post_assessment(
     payload: ExpertAssessmentSubmitRequest,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_EXPERT_ROLES)),
 ):
     """Submit human expert analysis for one query."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_EXPERT_ROLES,
-    )
     expert_id = _expert_id(x_user_id, auth, authorization)
     profile = ensure_expert_profile(expert_id)
     allowed_themes = {str(t) for t in (profile.get("theme_ids") or [])}
@@ -302,59 +229,36 @@ def get_assessments(
     theme: Optional[str] = None,
     eval_run_id: Optional[str] = None,
     limit: int = 100,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_EXPERT_ROLES)),
 ):
     """List assessments by the authenticated expert."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_EXPERT_ROLES,
-    )
     expert_id = _expert_id(x_user_id, auth, authorization)
     return {"items": list_expert_assessments(expert_id=expert_id, theme=theme, eval_run_id=eval_run_id, limit=limit)}
 
 
-@router.get("/admin/experts/metrics/kappa", tags=["Experts"])
+@router.get(
+    "/admin/experts/metrics/kappa",
+    tags=["Experts"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
 def get_kappa_metrics(
     eval_run_id: Optional[str] = None,
     theme: Optional[str] = None,
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
 ):
     """Return judge vs human agreement (Cohen's kappa) metrics."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     return expert_judge_agreement_report(eval_run_id=eval_run_id, theme=theme)
 
 
 @router.post("/admin/experts/preview-answer", tags=["Experts"])
 async def preview_system_answer(
     payload: ExpertPreviewRequest,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*_EXPERT_ROLES)),
 ):
     """Execute one query through the router so experts can score the live answer."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=_EXPERT_ROLES,
-    )
     from ..schemas import QueryRequest, WorkloadHints
     from ..services.query_runtime import process_query_request
 

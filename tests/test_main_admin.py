@@ -74,12 +74,12 @@ def test_admin_settings_endpoints(monkeypatch):
 
     monkeypatch.setattr(admin_routes.settings, "set", _set)
 
-    got = admin_routes.get_settings("abc")
+    got = admin_routes.get_settings()
     assert got == {"ok": True}
-    catalog = admin_routes.get_settings_catalog("abc")
+    catalog = admin_routes.get_settings_catalog()
     assert catalog["settings"]["MAX_TOKENS_DEFAULT"]["mutability"] == "runtime_safe"
 
-    out = admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"a": 1, "b": {"k": "v"}}), "abc")
+    out = admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"a": 1, "b": {"k": "v"}}))
     assert out["status"] == "updated"
     assert out["applied"] == ["a", "b"]
     assert calls[0] == ("a", "1", "api", "admin")
@@ -99,7 +99,7 @@ def test_admin_settings_reject_unknown_or_restart_required(monkeypatch):
         lambda payload: {"runtime_safe": [], "requires_restart": ["OLLAMA_HOST"], "unknown": []},
     )
     with pytest.raises(HTTPException) as exc:
-        admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"OLLAMA_HOST": "http://x"}), "abc")
+        admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"OLLAMA_HOST": "http://x"}))
     assert exc.value.status_code == 409
 
     monkeypatch.setattr(
@@ -108,7 +108,7 @@ def test_admin_settings_reject_unknown_or_restart_required(monkeypatch):
         lambda payload: {"runtime_safe": [], "requires_restart": [], "unknown": ["CUSTOM_X"]},
     )
     with pytest.raises(HTTPException) as exc:
-        admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"CUSTOM_X": "1"}), "abc")
+        admin_routes.update_settings(AdminSettingsUpdateRequest(settings={"CUSTOM_X": "1"}))
     assert exc.value.status_code == 400
 
 
@@ -123,14 +123,14 @@ def test_circuit_breaker_admin(monkeypatch):
     )
     monkeypatch.setattr(admin_routes, "get_circuit_breaker_manager", lambda: manager)
 
-    status = admin_routes.get_circuit_breakers("abc")
+    status = admin_routes.get_circuit_breakers()
     assert status["circuit_breakers"][0]["model"] == "m1"
 
-    ok = admin_routes.reset_circuit_breaker("m1", "abc")
+    ok = admin_routes.reset_circuit_breaker("m1")
     assert ok["status"] == "reset"
 
     with pytest.raises(HTTPException) as exc:
-        admin_routes.reset_circuit_breaker("missing", "abc")
+        admin_routes.reset_circuit_breaker("missing")
     assert exc.value.status_code == 404
 
 
@@ -140,7 +140,7 @@ def test_cascade_status_admin(monkeypatch):
 
     _set_admin_token(monkeypatch, "abc")
     monkeypatch.setattr(admin_routes, "get_cascade_detector", lambda: SimpleNamespace(get_status=lambda: {"status": "ok"}))
-    out = admin_routes.get_cascade_status("abc")
+    out = admin_routes.get_cascade_status()
     assert out["status"] == "ok"
 
 
@@ -151,7 +151,7 @@ def test_runtime_reset_admin(monkeypatch):
     _set_admin_token(monkeypatch, "abc")
     seen = {"called": False}
     monkeypatch.setattr(admin_routes, "reset_runtime_state", lambda: seen.__setitem__("called", True))
-    out = admin_routes.reset_runtime("abc")
+    out = admin_routes.reset_runtime()
     assert out == {"status": "reset"}
     assert seen["called"] is True
 
@@ -163,7 +163,6 @@ def test_feedback_endpoints(monkeypatch):
     result = SimpleNamespace(user_quality=8.0, blended_quality=7.2, model="m1", reward=0.73)
     monkeypatch.setattr(feedback_routes, "process_feedback", lambda req: result)
     monkeypatch.setattr(feedback_routes, "get_feedback_stats", lambda model=None, hours=24: {"hours": hours, "model": model})
-    monkeypatch.setattr(feedback_routes, "require_admin", lambda token: None)
 
     out = feedback_routes.submit_feedback(SimpleNamespace())
     assert out["status"] == "accepted"
@@ -174,7 +173,7 @@ def test_feedback_endpoints(monkeypatch):
         feedback_routes.submit_feedback(SimpleNamespace())
     assert exc.value.status_code == 400
 
-    stats = feedback_routes.feedback_stats(model="m1", hours=12, x_admin_token="abc")
+    stats = feedback_routes.feedback_stats(model="m1", hours=12)
     assert stats["hours"] == 12
 
 
@@ -197,31 +196,31 @@ def test_experiment_admin_endpoints(monkeypatch):
     )
     monkeypatch.setattr(admin_routes, "get_ab_test_manager", lambda: manager)
 
-    listed = admin_routes.list_experiments(status=None, x_admin_token="abc")
+    listed = admin_routes.list_experiments(status=None)
     assert listed["total"] == 1
 
-    created = admin_routes.create_experiment(SimpleNamespace(), "abc")
+    created = admin_routes.create_experiment(SimpleNamespace())
     assert created["status"] == "created"
 
-    got = admin_routes.get_experiment("e1", "abc")
+    got = admin_routes.get_experiment("e1")
     assert got["id"] == "e1"
 
     with pytest.raises(HTTPException) as exc:
-        admin_routes.get_experiment("missing", "abc")
+        admin_routes.get_experiment("missing")
     assert exc.value.status_code == 404
 
-    assert admin_routes.start_experiment("e1", "abc")["status"] == "start"
-    assert admin_routes.pause_experiment("e1", "abc")["status"] == "pause"
-    assert admin_routes.complete_experiment("e1", "abc")["status"] == "complete"
-    assert admin_routes.get_experiment_results("e1", "abc")["id"] == "e1"
-    assert admin_routes.delete_experiment("e1", "abc")["status"] == "deleted"
+    assert admin_routes.start_experiment("e1")["status"] == "start"
+    assert admin_routes.pause_experiment("e1")["status"] == "pause"
+    assert admin_routes.complete_experiment("e1")["status"] == "complete"
+    assert admin_routes.get_experiment_results("e1")["id"] == "e1"
+    assert admin_routes.delete_experiment("e1")["status"] == "deleted"
 
     with pytest.raises(HTTPException) as exc:
-        admin_routes.start_experiment("missing", "abc")
+        admin_routes.start_experiment("missing")
     assert exc.value.status_code == 404
 
     with pytest.raises(HTTPException) as exc:
-        admin_routes.delete_experiment("missing", "abc")
+        admin_routes.delete_experiment("missing")
     assert exc.value.status_code == 404
 
 
@@ -231,9 +230,9 @@ def test_experiments_disabled_paths(monkeypatch):
 
     _set_settings_map(monkeypatch, {"ADMIN_TOKEN": "abc", "AB_TESTING_ENABLED": False})
 
-    out = admin_routes.list_experiments(status=None, x_admin_token="abc")
+    out = admin_routes.list_experiments(status=None)
     assert out["error"] == "A/B testing is disabled"
 
     with pytest.raises(HTTPException) as exc:
-        admin_routes.create_experiment(SimpleNamespace(), "abc")
+        admin_routes.create_experiment(SimpleNamespace())
     assert exc.value.status_code == 400

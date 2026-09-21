@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..schemas import ExpertLoginRequest
@@ -14,6 +14,7 @@ from ..settings_dynamic import settings
 from ..utils.client_ip import parse_trusted_proxies, resolve_client_ip
 from ..utils.secure_compare import secret_equals
 from .auth import _auth_from_jwt, _encode_jwt_hs256, _extract_bearer_token
+from .dependencies import admin_session
 
 router = APIRouter()
 
@@ -267,12 +268,8 @@ def admin_logout():
 
 
 @router.get("/admin/auth/me", tags=["AdminAuth"])
-def admin_me(
-    x_admin_token: Annotated[Optional[str], Header()] = None,
-    authorization: Annotated[Optional[str], Header()] = None,
-):
+def admin_me(session: dict = Depends(admin_session)):
     """Return current admin session identity."""
-    session = resolve_admin_session(x_admin_token=x_admin_token, authorization=authorization)
     return {
         "username": session.get("username", "admin"),
         "roles": session.get("roles", []),

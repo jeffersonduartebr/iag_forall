@@ -6,9 +6,9 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
-from ..api.deps import require_admin, require_admin_or_role
+from ..api.deps import require_admin_or_role
 from ..roadmap_features import (
     activate_policy_version,
     check_tenant_budget,
@@ -36,29 +36,22 @@ from ..schemas import (
 )
 from ..services.governance_runtime import invalidate_runtime_policy_cache_async
 from ..utils.background import spawn
+from .dependencies import admin_token_only, require_roles
 
 router = APIRouter()
 
 
-@router.get("/admin/budgets", tags=["Governance"])
-def list_budgets(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get(
+    "/admin/budgets",
+    tags=["Governance"],
+    dependencies=[Depends(require_roles(*["governance_viewer", "governance_admin", "platform_admin"]))],
+)
+def list_budgets():
     """List all tenant budgets."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["governance_viewer", "governance_admin", "platform_admin"],
-    )
     return {"items": list_tenant_budgets()}
 
 
-@router.get("/admin/budgets/{tenant_id}/check", tags=["Governance"])
+@router.get("/admin/budgets/{tenant_id}/check", tags=["Governance"], dependencies=[Depends(require_roles('governance_viewer', 'governance_admin', 'platform_admin'))])
 def check_budget(
     tenant_id: str,
     projected_cost_usd: float = 0.0,
@@ -68,6 +61,10 @@ def check_budget(
     authorization: Optional[str] = Header(None),
 ):
     """Preview budget decision for a tenant."""
+    # Segunda fase, e não uma duplicação: a dependência do decorador autentica
+    # e verifica os papéis **sem âmbito**, o que é o que permite recusar antes
+    # de o corpo ser validado. Esta chamada acrescenta o âmbito do tenant, que
+    # só se conhece aqui dentro. Apagar qualquer uma das duas abre um buraco.
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
@@ -87,7 +84,11 @@ def check_budget(
     }
 
 
-@router.put("/admin/budgets/{tenant_id}", tags=["Governance"])
+@router.put(
+    "/admin/budgets/{tenant_id}",
+    tags=["Governance"],
+    dependencies=[Depends(require_roles("governance_admin", "platform_admin"))],
+)
 def upsert_tenant_budget(
     tenant_id: str,
     payload: TenantBudgetUpdateRequest,
@@ -97,6 +98,10 @@ def upsert_tenant_budget(
     authorization: Optional[str] = Header(None),
 ):
     """Create or update tenant budget limits."""
+    # Segunda fase, e não uma duplicação: a dependência do decorador autentica
+    # e verifica os papéis **sem âmbito**, o que é o que permite recusar antes
+    # de o corpo ser validado. Esta chamada acrescenta o âmbito do tenant, que
+    # só se conhece aqui dentro. Apagar qualquer uma das duas abre um buraco.
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
@@ -119,7 +124,11 @@ def upsert_tenant_budget(
     return {"status": "updated", "budget": get_tenant_budget(tenant_id)}
 
 
-@router.get("/admin/budgets/{tenant_id}", tags=["Governance"])
+@router.get(
+    "/admin/budgets/{tenant_id}",
+    tags=["Governance"],
+    dependencies=[Depends(require_roles("governance_viewer", "governance_admin", "platform_admin"))],
+)
 def get_budget(
     tenant_id: str,
     x_admin_token: Optional[str] = Header(None),
@@ -128,6 +137,10 @@ def get_budget(
     authorization: Optional[str] = Header(None),
 ):
     """Get tenant budget configuration."""
+    # Segunda fase, e não uma duplicação: a dependência do decorador autentica
+    # e verifica os papéis **sem âmbito**, o que é o que permite recusar antes
+    # de o corpo ser validado. Esta chamada acrescenta o âmbito do tenant, que
+    # só se conhece aqui dentro. Apagar qualquer uma das duas abre um buraco.
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
@@ -139,7 +152,7 @@ def get_budget(
     return get_tenant_budget(tenant_id)
 
 
-@router.get("/admin/quotas/usage", tags=["Governance"])
+@router.get("/admin/quotas/usage", tags=["Governance"], dependencies=[Depends(require_roles('governance_viewer', 'governance_admin', 'platform_admin'))])
 def get_quota_usage(
     tenant_id: Optional[str] = None,
     x_admin_token: Optional[str] = Header(None),
@@ -148,6 +161,10 @@ def get_quota_usage(
     authorization: Optional[str] = Header(None),
 ):
     """Get usage summary for one or all tenants."""
+    # Segunda fase, e não uma duplicação: a dependência do decorador autentica
+    # e verifica os papéis **sem âmbito**, o que é o que permite recusar antes
+    # de o corpo ser validado. Esta chamada acrescenta o âmbito do tenant, que
+    # só se conhece aqui dentro. Apagar qualquer uma das duas abre um buraco.
     require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
@@ -159,41 +176,25 @@ def get_quota_usage(
     return get_usage_summary(tenant_id)
 
 
-@router.get("/admin/audit/events", tags=["Governance"])
+@router.get(
+    "/admin/audit/events",
+    tags=["Governance"],
+    dependencies=[Depends(require_roles(*["audit_viewer", "platform_admin"]))],
+)
 def get_audit_events(
     limit: int = 100,
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
 ):
     """Get latest audit events."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["audit_viewer", "platform_admin"],
-    )
     return {"items": list_audit_events(limit=limit)}
 
 
 @router.post("/admin/policies", tags=["Policy"])
 def create_policy(
     payload: PolicyCreateRequest,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*["policy_admin", "platform_admin"])),
 ):
     """Create or update a policy version."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["policy_admin", "platform_admin"],
-    )
     version = str(payload.version).strip()
     description = str(payload.description or "")
     config = dict(payload.config or {})
@@ -210,19 +211,10 @@ def create_policy(
 @router.post("/admin/policies/{version}/activate", tags=["Policy"])
 def activate_policy(
     version: str,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*["policy_admin", "platform_admin"])),
 ):
     """Activate one policy version."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["policy_admin", "platform_admin"],
-    )
     if not activate_policy_version(version):
         raise HTTPException(status_code=404, detail=f"Policy not found: {version}")
     try:
@@ -240,28 +232,19 @@ def activate_policy(
     return {"status": "activated", "version": version}
 
 
-@router.get("/admin/policies", tags=["Policy"])
-def list_policies(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get(
+    "/admin/policies",
+    tags=["Policy"],
+    dependencies=[Depends(require_roles(*["policy_viewer", "policy_admin", "platform_admin"]))],
+)
+def list_policies():
     """List policy versions."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["policy_viewer", "policy_admin", "platform_admin"],
-    )
     return {"active": get_active_policy(), "items": list_policy_versions()}
 
 
-@router.post("/admin/rbac/grants", tags=["Governance"])
-def create_role_grant(payload: RoleGrantRequest, x_admin_token: Optional[str] = Header(None)):
+@router.post("/admin/rbac/grants", tags=["Governance"], dependencies=[Depends(admin_token_only)])
+def create_role_grant(payload: RoleGrantRequest):
     """Grant a role to a user. Bootstrap is admin-token only."""
-    require_admin(x_admin_token)
     user_id = str(payload.user_id).strip()
     role_name = str(payload.role_name).strip()
     tenant_id = payload.tenant_id
@@ -276,10 +259,9 @@ def create_role_grant(payload: RoleGrantRequest, x_admin_token: Optional[str] = 
     return {"status": "granted", "user_id": user_id, "role_name": role_name, "tenant_id": tenant_id}
 
 
-@router.post("/admin/rbac/revokes", tags=["Governance"])
-def delete_role_grant(payload: RoleRevokeRequest, x_admin_token: Optional[str] = Header(None)):
+@router.post("/admin/rbac/revokes", tags=["Governance"], dependencies=[Depends(admin_token_only)])
+def delete_role_grant(payload: RoleRevokeRequest):
     """Revoke a role from a user. Bootstrap is admin-token only."""
-    require_admin(x_admin_token)
     user_id = str(payload.user_id).strip()
     role_name = str(payload.role_name).strip()
     tenant_id = payload.tenant_id
@@ -294,30 +276,20 @@ def delete_role_grant(payload: RoleRevokeRequest, x_admin_token: Optional[str] =
     return {"status": "revoked", "removed": removed}
 
 
-@router.get("/admin/rbac/roles", tags=["Governance"])
-def get_rbac_roles(user_id: Optional[str] = None, x_admin_token: Optional[str] = Header(None)):
+@router.get("/admin/rbac/roles", tags=["Governance"], dependencies=[Depends(admin_token_only)])
+def get_rbac_roles(user_id: Optional[str] = None):
     """List RBAC role bindings."""
-    require_admin(x_admin_token)
     return {"items": list_roles(user_id=user_id)}
 
 
-@router.get("/admin/reviews", tags=["Governance"])
+@router.get(
+    "/admin/reviews", tags=["Governance"], dependencies=[Depends(require_roles(*["audit_viewer", "platform_admin"]))]
+)
 def get_response_reviews(
     status: Optional[str] = None,
     limit: int = 100,
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
 ):
     """List response-review items queued for human follow-up."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["audit_viewer", "platform_admin"],
-    )
     return {"items": list_response_reviews(status=status, limit=limit)}
 
 
@@ -325,19 +297,10 @@ def get_response_reviews(
 def apply_response_review(
     review_id: int,
     payload: ResponseReviewUpdateRequest,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*["audit_viewer", "platform_admin"])),
 ):
     """Record one reviewer decision for an answer awaiting human validation."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["audit_viewer", "platform_admin"],
-    )
     review_status = str(getattr(payload.review_status, "value", payload.review_status) or "").strip()
     if review_status not in {"reviewed", "rejected"}:
         raise HTTPException(status_code=400, detail="review_status must be reviewed or rejected")

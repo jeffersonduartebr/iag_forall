@@ -8,7 +8,6 @@ from app.api import admin_dashboard_routes as routes
 @pytest.mark.asyncio
 async def test_dashboard_summary(monkeypatch):
     """Summary endpoint should delegate to admin_metrics service."""
-    monkeypatch.setattr(routes, "resolve_admin_session", lambda **kwargs: {"username": "admin"})
     monkeypatch.setattr(
         routes,
         "build_dashboard_summary",
@@ -22,7 +21,6 @@ async def test_dashboard_summary(monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_series(monkeypatch):
     """Series endpoint should return chart payload."""
-    monkeypatch.setattr(routes, "resolve_admin_session", lambda **kwargs: {"username": "admin"})
     monkeypatch.setattr(
         routes,
         "build_dashboard_series",
@@ -36,7 +34,6 @@ async def test_dashboard_series(monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_roi(monkeypatch):
     """ROI endpoint should delegate to roi_analytics service."""
-    monkeypatch.setattr(routes, "resolve_admin_session", lambda **kwargs: {"username": "admin"})
     monkeypatch.setattr(
         routes,
         "build_roi_report",
@@ -53,17 +50,19 @@ async def test_dashboard_roi(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_requires_auth(monkeypatch):
-    """Unauthorized requests should be rejected."""
-    from fastapi import HTTPException
+async def test_dashboard_requires_auth():
+    """Unauthorized requests should be rejected.
 
-    def _deny(**kwargs):
-        raise HTTPException(status_code=401, detail="Não autorizado.")
+    Tem de passar pela app: a autenticação deixou de ser a primeira linha do
+    handler e passou a ser uma dependência do router, por isso chamar a função
+    directamente já não a exercita de todo.
+    """
+    from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(routes, "resolve_admin_session", _deny)
-    with pytest.raises(HTTPException) as exc:
-        await routes.dashboard_summary()
-    assert exc.value.status_code == 401
+    from app import main
+
+    with TestClient(main.app) as client:
+        assert client.get("/admin/dashboard/summary").status_code in {401, 403}
 
 
 async def _async_return(value):
