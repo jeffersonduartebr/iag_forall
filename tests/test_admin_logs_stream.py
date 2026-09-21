@@ -10,7 +10,6 @@ from app.api import admin_dashboard_routes as routes
 @pytest.mark.asyncio
 async def test_logs_stream_yields_sse_events(monkeypatch):
     """Log stream should emit SSE data lines."""
-    monkeypatch.setattr(routes, "resolve_admin_session", lambda **kwargs: {"username": "admin"})
 
     async def _fake_stream(*, query):
         yield {"event": "startup", "level": "info", "container": "api"}
@@ -36,14 +35,15 @@ async def test_logs_stream_yields_sse_events(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_logs_stream_requires_auth(monkeypatch):
-    """Unauthorized log stream should fail."""
-    from fastapi import HTTPException
+async def test_logs_stream_requires_auth():
+    """Unauthorized log stream should fail.
 
-    def _deny(**kwargs):
-        raise HTTPException(status_code=401, detail="Não autorizado.")
+    Pela app: a autenticação é agora uma dependência do router, e chamar o
+    handler directamente já não a exercita.
+    """
+    from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(routes, "resolve_admin_session", _deny)
-    with pytest.raises(HTTPException) as exc:
-        await routes.logs_stream()
-    assert exc.value.status_code == 401
+    from app import main
+
+    with TestClient(main.app) as client:
+        assert client.get("/admin/logs/stream").status_code in {401, 403}

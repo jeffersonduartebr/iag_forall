@@ -5,12 +5,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..api.auth import AuthContext, require_api_auth
-from ..api.deps import require_admin
 from ..observability import logger
 from ..user_feedback import UserFeedbackRequest, get_feedback_stats, process_feedback
+from .dependencies import admin_token_only
 
 router = APIRouter()
 
@@ -44,12 +44,10 @@ def submit_feedback(
         raise HTTPException(status_code=500, detail="Failed to process feedback") from exc
 
 
-@router.get("/feedback/stats", tags=["Feedback"])
+@router.get("/feedback/stats", tags=["Feedback"], dependencies=[Depends(admin_token_only)])
 def feedback_stats(
     model: Optional[str] = None,
     hours: int = 24,
-    x_admin_token: Optional[str] = Header(None),
 ):
     """Get feedback statistics (admin only)."""
-    require_admin(x_admin_token)
     return get_feedback_stats(model=model, hours=hours)

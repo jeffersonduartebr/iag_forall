@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 
 from ..api.deps import require_admin_or_role
 from ..celery_app import celery_app
@@ -31,6 +31,7 @@ from ..services.tool_eval import tool_eval_golden_set_as_dicts
 from ..services.uq_calibration import build_uq_calibration_report
 from ..settings_dynamic import settings
 from ..tasks import task_execute_eval_run
+from .dependencies import EVAL_READER, EVAL_WRITER, require_roles
 
 router = APIRouter()
 
@@ -75,7 +76,7 @@ def _authorized_run(
     return run
 
 
-@router.post("/admin/evals/runs", tags=["Eval"])
+@router.post("/admin/evals/runs", tags=["Eval"], dependencies=[Depends(require_roles(*EVAL_WRITER))])
 def create_eval(
     payload: EvalRunCreateRequest,
     x_admin_token: Optional[str] = Header(None),
@@ -84,6 +85,10 @@ def create_eval(
     authorization: Optional[str] = Header(None),
 ):
     """Create an eval run (MVP academic harness)."""
+    # Segunda fase, e não uma duplicação: a dependência do decorador autentica
+    # e verifica os papéis **sem âmbito**, o que é o que permite recusar antes
+    # de o corpo ser validado. Esta chamada acrescenta o âmbito do tenant, que
+    # só se conhece aqui dentro. Apagar qualquer uma das duas abre um buraco.
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
@@ -162,7 +167,7 @@ def create_eval(
     }
 
 
-@router.post("/admin/evals/runs/{run_id}/execute", tags=["Eval"])
+@router.post("/admin/evals/runs/{run_id}/execute", tags=["Eval"], dependencies=[Depends(require_roles(*EVAL_WRITER))])
 def execute_eval(
     run_id: str,
     payload: EvalRunExecuteRequest = Body(default=EvalRunExecuteRequest()),
@@ -180,6 +185,10 @@ def execute_eval(
         authorization=authorization,
         required_roles=["eval_admin", "researcher", "platform_admin"],
     )
+    # Segunda fase, e não uma duplicação: a dependência do decorador autentica
+    # e verifica os papéis **sem âmbito**, o que é o que permite recusar antes
+    # de o corpo ser validado. Esta chamada acrescenta o âmbito do tenant, que
+    # só se conhece aqui dentro. Apagar qualquer uma das duas abre um buraco.
     auth = require_admin_or_role(
         admin_token=x_admin_token,
         user_id=x_user_id,
@@ -217,7 +226,7 @@ def execute_eval(
     return {"status": "queued", "run_id": run_id, "task_id": task.id}
 
 
-@router.get("/admin/evals/runs/{run_id}", tags=["Eval"])
+@router.get("/admin/evals/runs/{run_id}", tags=["Eval"], dependencies=[Depends(require_roles(*EVAL_READER))])
 def get_eval(
     run_id: str,
     x_admin_token: Optional[str] = Header(None),
@@ -237,25 +246,17 @@ def get_eval(
     return run
 
 
-@router.get("/admin/evals/runs", tags=["Eval"])
-def list_evals(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get(
+    "/admin/evals/runs",
+    tags=["Eval"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
+def list_evals():
     """List eval runs."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     return {"items": list_eval_runs()}
 
 
-@router.get("/admin/evals/runs/{run_id}/results", tags=["Eval"])
+@router.get("/admin/evals/runs/{run_id}/results", tags=["Eval"], dependencies=[Depends(require_roles(*EVAL_READER))])
 def get_eval_results(
     run_id: str,
     limit: int = 2000,
@@ -276,7 +277,7 @@ def get_eval_results(
     return {"run_id": run_id, "items": list_eval_run_results(run_id, limit=limit)}
 
 
-@router.get("/admin/evals/runs/{run_id}/significance", tags=["Eval"])
+@router.get("/admin/evals/runs/{run_id}/significance", tags=["Eval"], dependencies=[Depends(require_roles(*EVAL_READER))])
 def get_eval_significance(
     run_id: str,
     x_admin_token: Optional[str] = Header(None),
@@ -296,7 +297,7 @@ def get_eval_significance(
     return eval_significance_report(run_id)
 
 
-@router.get("/admin/evals/runs/{run_id}/academic-report", tags=["Eval"])
+@router.get("/admin/evals/runs/{run_id}/academic-report", tags=["Eval"], dependencies=[Depends(require_roles(*EVAL_READER))])
 def get_eval_academic_report(
     run_id: str,
     x_admin_token: Optional[str] = Header(None),
@@ -328,104 +329,65 @@ def get_eval_academic_report(
     }
 
 
-@router.get("/admin/evals/golden-sets", tags=["Eval"])
-def get_builtin_golden_sets(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get(
+    "/admin/evals/golden-sets",
+    tags=["Eval"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
+def get_builtin_golden_sets():
     """List built-in golden sets available for repeatable benchmark runs."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     return {"items": list_golden_sets()}
 
 
-@router.get("/admin/evals/tool-eval/golden-set", tags=["Eval"])
-def get_tool_eval_golden_set(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get(
+    "/admin/evals/tool-eval/golden-set",
+    tags=["Eval"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
+def get_tool_eval_golden_set():
     """Return the built-in tool-calling (function-calling) eval golden set."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     return {"items": tool_eval_golden_set_as_dicts()}
 
 
-@router.get("/admin/evals/benchmark-themes", tags=["Eval"])
-def get_benchmark_themes(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get(
+    "/admin/evals/benchmark-themes",
+    tags=["Eval"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
+def get_benchmark_themes():
     """List benchmark catalog themes available for eval sampling."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     return {"items": list_benchmark_themes()}
 
 
-@router.get("/admin/evals/feedback/latest", tags=["Eval"])
-def get_latest_eval_feedback_route(
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-):
+@router.get(
+    "/admin/evals/feedback/latest",
+    tags=["Eval"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
+def get_latest_eval_feedback_route():
     """Return the latest eval-driven NSGA/bandit feedback payload."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     payload = get_latest_eval_feedback()
     if not payload:
         return {"status": "empty", "feedback": None}
     return {"status": "ok", "feedback": payload}
 
 
-@router.get("/admin/evals/golden-sets/{golden_set_id}", tags=["Eval"])
+@router.get(
+    "/admin/evals/golden-sets/{golden_set_id}",
+    tags=["Eval"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
 def get_builtin_golden_set(
     golden_set_id: str,
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
 ):
     """Return one built-in golden set with prompt items and gate thresholds."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     golden_set = get_golden_set(golden_set_id)
     if not golden_set:
         raise HTTPException(status_code=404, detail=f"Golden set not found: {golden_set_id}")
     return golden_set
 
 
-@router.get("/admin/evals/runs/{run_id}/gate-report", tags=["Eval"])
+@router.get("/admin/evals/runs/{run_id}/gate-report", tags=["Eval"], dependencies=[Depends(require_roles(*EVAL_READER))])
 def get_eval_gate_report(
     run_id: str,
     x_admin_token: Optional[str] = Header(None),
@@ -452,26 +414,21 @@ def get_eval_gate_report(
     return {
         "run_id": run_id,
         "golden_set_id": golden_set_id,
-        "gate_report": evaluate_golden_set_gate(list_eval_run_results(run_id, limit=5000), golden_set.get("gates") or {}),
+        "gate_report": evaluate_golden_set_gate(
+            list_eval_run_results(run_id, limit=5000), golden_set.get("gates") or {}
+        ),
     }
 
 
-@router.get("/admin/evals/tasks/{task_id}", tags=["Eval"])
+@router.get(
+    "/admin/evals/tasks/{task_id}",
+    tags=["Eval"],
+    dependencies=[Depends(require_roles(*["eval_viewer", "eval_admin", "researcher", "platform_admin"]))],
+)
 def get_eval_task_status(
     task_id: str,
-    x_admin_token: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
 ):
     """Get Celery task status/result for eval execution."""
-    require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_viewer", "eval_admin", "researcher", "platform_admin"],
-    )
     task = AsyncResult(task_id, app=celery_app)
     out: Dict[str, Any] = {
         "task_id": task_id,
@@ -491,19 +448,10 @@ def get_eval_task_status(
 def cancel_eval_task(
     task_id: str,
     terminate: bool = False,
-    x_admin_token: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
-    x_user_roles: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
+    auth: dict = Depends(require_roles(*["eval_admin", "platform_admin"])),
 ):
     """Cancel/revoke a queued eval Celery task."""
-    auth = require_admin_or_role(
-        admin_token=x_admin_token,
-        user_id=x_user_id,
-        user_roles_header=x_user_roles,
-        authorization=authorization,
-        required_roles=["eval_admin", "platform_admin"],
-    )
     celery_app.control.revoke(task_id, terminate=terminate)
     log_audit_event(
         actor=x_user_id or auth["authorized_by"],

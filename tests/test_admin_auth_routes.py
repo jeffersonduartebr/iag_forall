@@ -108,7 +108,12 @@ def test_admin_me_with_jwt(monkeypatch):
         },
     )
     login = admin_login(LoginRequest(username="jefferson.silva", password="abc@123"), x_forwarded_for=None, x_real_ip=None)
-    me = admin_me(authorization=f"Bearer {login['access_token']}")
+    # A resolução da sessão saiu do handler para a dependência, por isso é ela
+    # que se exercita: o handler passou a ser só a forma da resposta.
+    from app.api.dependencies import admin_session
+
+    session = admin_session(x_admin_token=None, authorization=f"Bearer {login['access_token']}")
+    me = admin_me(session)
     assert me["username"] == "jefferson.silva"
     assert "admin" in me["roles"]
 
