@@ -157,6 +157,34 @@ Nenhuma era visível em `/admin/settings`. A regra passou a ser por sufixo, com
 a lista explícita a continuar a ser a autoridade; verificado que **nenhuma**
 chave passa a ser redigida com a mudança.
 
+### 2.4 A allowlist de CORS vale em runtime (corrigido)
+
+O `CORSMiddleware` do Starlette lê `allow_origins` uma vez, no construtor, e a
+stack de middleware é montada durante o import de `main`. Mudar
+`ADMIN_UI_CORS_ORIGINS` persistia o valor, invalidava as caches, publicava o
+reload — e não tinha efeito nenhum até alguém reiniciar o container. O catálogo
+marcava-a `requires_restart`, o que era honesto e era também uma admissão.
+
+Só uma decisão depende da lista: `is_allowed_origin`, que o Starlette chama em
+cada resposta quando a middleware foi construída com uma lista explícita.
+Sobrepor esse método chega, e deixa tudo o resto — `Vary: Origin`, as
+credenciais, a pré-computação dos cabeçalhos de preflight — exactamente como a
+biblioteca o escreveu.
+
+A classe base é construída de propósito com uma lista **vazia**. É isso que põe
+`allow_all_origins` a falso, que é o que encaminha cada pedido por
+`is_allowed_origin` e define `Vary: Origin` — o cabeçalho que impede uma cache
+partilhada de servir a resposta de uma origem a outra. Uma allowlist dinâmica
+sem ele seria um bug de envenenamento de cache.
+
+Degrada para o valor de arranque, não para uma lista vazia: um Redis em baixo
+não pode transformar-se em "nenhuma origem é permitida", que partiria o
+frontend inteiro por causa de uma falha de infraestrutura.
+
+A chave é agora `runtime_safe` **e** continua classificada como de segurança —
+é o par certo: muda sem reinício, mas só por `PUT /admin/settings/security`,
+com o token mestre. O browser não pode alargar a sua própria política de CORS.
+
 ---
 
 ## 3. Nível C — nunca expor
@@ -249,8 +277,10 @@ recompensa aberto a qualquer um.
 
 ---
 
+---
+
 ## 6. O que fica por decidir
 
-**`ADMIN_UI_CORS_ORIGINS` exige reinício.** O middleware CORS é montado no
-import de `main.py`, por isso está marcado `requires_restart` no catálogo.
-Rotulá-lo `runtime_safe` faria a UI prometer uma coisa que não acontece.
+Nada. Os itens desta secção foram fechados: a autenticação é uma dependência
+(§2.1), a validação já não a precede (§2.2), `PUT /admin/settings` está
+dividido (§2.3) e a allowlist de CORS vale em runtime (§2.4).
