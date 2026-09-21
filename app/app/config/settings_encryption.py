@@ -31,7 +31,7 @@ import logging
 import os
 from typing import Optional, TypeVar
 
-from .secrets_redaction import SECRET_SETTING_KEYS
+from .secrets_redaction import is_secret_key
 
 #: `decrypt` devolve o mesmo tipo que recebe: um `str` continua `str` e um
 #: `None` continua `None`, para não obrigar cada chamador a re-estreitar.
@@ -74,16 +74,9 @@ def reset_cipher_cache() -> None:
     _fernet, _resolved = None, False
 
 
-def is_secret(key: str) -> bool:
-    """Whether this setting holds a credential.
-
-    Reuses the same list the admin redaction uses, so a key can never be
-    masked in one place and stored in the clear in the other.
-    """
-    upper = key.upper()
-    return upper in SECRET_SETTING_KEYS or any(
-        token in upper for token in ("PASSWORD", "SECRET", "TOKEN", "API_KEY")
-    )
+#: Uma regra só, em `secrets_redaction`. Ter duas cópias do predicado era como
+#: uma chave acabava mascarada num sítio e guardada em claro noutro.
+is_secret = is_secret_key
 
 
 def encrypt(key: str, value: str) -> str:

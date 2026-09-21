@@ -122,6 +122,41 @@ serem levantados, por isso o 401 chega primeiro. Verificado com uma app mínima:
 a mesma rota responde **401 como dependência** e **422 como primeira linha**. O
 teste fixa-o em todas as rotas — `test_the_body_is_never_validated_before_the_credentials`.
 
+### 2.3 `PUT /admin/settings` está dividido (corrigido)
+
+Aceitava qualquer chave do catálogo. Quem tivesse uma **sessão** de admin podia
+pôr `REQUIRE_API_AUTH=0`, `TRUST_HEADER_ROLES=1`, `ADMIN_UI_CORS_ORIGINS=*` ou
+rodar o `JWT_SECRET` — desligar a autenticação da instalação inteira a partir
+do browser. Uma sessão roubada bastava.
+
+São agora dois endpoints, e a divisão é de **autorização**, não de
+comportamento: o que conta como conhecido, o que exige reinício e como o valor
+é serializado são idênticos dos dois lados.
+
+| Endpoint | Chaves | Credencial | Nível |
+|---|---|---|---|
+| `PUT /admin/settings` | as 220 operacionais | sessão de admin ou token | **A** |
+| `PUT /admin/settings/security` | as 13 de segurança | **só** o `ADMIN_TOKEN` mestre | **C** |
+
+Cada um recusa as chaves do outro, e recusa o *batch inteiro* quando vêm
+misturadas: aplicar metade seria a pior das três hipóteses.
+
+A classificação é **domínio `auth` ∪ credencial**, e a segunda metade é a que
+uma lista escrita à mão esqueceria — `REDIS_PASSWORD` vive no domínio `redis`.
+O predicado de credencial é o mesmo que a redacção, a cifra em repouso e a
+auditoria já usam; uma quarta lista divergiria das outras três no dia em que
+alguém acrescentasse uma chave.
+
+**Defeito encontrado ao fazer isto:** esse predicado casava os marcadores como
+*substring*, não como sufixo, e por isso escondia do operador oito definições
+puramente operacionais como se fossem segredos — `MAX_TOKENS_DEFAULT`, os três
+`RAG_*_CONTEXT_TOKEN_BUDGET`, `REWARD_LATENCY_TOKENS_PER_S`,
+`REWARD_DEFAULT_COMPLETION_TOKENS`, `ROUTER_SIMPLE_QUERY_MAX_TOKENS` e
+`RAG_SIMPLE_QUERY_BYPASS_ENABLED`, esta última porque "BYPASS" contém "PASS".
+Nenhuma era visível em `/admin/settings`. A regra passou a ser por sufixo, com
+a lista explícita a continuar a ser a autoridade; verificado que **nenhuma**
+chave passa a ser redigida com a mudança.
+
 ---
 
 ## 3. Nível C — nunca expor
@@ -151,11 +186,11 @@ qualquer container nessa rede reescreve a política de routing.
 - `DELETE /admin/experiments/{id}` — sem desfazer.
 - `POST /admin/evals/tasks/{id}/cancel` — revoga **qualquer** tarefa Celery pelo
   id, não só as de avaliação; com `terminate=true` mata o processo filho.
-- `PUT /admin/settings` — o maior raio de dano da API. Qualquer chave do
-  catálogo, persistida e propagada a todos os processos. Inclui
-  `REQUIRE_API_AUTH`, `TRUST_HEADER_ROLES`, `ADMIN_UI_CORS_ORIGINS`,
-  `JWT_SECRET`, `API_KEYS`. Reversível só se souberes o valor anterior — o que,
-  desde a auditoria de robustez, o `audit_log` regista.
+- `PUT /admin/settings/security` — as 13 chaves que decidem *quem entra*.
+  Exige o `ADMIN_TOKEN` mestre e rejeita a sessão de admin, pela mesma razão
+  que as rotas de RBAC o fazem: o browser não deve guardar a credencial que
+  permite mudar a política de acesso. (`PUT /admin/settings`, com o resto das
+  chaves, é nível A — ver §5.)
 - `POST /admin/policies/{version}/activate` e
   `POST /admin/evals/runs/{id}/execute` — o primeiro muda o routing de 100% do
   tráfego, o segundo gasta sem tecto.
@@ -215,10 +250,6 @@ recompensa aberto a qualquer um.
 ---
 
 ## 6. O que fica por decidir
-
-**`PUT /admin/settings` merece ser dividido.** Uma lista permitida de chaves
-operacionais seria nível A; as do domínio `auth` continuariam C. Hoje é tudo ou
-nada, e a UI de admin já o usa.
 
 **`ADMIN_UI_CORS_ORIGINS` exige reinício.** O middleware CORS é montado no
 import de `main.py`, por isso está marcado `requires_restart` no catálogo.
