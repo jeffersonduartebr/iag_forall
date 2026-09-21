@@ -32,7 +32,6 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, Header, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -62,6 +61,7 @@ from .correlation import (
 from .db import close_engine
 from .metrics_collector import _ensure_model_metrics_table
 from .middleware.backpressure import BackpressureMiddleware
+from .middleware.cors import DynamicCORSMiddleware, parse_origins
 from .middleware.rate_limit import (
     RateLimitMiddleware,
 )
@@ -230,12 +230,13 @@ app.include_router(feedback_router)
 app.include_router(ops_router)
 app.include_router(openai_compat_router)
 
-_cors_origins = str(
-    settings.get("ADMIN_UI_CORS_ORIGINS", "http://localhost:5173,http://localhost:8082,http://127.0.0.1:8082")
-)
+# A allowlist é resolvida por pedido, não no import: ver middleware/cors.py.
+# O valor lido aqui é só a rede para quando a leitura da definição falhar.
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
+    DynamicCORSMiddleware,
+    fallback_origins=parse_origins(
+        settings.get("ADMIN_UI_CORS_ORIGINS", "http://localhost:5173,http://localhost:8082,http://127.0.0.1:8082")
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

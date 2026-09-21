@@ -11,11 +11,11 @@ from .constants import DEFAULT_UNCERTAINTY_THRESHOLD
 SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
     "auth": {
         "REQUIRE_API_AUTH": "0",
-        # Origens que o browser pode usar para chamar esta API. Estava a ser
-        # lida com `os.getenv` no import de main.py: fora do catálogo, fora do
-        # /admin/settings, e impossível de mudar sem reiniciar. Um deployment
-        # que a esqueça vê o frontend deixar de funcionar — visível, mas sem
-        # nada na configuração que explique porquê.
+        # Origens que o browser pode usar para chamar esta API. Resolvida por
+        # pedido (middleware/cors.py), por isso muda em runtime como qualquer
+        # outra chave operacional. Era lida com `os.getenv` no import: fora do
+        # catálogo, fora do /admin/settings, e impossível de mudar sem
+        # reiniciar o container.
         "ADMIN_UI_CORS_ORIGINS": "http://localhost:5173,http://localhost:8082,http://127.0.0.1:8082",
         "API_KEYS": "",
         "JWT_SECRET": "",
@@ -340,10 +340,6 @@ SETTINGS_DEFAULTS: Dict[str, str] = {
 }
 
 REQUIRES_RESTART_KEYS = {
-    # O middleware CORS é montado no import de main.py, por isso mudar isto em
-    # runtime não tem efeito nenhum. Rotulá-lo como runtime_safe faria a UI de
-    # admin prometer uma coisa que não acontece.
-    "ADMIN_UI_CORS_ORIGINS",
     "REDIS_HOST",
     "REDIS_PORT",
     "REDIS_DB",
