@@ -10,11 +10,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..ab_testing import ExperimentCreateRequest, ExperimentStatus, get_ab_test_manager
+from ..config.settings_catalog import split_by_security
 from ..reliability import get_cascade_detector, get_circuit_breaker_manager
 from ..runtime_state import reset_runtime_state
 from ..schemas import AdminSettingsUpdateRequest
 from ..settings_dynamic import settings
-from .dependencies import admin_session
+from .dependencies import admin_session, admin_token_only
 
 router = APIRouter(
     # Ao nível do router, não por handler: a linha `_auth(...)` que cada um
@@ -36,12 +37,13 @@ def get_settings_catalog():
     return {"settings": {key: settings.metadata(key) for key in settings.keys()}}
 
 
-@router.put("/admin/settings", tags=["Admin"])
-def update_settings(
-    payload: AdminSettingsUpdateRequest,
-):
-    """Update dynamic settings."""
-    updates = dict(payload.settings or {})
+def _apply_settings(updates: dict) -> dict:
+    """Validate and persist one batch of settings; shared by both endpoints.
+
+    A divisão entre os dois é de *autorização*, não de comportamento: o que
+    conta como conhecido, o que exige reinício e como o valor é serializado é
+    exactamente o mesmo dos dois lados.
+    """
     validation = settings.validate_runtime_updates(updates)
     if validation["unknown"]:
         raise HTTPException(
@@ -65,6 +67,61 @@ def update_settings(
         )
         settings.set(key, serialized, actor="api", source="admin")
     return {"status": "updated", "applied": validation["runtime_safe"]}
+
+
+@router.put("/admin/settings", tags=["Admin"])
+def update_settings(payload: AdminSettingsUpdateRequest):
+    """Update operational settings. Security keys are refused here.
+
+    Este endpoint aceita um token de sessão de admin, e é por isso que o
+    browser o pode chamar. As 13 chaves que decidem *quem entra* —
+    `REQUIRE_API_AUTH`, `TRUST_HEADER_ROLES`, `JWT_SECRET`,
+    `ADMIN_UI_CORS_ORIGINS`, as credenciais — não passam por aqui: quem tiver
+    uma sessão de admin podia desligar a autenticação da instalação inteira,
+    e uma sessão roubada no browser bastava para isso.
+    """
+    updates = dict(payload.settings or {})
+    operational, security = split_by_security(updates)
+    if security:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "security_settings_refused",
+                "keys": security,
+                "message": "Use PUT /admin/settings/security, que exige o token de admin mestre.",
+            },
+        )
+    return _apply_settings({key: updates[key] for key in operational})
+
+
+@router.put(
+    "/admin/settings/security",
+    tags=["Admin"],
+    dependencies=[Depends(admin_token_only)],
+)
+def update_security_settings(payload: AdminSettingsUpdateRequest):
+    """Update the settings that decide who may get in.
+
+    Exige o `ADMIN_TOKEN` mestre e **não** aceita a sessão de admin — a mesma
+    distinção que as rotas de RBAC já fazem, e pela mesma razão: o browser não
+    deve guardar a credencial que permite mudar a política de acesso.
+
+    Recusa chaves operacionais de propósito. Um batch que misturasse as duas
+    ou precisaria do token mestre para tudo, ou aplicaria metade — e a segunda
+    hipótese é a pior das três.
+    """
+    updates = dict(payload.settings or {})
+    operational, security = split_by_security(updates)
+    if operational:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "operational_settings_refused",
+                "keys": operational,
+                "message": "Use PUT /admin/settings para as chaves operacionais.",
+            },
+        )
+    return _apply_settings({key: updates[key] for key in security})
 
 
 @router.get("/admin/circuit-breakers", tags=["Admin"])

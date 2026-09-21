@@ -390,3 +390,35 @@ def is_known_setting(key: str) -> bool:
 def is_runtime_mutable(key: str) -> bool:
     """Return whether one setting can be applied without restart."""
     return metadata_for(key).get("mutability") == "runtime_safe"
+
+
+#: O domínio cuja alteração muda quem pode entrar, não como o router se comporta.
+SECURITY_DOMAIN = "auth"
+
+
+def is_security_setting(key: str) -> bool:
+    """Whether changing this key changes *who may get in*.
+
+    Duas categorias, e a segunda é a que uma lista escrita à mão esqueceria:
+
+    - Tudo no domínio ``auth``: ``REQUIRE_API_AUTH``, ``TRUST_HEADER_ROLES``,
+      ``JWT_SECRET``, ``ADMIN_UI_CORS_ORIGINS``, ``ENV``. Mudar qualquer um
+      deles é mudar a política de acesso da instalação inteira.
+    - Qualquer credencial, onde quer que viva no catálogo — ``REDIS_PASSWORD``
+      está no domínio ``redis``, não em ``auth``.
+
+    A segunda categoria reutiliza deliberadamente o mesmo predicado que a
+    redacção da API de admin, a cifra em repouso e a auditoria já usam. Uma
+    lista própria aqui divergiria dessas três no dia em que alguém
+    acrescentasse uma chave nova.
+    """
+    from .settings_encryption import is_secret
+
+    return key in SETTINGS_BY_DOMAIN.get(SECURITY_DOMAIN, {}) or is_secret(key)
+
+
+def split_by_security(keys) -> tuple:
+    """``(operacionais, de segurança)``, preservando a ordem dada."""
+    security = [key for key in keys if is_security_setting(key)]
+    operational = [key for key in keys if not is_security_setting(key)]
+    return operational, security
