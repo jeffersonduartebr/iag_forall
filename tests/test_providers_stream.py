@@ -179,3 +179,16 @@ def test_stream_ollama_raises_on_http_error(monkeypatch):
 
     with pytest.raises(httpx.HTTPStatusError):
         asyncio.run(_run())
+
+
+def test_warmup_and_calls_share_one_context_size():
+    """A warm-up with a different num_ctx made Ollama reload the model on every switch (prod, 2026-09-24)."""
+    import inspect
+
+    import app.providers_async  # noqa: F401  (ordem de import dos provedores)
+    from app.providers import _ollama, _ollama_adapter
+    from app.providers._infra import OLLAMA_NUM_CTX
+
+    assert "OLLAMA_NUM_CTX" in inspect.getsource(_ollama.warm_ollama_model_runtime)
+    assert "OLLAMA_NUM_CTX" in inspect.getsource(_ollama_adapter)
+    assert OLLAMA_NUM_CTX == 4096

@@ -168,6 +168,7 @@ async def _stream_ollama(
     timeout_seconds: Optional[float],
 ) -> AsyncIterator[StreamEvent]:
     """Stream a local Ollama completion via ``/api/generate`` (NDJSON, plain text)."""
+    from app.providers._infra import OLLAMA_NUM_CTX
     from app.providers_async import OLLAMA_HOST, get_http_client
 
     real = _real_name(model)
@@ -175,7 +176,7 @@ async def _stream_ollama(
         "model": real,
         "prompt": prompt,
         "stream": True,
-        "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": 4096},
+        "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": OLLAMA_NUM_CTX},
     }
     if system_prompt:
         payload["system"] = system_prompt

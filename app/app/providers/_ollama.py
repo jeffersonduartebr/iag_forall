@@ -28,6 +28,7 @@ from ._infra import (
     DEFAULT_OLLAMA_VRAM_TARGET_UTILIZATION,
     DEFAULT_PROVIDER_UNAVAILABLE_NEGATIVE_CACHE_TTL_SECONDS,
     OLLAMA_HOST,
+    OLLAMA_NUM_CTX,
     REASONING_MODEL_KEYWORDS,
     log_process_file_descriptor_limit,
 )
@@ -373,7 +374,7 @@ async def warm_ollama_model_runtime(model_name: str) -> bool:
                 "options": {
                     "temperature": 0.0,
                     "num_predict": 4,
-                    "num_ctx": 512,
+                    "num_ctx": OLLAMA_NUM_CTX,
                 },
             },
             timeout=max(30.0, _get_adaptive_timeout(short_name)),

@@ -30,6 +30,7 @@ from ._base import (
 from ._infra import (
     COMMON_RETRY_STRATEGY,
     OLLAMA_HOST,
+    OLLAMA_NUM_CTX,
     REASONING_MODEL_KEYWORDS,
     local_breaker,
 )
@@ -170,7 +171,7 @@ class OllamaProvider(BaseProvider):
             options = {
                 "temperature": kwargs.get("temperature", 0.5),
                 "num_predict": kwargs.get("max_tokens", 512),
-                "num_ctx": 4096,
+                "num_ctx": OLLAMA_NUM_CTX,
             }
 
             # Quick Win #6: Adaptive timeout based on model type
