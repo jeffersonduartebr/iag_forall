@@ -83,10 +83,13 @@ services:
     # cria o esquema completo. Numa base nova (sem alembic_version) a 0001 colidiria com essas
     # tabelas; o bootstrap já é o esquema do head, então a base é apenas carimbada. Numa base
     # que já tem alembic_version, as migrações pendentes rodam normalmente.
-    command: >
+    command: |
       bash -ec "
         echo '⏳ Executando Alembic migrations...' &&
-        if [ -n \"$$(alembic current 2>/dev/null | grep -Eo '^[0-9A-Za-z_]+')\" ]; then alembic upgrade head; else alembic stamp head; fi &&
+        if alembic current 2>/dev/null | grep -Eq '^[0-9A-Za-z_]+'
+        then alembic upgrade head
+        else alembic stamp head
+        fi &&
         echo '⏳ Executando db_manager.py...' &&
         python -m app.db_manager &&
         echo '✅ Banco pronto!'
