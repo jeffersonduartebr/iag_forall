@@ -65,16 +65,28 @@ services:
       - PYTHONIOENCODING=UTF-8
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
 
+    # A imagem é construída de ./app, mas as migrações vivem na raiz do repositório
+    # (alembic.ini e alembic/). Sem estes volumes o `alembic upgrade head` falha com
+    # "No 'script_location' key found" (o alembic não encontra configuração nenhuma).
+    # O env.py resolve BASE_DIR como o pai de alembic/ (= /app), onde está o pacote app.
+    volumes:
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./alembic:/app/alembic:ro
+
     # `set -e` e `&&`, e o último comando é o trabalho e não um `echo`.
     # Com `;` entre os passos, o código de saída do `bash -c` era o do último
     # comando — um `echo`, que devolve sempre 0. O alembic podia falhar, o
     # container imprimia "Banco pronto" e saía 0, e a condição
     # `service_completed_successfully` de que a API depende ficava satisfeita
     # de qualquer maneira: a API arrancava contra um esquema meio migrado.
+    # O entrypoint da imagem roda o bootstrap do db_manager ANTES deste comando, e o bootstrap
+    # cria o esquema completo. Numa base nova (sem alembic_version) a 0001 colidiria com essas
+    # tabelas; o bootstrap já é o esquema do head, então a base é apenas carimbada. Numa base
+    # que já tem alembic_version, as migrações pendentes rodam normalmente.
     command: >
       bash -ec "
         echo '⏳ Executando Alembic migrations...' &&
-        alembic upgrade head &&
+        if [ -n \"$$(alembic current 2>/dev/null | grep -Eo '^[0-9A-Za-z_]+')\" ]; then alembic upgrade head; else alembic stamp head; fi &&
         echo '⏳ Executando db_manager.py...' &&
         python -m app.db_manager &&
         echo '✅ Banco pronto!'
