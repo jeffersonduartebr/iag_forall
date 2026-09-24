@@ -75,6 +75,7 @@ from .services.judge_usurpation import (
     rate_usurpation,
     score_usurpation,
 )
+from .services.judge_vendors import com_modelo_avaliado
 from .settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
@@ -676,6 +677,7 @@ async def llm_based_score(query, answer, use_rag, modality, image_b64, reference
     )
 
 
+@com_modelo_avaliado
 async def judge_answer(
     query: str,
     answer: str,
@@ -685,6 +687,8 @@ async def judge_answer(
     reference: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Run the configured judge pipeline and return normalized judge results.
+
+    ``evaluated_model`` excludes judges of the same company (``services.judge_vendors``).
 
     The function can emit heuristic-only, LLM-only, or hybrid outputs depending
     on runtime settings. Every returned item contains a ``judge_id`` and a

@@ -67,7 +67,9 @@ def _score_candidate(s: JudgeStats) -> float:
 
 
 def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[SelectedJudge]:
-    """Select two judges using fitness filtering and weighted randomization."""
+    """Select two judges using fitness filtering and weighted randomization (none when no judge is eligible)."""
+    if not models:
+        return []
     fitness_vals = [stats.get(m, JudgeStats(m)).fitness for m in models]
     thr = _adaptive_threshold(fitness_vals, MIN_FITNESS)
     valid = [m for m in models if stats.get(m, JudgeStats(m)).fitness >= thr]

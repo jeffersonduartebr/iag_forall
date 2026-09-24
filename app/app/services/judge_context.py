@@ -19,6 +19,7 @@ from ..model_registry import filter_configured_model_names, is_model_configured
 from ..providers_async import call_model
 from ..settings_dynamic import settings
 from ..vectorstore import query_embedding
+from .judge_vendors import elegiveis
 
 logger = logging.getLogger("app.judges")
 
@@ -43,10 +44,11 @@ def _configured_local_fallback() -> str:
 
 
 def _resolve_meta_judge_model() -> str:
-    """Resolve the configured meta-judge model with a local fallback."""
-    if is_model_configured(META_JUDGE_HINT):
+    """Resolve the meta-judge: the preferred one, else another judge, never of the evaluated model's company."""
+    if is_model_configured(META_JUDGE_HINT) and elegiveis([META_JUDGE_HINT]):
         return META_JUDGE_HINT
-    return _configured_local_fallback()
+    alternativas = _resolve_judge_models() + elegiveis([_configured_local_fallback()])
+    return alternativas[0] if alternativas else _configured_local_fallback()
 
 
 def _resolve_image_desc_model() -> str:
@@ -67,7 +69,8 @@ def _resolve_judge_models() -> List[str]:
     configured = filter_configured_model_names(
         [model for model in (getattr(settings, "JUDGE_MODELS", []) or []) if isinstance(model, str) and model]
     )
-    return configured or [_configured_local_fallback()]
+    # Independência: nenhum juiz da mesma empresa do modelo avaliado (vazio = não julgar).
+    return elegiveis(configured) or elegiveis([_configured_local_fallback()])
 
 
 def _image_hash_from_b64(image_b64: Optional[str]) -> Optional[str]:
