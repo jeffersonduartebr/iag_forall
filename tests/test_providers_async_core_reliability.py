@@ -118,6 +118,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             return SimpleNamespace(text="ok-gemini")
 
     monkeypatch.setattr(pa, "genai", SimpleNamespace(GenerativeModel=_GModel))
+    # Caminho do SDK legado (o google-genai agora está instalado e seria preferido).
+    monkeypatch.setattr("app.providers._gemini.google_genai", None)
     monkeypatch.setattr(pa, "count_tokens", lambda text, model: len(text))
     monkeypatch.setattr(pa, "get_model_cost", lambda model, p, c: 0.02)
 

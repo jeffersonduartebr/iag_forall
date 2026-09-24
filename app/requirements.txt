@@ -1,7 +1,7 @@
 # Core API
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
-httpx[http2]==0.27.2
+httpx[http2]==0.28.1
 python-multipart==0.0.9
 aiofiles==24.1.0
 structlog==24.4.0
@@ -17,6 +17,7 @@ typing-extensions>=4.12,<5
 openai>=1.52.0
 anthropic
 google-generativeai
+google-genai>=1.30,<2  # Vertex AI (gemini via conta de faturamento do GCP) e SDK novo do Gemini
 google-cloud-aiplatform==1.66.0
 tenacity==9.1.4
 pybreaker==1.0.1

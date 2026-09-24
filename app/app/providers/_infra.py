@@ -32,9 +32,9 @@ except ImportError:
     AsyncAnthropic = None  # type: ignore[assignment,misc]
 
 try:
-    from google import genai as google_genai  # type: ignore[attr-defined]
+    from google import genai as google_genai
 except ImportError:
-    google_genai = None
+    google_genai = None  # type: ignore[assignment]
 
 try:
     with warnings.catch_warnings():
@@ -321,6 +321,10 @@ def log_process_file_descriptor_limit(context: str) -> None:
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Com GEMINI_VERTEX_PROJECT, os modelos gemini/* vão pelo Vertex AI desse projeto (cobrança na conta de
+# faturamento dele), autenticados pelas credenciais padrão do ambiente (conta de serviço da VM).
+GEMINI_VERTEX_PROJECT = os.getenv("GEMINI_VERTEX_PROJECT", "").strip()
+GEMINI_VERTEX_LOCATION = os.getenv("GEMINI_VERTEX_LOCATION", "global").strip() or "global"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
 OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()

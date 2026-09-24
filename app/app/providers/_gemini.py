@@ -24,8 +24,36 @@ from ._base import (
 from ._infra import (
     CLOUD_BREAKERS,
     COMMON_RETRY_STRATEGY,
+    GEMINI_VERTEX_LOCATION,
+    GEMINI_VERTEX_PROJECT,
     google_genai,
 )
+
+_CLIENTES: Dict[tuple, Any] = {}
+
+
+def _cliente_genai():
+    """``google-genai`` client: Vertex AI (billed to GEMINI_VERTEX_PROJECT) when configured, else the API key.
+
+    Reused per configuration: a Vertex client holds the refreshed OAuth token of the VM's service account.
+    """
+    chave = (id(google_genai), GEMINI_VERTEX_PROJECT, GEMINI_VERTEX_LOCATION, _pa.GEMINI_API_KEY)
+    if chave not in _CLIENTES:
+        if GEMINI_VERTEX_PROJECT:
+            _CLIENTES[chave] = google_genai.Client(vertexai=True, project=GEMINI_VERTEX_PROJECT, location=GEMINI_VERTEX_LOCATION)
+        else:
+            _CLIENTES[chave] = google_genai.Client(api_key=_pa.GEMINI_API_KEY or None)
+    return _CLIENTES[chave]
+
+
+def _tokens_cobrados(resp: Any) -> Optional[tuple[int, int]]:
+    """``(prompt, completion)`` from the response's usage metadata; thinking tokens are billed as output."""
+    uso = getattr(resp, "usage_metadata", None)
+    entrada = getattr(uso, "prompt_token_count", None) if uso is not None else None
+    if entrada is None:
+        return None
+    saida = (getattr(uso, "candidates_token_count", None) or 0) + (getattr(uso, "thoughts_token_count", None) or 0)
+    return int(entrada), int(saida)
 
 
 class _GenOptions(NamedTuple):
@@ -86,8 +114,8 @@ class GeminiProvider(BaseProvider):
                 if tools or contents:
                     return resp
                 return SimpleNamespace(text=getattr(resp, "text", "") or "")
-            if _pa.genai is None:
-                raise ImportError("No Gemini SDK available")
+            if _pa.genai is None or GEMINI_VERTEX_PROJECT:
+                raise ImportError("google-genai SDK is required (the legacy SDK has no Vertex AI support)")
             return self._generate_legacy(model_name, _legacy_contents(prompt, image_b64, contents), options)
 
         @staticmethod
@@ -101,8 +129,7 @@ class GeminiProvider(BaseProvider):
             if options.tool_config:
                 config["tool_config"] = options.tool_config
             config.update(ptools.to_gemini_response_config(options.response_format))
-            client = google_genai.Client(api_key=_pa.GEMINI_API_KEY or None)
-            return client.models.generate_content(model=model_name, contents=contents, config=config)
+            return _cliente_genai().models.generate_content(model=model_name, contents=contents, config=config)
 
         @staticmethod
         def _generate_legacy(model_name: str, contents: list, options: "_GenOptions"):
@@ -121,7 +148,7 @@ class GeminiProvider(BaseProvider):
 
     def __init__(self):
         """Initialize the Gemini provider and its adapter."""
-        if not _pa.genai:
+        if not (_pa.genai or google_genai):
             raise ImportError("Google GenAI SDK not installed")
         super().__init__("gemini", concurrency_limit=60)
         self._adapter = self.GeminiAdapter()
@@ -171,13 +198,16 @@ class GeminiProvider(BaseProvider):
             resp = await run_blocking_provider(_call)
             text_out, tool_calls, finish_reason = ptools.from_gemini_response(resp)
 
-            p_tok = count_tokens(prompt, model_name)
-            # Gemini conta tokens no cliente; num turno de tool o texto é vazio, então
-            # contabiliza também os tool_calls serializados para não subestimar custo.
-            completion_text = text_out
-            if tool_calls:
-                completion_text = f"{text_out}{json.dumps(tool_calls, ensure_ascii=False)}"
-            c_tok = count_tokens(completion_text, model_name)
+            cobrados = _tokens_cobrados(resp)
+            if cobrados is not None:
+                p_tok, c_tok = cobrados  # contagem do próprio provedor, com os tokens de raciocínio
+            else:
+                # SDK legado: contagem no cliente; num turno de tool o texto é vazio, então
+                # contabiliza também os tool_calls serializados para não subestimar custo.
+                completion_text = text_out
+                if tool_calls:
+                    completion_text = f"{text_out}{json.dumps(tool_calls, ensure_ascii=False)}"
+                p_tok, c_tok = count_tokens(prompt, model_name), count_tokens(completion_text, model_name)
             cost = get_model_cost(model_name, p_tok, c_tok)
 
             latency = time.time() - start
