@@ -330,6 +330,9 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
 OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "").strip()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+#: Um único tamanho de contexto para aquecimento e consultas: o Ollama recarrega o modelo quando num_ctx muda,
+#: e um aquecimento com 512 seguido de consultas com 4096 fazia cada troca custar uma recarga completa.
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
 
 if genai and GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
