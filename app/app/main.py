@@ -76,6 +76,7 @@ from .observability import (
     render_metrics_response,
     setup_logging,
 )
+from .openrouter_catalog import warm_pricing_catalog
 from .prometheus_setup import setup_prometheus
 from .providers_async import (
     close_http_client,
@@ -382,6 +383,7 @@ async def startup_event():
                 logger.warning(f"[warmup] Vectorstore init falhou: {e}")
 
             await preload_ollama_models()
+            logger.info("[warmup] Catálogo de preços do OpenRouter: %s modelos.", await warm_pricing_catalog())
 
             try:
                 await vs_add_document(
