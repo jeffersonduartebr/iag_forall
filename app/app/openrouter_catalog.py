@@ -136,6 +136,18 @@ def openrouter_supports_tools(model_slug: str) -> bool:
     return False
 
 
+async def warm_pricing_catalog() -> int:
+    """Load the catalog at startup when OpenRouter is configured; returns how many models are priced.
+
+    Pricing reads only this in-memory catalog; it used to be filled solely by the exploration flow, so every
+    OpenRouter model missing from the static fallback table was priced at zero, and cost is one of the three
+    routing objectives.
+    """
+    if not get_openrouter_api_key():
+        return 0
+    return len(await fetch_openrouter_models(force_refresh=True))
+
+
 def get_openrouter_pricing_per_1k(model_slug: str) -> Optional[Dict[str, float]]:
     """Return USD per-1K token pricing from the cached OpenRouter catalog."""
     slug = (model_slug or "").strip()

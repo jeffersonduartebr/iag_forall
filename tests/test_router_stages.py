@@ -108,3 +108,29 @@ def test_finalize_success_reports_fallback():
     ok = SimpleNamespace(success=True, result=("resp", {}), model_used="m2", models_tried=["m1", "m2"], errors=[{}])
     outcome = rps._finalize(ctx, "m1", ok)
     assert (outcome.chosen, outcome.fallback_used, outcome.retry_count) == ("m2", True, 1)
+
+
+@pytest.mark.asyncio
+async def test_error_budget_never_forces_local_models_with_open_breakers(monkeypatch):
+    """Production (2026-09-24): forcing locals whose breaker was open failed every request and kept the error
+    budget exceeded forever (89/100 queries in 502). Without a healthy local model, keep all candidates."""
+    monkeypatch.setattr(rs, "filter_configured_model_names", lambda models: list(models))
+    monkeypatch.setattr(rs, "_saudavel", lambda model: False)
+
+    async def exceeded():
+        return True
+
+    assert await rs.resolve_candidates(_ctx(_is_error_budget_exceeded_async=exceeded)) == ["openai/gpt-5.5", "ollama/gemma3:4b"]
+    monkeypatch.setattr(rs, "_saudavel", lambda model: True)
+    assert await rs.resolve_candidates(_ctx(_is_error_budget_exceeded_async=exceeded)) == ["ollama/gemma3:4b"]
+
+
+def test_health_check_uses_the_breaker_and_tolerates_errors(monkeypatch):
+    from types import SimpleNamespace
+
+    import app.reliability as rel
+
+    monkeypatch.setattr(rel, "get_circuit_breaker_manager", lambda: SimpleNamespace(is_available=lambda m: m == "ollama/ok"))
+    assert rs._saudavel("ollama/ok") and not rs._saudavel("ollama/aberto")
+    monkeypatch.setattr(rel, "get_circuit_breaker_manager", lambda: (_ for _ in ()).throw(RuntimeError("x")))
+    assert rs._saudavel("ollama/qualquer")
