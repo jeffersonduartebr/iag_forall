@@ -67,8 +67,12 @@ def _raise_if_guardrail_blocked(req: Any, decision: Any) -> None:
 
 
 def _raise_if_budget_exceeded(req: Any, budget: Any) -> None:
-    """HTTP 429 when the tenant budget is exhausted."""
-    if budget.allowed:
+    """HTTP 429 when the tenant budget is exhausted.
+
+    ``None`` is the degraded pass from ``resolve_budget`` (the budget read failed and the policy is fail-open):
+    it must serve the request, not crash it with ``None.allowed``.
+    """
+    if budget is None or budget.allowed:
         return
     ROUTER_QUERY_OUTCOME.labels(
         outcome="budget_rejected",

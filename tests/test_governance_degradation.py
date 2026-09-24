@@ -64,3 +64,45 @@ def test_the_degradation_is_counted():
     before = GOVERNANCE_DEGRADED_TOTAL.labels(check="active_policy")._value.get()
     resolve_policy(RuntimeError("boom"))
     assert GOVERNANCE_DEGRADED_TOTAL.labels(check="active_policy")._value.get() == before + 1
+
+
+def test_degraded_budget_pass_serves_the_request_instead_of_crashing():
+    """Production regression (2026-09-24): resolve_budget's fail-open None hit ``None.allowed`` -> HTTP 500."""
+    from types import SimpleNamespace
+
+    from app.services.query_runtime import _raise_if_budget_exceeded
+
+    _raise_if_budget_exceeded(SimpleNamespace(modality="text"), None)
+    _raise_if_budget_exceeded(SimpleNamespace(modality="text"), SimpleNamespace(allowed=True))
+
+
+def test_deploy_step_fails_the_deploy_when_tables_cannot_be_created(monkeypatch):
+    import pytest
+
+    from app import governance_ddl
+
+    class _Falha:
+        def begin(self):
+            raise RuntimeError("sem banco")
+
+    monkeypatch.setattr(governance_ddl, "get_engine", lambda: _Falha())
+    with pytest.raises(RuntimeError):
+        governance_ddl.criar_tabelas_de_governanca()
+
+
+def test_deploy_step_runs_every_governance_ddl(monkeypatch):
+    from contextlib import contextmanager
+
+    from app import governance_ddl
+
+    executados = []
+
+    class _Motor:
+        @contextmanager
+        def begin(self):
+            yield type("C", (), {"execute": lambda self, sql: executados.append(str(sql))})()
+
+    monkeypatch.setattr(governance_ddl, "get_engine", lambda: _Motor())
+    governance_ddl.criar_tabelas_de_governanca()
+    assert any("tenant_budgets" in sql for sql in executados)
+    assert len(executados) == len(governance_ddl.DDL_STATEMENTS) + 1

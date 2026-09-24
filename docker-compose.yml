@@ -92,6 +92,8 @@ services:
         fi &&
         echo '⏳ Executando db_manager.py...' &&
         python -m app.db_manager &&
+        echo '⏳ Tabelas de governança (orçamento, política, RBAC)...' &&
+        python -m app.governance_ddl &&
         echo '✅ Banco pronto!'
       "
 
