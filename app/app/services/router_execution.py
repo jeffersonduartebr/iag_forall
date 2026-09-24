@@ -17,6 +17,7 @@ from app.services.router_services import spawn_via_deps
 from app.services.router_stages import (
     RouteChoice,
     RouteContext,
+    available_models,
     compute_uncertainty,
     prepare_prompt,
     resolve_candidates,
@@ -80,9 +81,28 @@ def _ensure_local_model(ctx: RouteContext, chosen: str) -> None:
         )
 
 
+def _pinned_choice(ctx: RouteContext) -> RouteChoice | None:
+    """``pinned_model`` bypasses selection; it must still be a configured, non-blocked candidate."""
+    pinned = ctx.hints.get("pinned_model")
+    if not pinned:
+        return None
+    if pinned not in available_models(ctx.deps):
+        raise ctx.deps["ProviderCallError"](
+            model=pinned,
+            message=f"pinned_model '{pinned}' não está entre os candidatos configurados.",
+            category="pinned_model_unavailable",
+            retryable=False,
+        )
+    return RouteChoice(chosen=pinned, top2=[pinned])
+
+
 async def _choose_route(ctx: RouteContext, uncertainty: float) -> RouteChoice:
     """Candidates -> tool capability filter -> model selection (one 'selection' stage)."""
     started = time.time()
+    pinned = _pinned_choice(ctx)
+    if pinned is not None:
+        ctx.observe_stage("selection", started)
+        return pinned
     models = restrict_to_tool_models(ctx, await resolve_candidates(ctx))
     choice = await select_route(ctx, models, uncertainty)
     ctx.observe_stage("selection", started)

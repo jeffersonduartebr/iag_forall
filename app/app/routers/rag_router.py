@@ -11,14 +11,16 @@ import logging
 import os
 import re
 import uuid
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional, Union
 
 from app.api.auth import AuthContext, require_api_auth
 from app.providers_async import call_model
+from app.schemas_request_parts import RagFilterKey
+from app.services.rag_scope import TENANT_KEY, delete_scope, scope_where
 from app.settings_dynamic import settings
 from app.vectorstore import add_document
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("rag_router")
 
@@ -198,6 +200,15 @@ The class groups the state and behavior required for IngestRequest."""
     metadata: Dict[str, Any]
     collection_name: Optional[str] = None # Para suportar "Coleção por Curso"
 
+def _tenant_scoped(req: IngestRequest, auth: AuthContext) -> IngestRequest:
+    """Stamp the caller's tenant (never the client's) and namespace the id so tenants cannot overwrite each other."""
+    metadata = {k: v for k, v in req.metadata.items() if k != TENANT_KEY}
+    if not auth.tenant_id:
+        return req.model_copy(update={"metadata": metadata})
+    metadata[TENANT_KEY] = auth.tenant_id
+    return req.model_copy(update={"metadata": metadata, "doc_id": f"{auth.tenant_id}:{req.doc_id}"})
+
+
 @router.post("/ingest")
 async def ingest_text(
     req: IngestRequest,
@@ -206,6 +217,7 @@ async def ingest_text(
     """
     Endpoint para ingestão direta de texto (usado por serviços externos como o Auditor).
     """
+    req = _tenant_scoped(req, _auth)
     try:
         # Se um nome de coleção específico for passado (ex: course_101),
         # o vectorstore deve ser capaz de lidar ou usamos metadata filtering.
@@ -228,3 +240,18 @@ async def ingest_text(
     except Exception as e:
         logger.error(f"[RAG API] Erro na ingestão: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class DeleteScopeRequest(BaseModel):
+    """Delete every chunk of one scope (e.g. ``{"material_id": 42}``) within the caller's tenant."""
+    rag_filter: Annotated[Dict[RagFilterKey, Union[str, int, float, bool]], Field(min_length=1, max_length=8)]
+
+
+@router.post("/delete")
+async def delete_docs(req: DeleteScopeRequest, auth: AuthContext = Depends(require_api_auth)):
+    """Remove a scope from Chroma and BM25. Only a tenant-bound caller or an admin may delete."""
+    if not auth.tenant_id and "admin" not in auth.roles:
+        raise HTTPException(status_code=403, detail="Remoção exige token vinculado a tenant ou papel admin.")
+    where = scope_where(req.rag_filter, auth.tenant_id)
+    removed = await delete_scope(where or {})
+    return {"status": "ok", "removed": len(removed)}

@@ -21,6 +21,8 @@ from typing import Annotated, Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .schemas_request_parts import RagFilter, WorkloadHints
+
 # ============================================================
 # Enums for Validation
 # ============================================================
@@ -84,13 +86,6 @@ class QualitySource(str, Enum):
 # 1. Entrada (Request)
 # ============================================================
 
-class WorkloadHints(BaseModel):
-    """Optional client hints; complexity is always detected at runtime."""
-    theme: Annotated[Optional[str], Field(max_length=128, description="Benchmark or domain theme for telemetry.")] = None
-    benchmark_id: Annotated[Optional[str], Field(max_length=128, description="Catalog entry id when known.")] = None
-    expected_tokens: Annotated[Optional[int], Field(ge=32, le=32000, description="Desired response length floor.")] = None
-
-
 class QueryRequest(BaseModel):
     """
     Payload de entrada para o endpoint /query.
@@ -113,6 +108,7 @@ class QueryRequest(BaseModel):
     enable_rag_for_answer: Annotated[bool, Field(description="Ativar RAG para gerar a resposta.")] = False
     enable_rag_for_image: Annotated[bool, Field(description="Ativar RAG usando a imagem como query.")] = False
     rag_modality: Annotated[str, Field(description="Modalidade de busca no RAG: text, vision, multimodal.")] = "text"
+    rag_filter: RagFilter = None
 
     # Parâmetros de Geração (LLM)
     max_tokens: Annotated[int, Field(ge=1, le=32000, description="Limite de tokens na resposta (1-32000).")] = 512
@@ -133,6 +129,7 @@ class QueryRequest(BaseModel):
     user_key: Annotated[Optional[str], Field(max_length=256, description="Chave estável de usuário para assignment consistente em experimento.")] = None
     webhook_url: Annotated[Optional[str], Field(max_length=2048, description="URL para notificação HTTP quando job assíncrono (202) for concluído.")] = None
     workload_hints: Annotated[Optional[WorkloadHints], Field(description="Optional domain hints; routing complexity is inferred at runtime.")] = None
+    pinned_model: Annotated[Optional[str], Field(max_length=256, description="Modelo fixo para chamadas de instrumento de medida: ignora a seleção e não alimenta bandit/EMA. Exige o papel 'instrument'.")] = None
 
     # --- Tool / function calling (formato OpenAI, pass-through) ---
     tools: Annotated[Optional[List[Dict[str, Any]]], Field(description="Lista de tools no formato OpenAI: [{type:function, function:{name,description,parameters}}].")] = None

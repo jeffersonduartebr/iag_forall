@@ -17,6 +17,7 @@ from .embeddings import (
 # Importamos o call_model para gerar a descrição da imagem (Ponte Visual)
 from .providers_async import call_model
 from .reranker import rerank_documents  # <--- Importar o novo módulo
+from .services.rag_scope import restrict_to_scope
 from .services.retrieval_assembly import (  # noqa: F401  (reexportados)
     Candidate,
     _augmented_prompt,
@@ -118,10 +119,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     if image_b64 and req == "multimodal":
         return "multimodal"
-    if image_b64 and req in ("vision", "image"):
-        return "vision"
-    if image_b64 and req == "text":
-        # Se tem imagem mas pediu texto, tratamos como visão para o RAG aproveitar a imagem
+    # Imagem com pedido de texto também vira visão, para o RAG aproveitar a imagem.
+    if image_b64 and req in ("vision", "image", "text"):
         return "vision"
 
     return "text"
@@ -250,6 +249,7 @@ async def build_augmented_prompt(
     retrieval_mode: Optional[str] = None,
     context_token_budget: Optional[int] = None,
     rerank_enabled: Optional[bool] = None,
+    where: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Execute the build augmented prompt routine.
 
@@ -262,6 +262,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         retrieval_mode=retrieval_mode,
         context_token_budget=context_token_budget,
         rerank_enabled=rerank_enabled,
+        where=where,
     )
     return str(bundle.get("augmented_prompt") or bundle.get("query") or "")
 
@@ -270,7 +271,8 @@ SearchHits = Tuple[List[str], Dict[str, str], Dict[str, Dict[str, Any]]]
 
 
 async def _dense_search(
-    query: str, rag_mode: str, image_b64: Optional[str], collection_modality: str, n_results: int
+    query: str, rag_mode: str, image_b64: Optional[str], collection_modality: str, n_results: int,
+    where: Optional[Dict[str, Any]] = None,
 ) -> SearchHits:
     """Vector search: ``(ids em ordem, id -> texto, id -> metadados)``; vazio em falha."""
     ids: List[str] = []
@@ -280,7 +282,7 @@ async def _dense_search(
     if emb is None:
         return ids, docs_map, meta_map
     try:
-        res = await query_embedding(modality=collection_modality, embedding=emb, n_results=n_results)
+        res = await query_embedding(modality=collection_modality, embedding=emb, n_results=n_results, where=where)
         if res and res.get("ids"):
             ids = res["ids"][0]
             docs = res["documents"][0]
@@ -392,8 +394,11 @@ async def build_retrieval_bundle(
     retrieval_mode: Optional[str] = None,
     context_token_budget: Optional[int] = None,
     rerank_enabled: Optional[bool] = None,
+    where: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return retrieved context plus structured provenance for one query.
+
+    ``where`` (see ``services.rag_scope``) confines both dense and BM25 hits to one scope.
 
     Hybrid retrieval: dense + BM25 in parallel, RRF fusion, optional
     cross-encoder rerank, trim to the token budget, citations/evidence.
@@ -410,9 +415,10 @@ async def build_retrieval_bundle(
     sparse_k = _get_int_setting("RAG_LIGHT_SPARSE_TOP_K", 6) if light else 20
 
     dense, sparse = await asyncio.gather(
-        _dense_search(query, rag_mode, image_b64, collection_modality, dense_k),
+        _dense_search(query, rag_mode, image_b64, collection_modality, dense_k, where),
         _sparse_search(query, sparse_k),
     )
+    sparse = await restrict_to_scope(sparse, where, collection_modality)
     items = _fuse_candidates(dense, sparse)
     if not items:
         _observe_retrieval(rag_mode, 0, None)

@@ -46,8 +46,25 @@ def resolve_effective_tenant_id(
     return None
 
 
+#: Roles allowed to bypass selection with ``pinned_model`` (measurement instruments, operators).
+PINNED_MODEL_ROLES = frozenset({"instrument", "admin"})
+
+
+def _authorize_pinned_model(req: QueryRequest, auth: Optional[AuthContext]) -> None:
+    """A pinned model skips the policy under study, so only instrument/admin callers may ask for one."""
+    if not getattr(req, "pinned_model", None):
+        return
+    roles = set(auth.roles) if auth and auth.authenticated else set()
+    if not roles & PINNED_MODEL_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": True, "category": "pinned_model_forbidden", "message": "pinned_model exige papel 'instrument'."},
+        )
+
+
 def bind_tenant_to_request(req: QueryRequest, auth: Optional[AuthContext] = None) -> QueryRequest:
-    """Attach resolved tenant_id to the request object."""
+    """Attach resolved tenant_id to the request object (and authorize caller-only fields such as ``pinned_model``)."""
+    _authorize_pinned_model(req, auth)
     tenant_id = resolve_effective_tenant_id(req, auth)
     if tenant_id:
         req.tenant_id = tenant_id

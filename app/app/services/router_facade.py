@@ -62,7 +62,7 @@ async def route_and_answer_with_resilience(
                 result = await asyncio.wait_for(
                     deduplicator.deduplicate(
                         query=query,
-                        model="auto",
+                        model=effective_runtime_hints.get("pinned_model") or "auto",
                         execute_fn=_execute_request,
                         max_tokens=max_tokens,
                         temperature=temperature,

@@ -159,6 +159,22 @@ def _effective_sync_timeout_seconds(req_timeout_seconds: int | None, runtime_pro
     return max(5, min(int(req_timeout_seconds), runtime_deadline))
 
 
+def _apply_rag_scope(req: Any, runtime_hints: Dict[str, Any], use_rag: bool) -> bool:
+    """A scoped request (``rag_filter``) asked for retrieval from a declared corpus: honour it exactly.
+
+    The workload heuristics may skip RAG for short queries, which is fine for open questions but turns a
+    RAG ablation into "no RAG vs. sometimes RAG". With a scope, ``enable_rag_for_answer`` is the treatment.
+    """
+    rag_filter = getattr(req, "rag_filter", None)
+    if not rag_filter:
+        return use_rag
+    runtime_hints["rag_filter"] = dict(rag_filter)
+    if not (req.enable_rag_for_answer or req.enable_rag_for_image):
+        return use_rag
+    runtime_hints.update(retrieval_mode="full_retrieval", needs_retrieval=True)
+    return True
+
+
 def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None) -> Dict[str, Any]:
     """Derive execution knobs for one request without mutating the incoming request object."""
     workload = classify_query_workload(req, modality=modality, image_input=image_input)
@@ -251,6 +267,10 @@ def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None
     )
     effective_max_tokens = int(adjusted["max_tokens"])
     runtime_hints = adjusted["runtime_hints"]
+    use_rag = _apply_rag_scope(req, runtime_hints, use_rag)
+    if getattr(req, "pinned_model", None):
+        # Instrumento de medida: exatamente este modelo, sem fallback nem hedge para outro.
+        runtime_hints.update(pinned_model=req.pinned_model, max_fallbacks=0)
     detected_complexity = adjusted["detected_complexity"]
 
     expected_tokens = None
