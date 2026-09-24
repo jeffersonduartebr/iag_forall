@@ -402,6 +402,7 @@ def seed_pricing_data(conn):
         # --- Google Gemini (Novos modelos 2.5) ---
         ("gemini-2.5-pro", 0.00125, 0.0100),
         ("gemini-2.5-flash", 0.00030, 0.0025),
+        ("gemini-3.8-flash", 0.00075, 0.00375),  # Vertex AI, introdutório até 2026-12-31
 
         # --- Anthropic Claude (Novos modelos 4.5) ---
         ("claude-opus-4.5", 0.00500, 0.0250),

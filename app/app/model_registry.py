@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _PROVIDER_ENV_KEYS = {
     "openai": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
-    "gemini": ("GEMINI_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GEMINI_VERTEX_PROJECT"),
     "openrouter": ("OPENROUTER_API_KEY",),
 }
 
