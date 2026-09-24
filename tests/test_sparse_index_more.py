@@ -23,6 +23,25 @@ def test_sparse_index_commit_search_save_and_load_paths(monkeypatch, tmp_path):
     idx.commit()
     assert idx.is_dirty is True
 
+def test_sparse_index_remove_documents_rebuilds_or_clears(monkeypatch, tmp_path):
+    """Removing ids rebuilds BM25 over the rest; emptying the corpus drops the stale index."""
+    monkeypatch.setattr(si, "INDEX_PATH", str(tmp_path / "bm25.pkl"))
+    monkeypatch.setattr(si.os.path, "exists", lambda path: False)
+    idx = si.SparseIndex()
+    corpus = (("a", "banco de dados"), ("b", "normalização relacional"), ("c", "montagem"), ("d", "fonte"), ("e", "cpu"))
+    for doc_id, text in corpus:
+        idx.add_document(doc_id, text)
+    idx.commit()
+
+    idx.remove_documents(["zzz"])
+    assert idx.doc_ids == ["a", "b", "c", "d", "e"]
+    idx.remove_documents(["a"])
+    assert (idx.doc_ids, idx.is_dirty) == (["b", "c", "d", "e"], False)
+    assert [doc_id for doc_id, _ in idx.search("normalização")] == ["b"]
+    idx.remove_documents(["b", "c", "d", "e"])
+    assert (idx.documents, idx.bm25) == ([], None)
+
+
 def test_sparse_index_handles_save_load_and_search_failures(monkeypatch):
     """SparseIndex should swallow disk and BM25 failures without crashing callers."""
     monkeypatch.setattr(si.os.path, "exists", lambda path: False)

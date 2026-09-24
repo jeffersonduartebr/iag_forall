@@ -186,7 +186,7 @@ def _real_stream_eligible(req: QueryRequest) -> bool:
     Only plain text turns stream token-by-token; tool calls, RAG, vision and
     multi-turn histories fall back to the fully-computed pseudo-stream.
     """
-    if getattr(req, "tools", None) or getattr(req, "messages", None):
+    if getattr(req, "tools", None) or getattr(req, "messages", None) or getattr(req, "pinned_model", None):
         return False
     if getattr(req, "image_b64", None) or (getattr(req, "images", None) or []):
         return False

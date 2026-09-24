@@ -10,6 +10,7 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
+from app.api.auth import AuthContext
 from app.routers import rag_router as rr
 from fastapi import HTTPException, UploadFile
 
@@ -107,16 +108,17 @@ async def test_ingest_text_success_and_fail(monkeypatch):
     """Testa ingest text success and fail."""
     req = rr.IngestRequest(text="abc", doc_id="d1", metadata={"a": 1}, collection_name="course_1")
 
-    async def _ok(**kwargs):
-        """Execute the ok routine.
+    stored = {}
 
-This helper encapsulates one focused step used by the surrounding workflow."""
+    async def _ok(**kwargs):
+        """Record what was stored."""
+        stored.update(kwargs)
         return True
 
     monkeypatch.setattr(rr, "add_document", _ok)
-    out = await rr.ingest_text(req)
+    out = await rr.ingest_text(req, _auth=AuthContext(authenticated=True, method="api_key"))
     assert out["status"] == "ok"
-    assert req.metadata["target_collection"] == "course_1"
+    assert stored["metadata"]["target_collection"] == "course_1"
 
     async def _fail(**kwargs):
         """Execute the fail routine.
@@ -126,5 +128,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
 
     monkeypatch.setattr(rr, "add_document", _fail)
     with pytest.raises(HTTPException) as exc:
-        await rr.ingest_text(rr.IngestRequest(text="a", doc_id="d2", metadata={}))
+        await rr.ingest_text(
+            rr.IngestRequest(text="a", doc_id="d2", metadata={}), _auth=AuthContext(authenticated=True)
+        )
     assert exc.value.status_code == 500

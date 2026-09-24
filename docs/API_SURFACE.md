@@ -239,7 +239,7 @@ admin.
 | Endpoint | Porquê |
 |---|---|
 | `POST /v1/chat/completions` | API de compatibilidade OpenAI: é para clientes, não para o painel. |
-| `POST /rag/add_doc`, `POST /rag/ingest` | Escrevem na base de conhecimento **partilhada por todas as queries**, e não há endpoint de remoção: o envenenamento é irreversível pela API. `/rag/ingest` aceita `doc_id` escolhido pelo chamador (sobrescreve) e um `metadata` arbitrário. |
+| `POST /rag/add_doc`, `POST /rag/ingest`, `POST /rag/delete` | Escrevem na base de conhecimento. Sem tenant, ela é **partilhada por todas as queries**. Com um token vinculado a tenant, `/rag/ingest` carimba `tenant_id` (o do cliente é descartado) e prefixa o `doc_id` com o tenant, de modo que um tenant não sobrescreve outro. `/rag/delete` remove um escopo e exige tenant ou admin. Sem tenant, o `doc_id` continua sendo escolhido pelo chamador (e sobrescreve) e o `metadata` é arbitrário. |
 | `GET /feedback/stats`, `POST /admin/rbac/{grants,revokes}`, `GET /admin/rbac/roles` | `require_admin` sem `authorization`: aceitam **só o `ADMIN_TOKEN` em bruto**, não o JWT de admin. Um browser teria de guardar o token mestre. Os RBAC são além disso primitivas de escalada de privilégio. |
 
 ---

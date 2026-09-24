@@ -60,6 +60,21 @@ The constructor keeps setup local to the object so callers can use it without ad
         self.documents.append(text)
         self.is_dirty = True
 
+    def remove_documents(self, doc_ids: List[str]) -> None:
+        """Remove documents by id and persist at once (an emptied corpus also drops the stale BM25)."""
+        doomed = set(doc_ids)
+        kept = [(i, d) for i, d in zip(self.doc_ids, self.documents) if i not in doomed]
+        if len(kept) == len(self.doc_ids):
+            return
+        self.doc_ids = [i for i, _ in kept]
+        self.documents = [d for _, d in kept]
+        if not self.documents:
+            self.bm25 = None
+            self._save()
+            return
+        self.is_dirty = True
+        self.commit()
+
     def commit(self):
         """Reconstrói o índice BM25 e salva no disco."""
         if not self.is_dirty:

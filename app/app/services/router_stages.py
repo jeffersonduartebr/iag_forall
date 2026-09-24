@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.model_registry import filter_configured_model_names, filter_tool_capable_model_names
 from app.native_tools import filter_native_tool_capable_model_names, split_tools
 from app.services.adversarial_governance import advgov_escalate
+from app.services.rag_scope import scope_where
 from app.services.route_decision import decision_record
 
 _CLOUD_PREFIXES = ("openrouter/", "openai/", "anthropic/", "gemini/")
@@ -123,13 +124,18 @@ def _not_blocked(deps: Dict[str, Any], models: Any) -> List[str]:
     )
 
 
-def _configured_candidates(ctx: RouteContext) -> List[str]:
-    deps = ctx.deps
+def available_models(deps: Dict[str, Any]) -> List[str]:
+    """Every configured, non-blocked model across modalities, before any ranking preference."""
     settings = deps["settings"]
     all_candidates = (
         settings.CANDIDATE_MODELS_LIST + settings.CANDIDATE_VISION_MODELS_LIST + settings.CANDIDATE_MULTIMODAL_MODELS_LIST
     )
-    models = filter_configured_model_names(_not_blocked(deps, all_candidates))
+    return filter_configured_model_names(_not_blocked(deps, all_candidates))
+
+
+def _configured_candidates(ctx: RouteContext) -> List[str]:
+    deps = ctx.deps
+    models = available_models(deps)
     if "apply_ollama_performance_preferences" in deps:
         try:
             models = deps["apply_ollama_performance_preferences"](models, runtime_hints=ctx.runtime_hints)
@@ -291,6 +297,7 @@ async def _retrieve(ctx: RouteContext) -> Tuple[Optional[str], Dict[str, Any]]:
         "retrieval_mode": ctx.hints.get("retrieval_mode"),
         "context_token_budget": ctx.hints.get("rag_context_token_budget"),
         "rerank_enabled": ctx.hints.get("rag_rerank_enabled"),
+        "where": scope_where(ctx.hints.get("rag_filter"), ctx.tenant_id),
     }
     if "build_retrieval_bundle" in deps:
         bundle = await deps["build_retrieval_bundle"](ctx.query, **kwargs)

@@ -123,6 +123,7 @@ Roteia uma consulta para o melhor modelo disponível.
 - `enable_rag_for_answer` (bool)
 - `enable_rag_for_image` (bool)
 - `rag_modality` (`text|vision|multimodal`)
+- `rag_filter` (objeto): escopo do RAG. Aceita até 8 igualdades de metadados com chaves `[a-z][a-z0-9_]*`, por exemplo `{"disciplina": "bd", "periodo": "2026.2"}`. As igualdades são combinadas com o tenant do chamador, e a busca densa e a BM25 ficam restritas a esse escopo. Com escopo, `enable_rag_for_answer` é honrado exatamente, sem o bypass heurístico de consultas curtas (exceto com `messages`), e o cache semântico não é usado.
 - `use_cache` (bool)
 - `timeout_seconds` (int)
 - `tenant_id` (string): escopo de governança e cotas.
@@ -133,6 +134,7 @@ Roteia uma consulta para o melhor modelo disponível.
 - `tools` (array): tools/function calling no formato OpenAI (ver seção Tool Calling).
 - `tool_choice` (`"auto"|"none"|"required"` ou `{type:function, function:{name}}`).
 - `messages` (array): histórico multi-turn (formato OpenAI) para follow-up com resultados de tools.
+- `pinned_model` (string): chamada de **instrumento de medida**. Exige o papel `instrument` ou `admin` (403 caso contrário) e um modelo configurado (422 caso contrário). Usa exatamente esse modelo, sem seleção, fallback, hedge nem cache, e **não** alimenta juízes, bandit ou EMA. Consequência: a chamada não gera linha em `query_log`.
 
 ### Resposta (estrutura)
 `POST /query` pode responder de duas formas:

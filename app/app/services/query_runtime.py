@@ -164,9 +164,9 @@ def _routing_http_error(exc: Exception, modality: str) -> HTTPException:
         return HTTPException(status_code=503, detail=create_error_response(info))
     if isinstance(exc, ProviderCallError):
         ROUTER_QUERY_OUTCOME.labels(outcome=exc.category, model=exc.model or "unknown", modality=modality).inc()
-        if exc.category == "no_tool_model":
+        if exc.category in ("no_tool_model", "pinned_model_unavailable"):
             return HTTPException(
-                status_code=422, detail={"error": True, "category": "no_tool_model", "message": str(exc)}
+                status_code=422, detail={"error": True, "category": exc.category, "message": str(exc)}
             )
         category, status_code = _PROVIDER_ERROR_CATEGORIES.get(
             exc.category, (ErrorCategory.PROVIDER_UNAVAILABLE, 502)
@@ -191,7 +191,9 @@ async def _route(req: Any, modality: str, image_input: Optional[str], profile: D
             modality=modality,
             image_b64=image_input,
             rag_modality=(req.rag_modality or "text").lower(),
-            use_cache=req.use_cache,
+            # O cache semântico é isolado por tenant, mas não por escopo de RAG nem por modelo:
+            # consultas com escopo ou com modelo fixo nunca o usam.
+            use_cache=req.use_cache and not (getattr(req, "rag_filter", None) or getattr(req, "pinned_model", None)),
             timeout_seconds=_effective_sync_timeout_seconds(req.timeout_seconds, profile),
             runtime_hints=profile["runtime_hints"],
             tenant_id=req.tenant_id,
@@ -324,7 +326,10 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     # Turno de tool call não tem resposta em texto para julgar: pular juízes/reward
     # (evita envenenar os juízes com um "answer" vazio). Uso/cobrança são mantidos abaixo.
     is_tool_turn = str(result.get("finish_reason")) == "tool_calls" or bool(result.get("tool_calls"))
-    if not is_tool_turn:
+    if getattr(req, "pinned_model", None):
+        # Chamada de instrumento: não foi decisão da política, então nada volta para juízes/bandit/EMA.
+        logger.debug("[query] pinned_model=%s: feedback de aprendizado omitido", req.pinned_model)
+    elif not is_tool_turn:
         try:
             task_process_feedback.delay(
                 query=req.query,
