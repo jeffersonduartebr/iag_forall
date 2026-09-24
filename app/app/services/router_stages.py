@@ -155,6 +155,16 @@ async def _error_budget_exceeded(deps: Dict[str, Any]) -> bool:
     return deps["_is_error_budget_exceeded"]()
 
 
+def _saudavel(model: str) -> bool:
+    """Circuit breaker closed (or half-open) for this model; unknown state counts as healthy."""
+    try:
+        from app.reliability import get_circuit_breaker_manager
+
+        return bool(get_circuit_breaker_manager().is_available(model))
+    except Exception:
+        return True
+
+
 async def resolve_candidates(ctx: RouteContext) -> List[str]:
     """Configured candidates, with cloud/local fallbacks and the error-budget local-only mode."""
     deps = ctx.deps
@@ -167,10 +177,11 @@ async def resolve_candidates(ctx: RouteContext) -> List[str]:
     if not models:
         return ["ollama/phi4:latest"]
     if await _error_budget_exceeded(deps):
-        local = [m for m in models if m.startswith("ollama/")]
-        if local:
-            deps["logger"].warning("[router] Error budget exceeded; forcing local-only candidate set")
-            return local
+        # Só locais saudáveis: forçar locais com breaker aberto prendia o sistema em 100% de falha, e a própria
+        # falha mantinha o orçamento de erros estourado (produção, 2026-09-24: 89 de 100 consultas em 502).
+        local = [m for m in models if m.startswith("ollama/") and _saudavel(m)]
+        deps["logger"].warning(f"[router] Error budget exceeded; {'local-only' if local else 'no healthy local, all'} candidates")
+        return local or models
     return models
 
 
