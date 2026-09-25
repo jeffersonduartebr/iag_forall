@@ -34,6 +34,11 @@ scrape_configs:
           service: nsga_updater
           env: production
 
+  - job_name: celery_feedback_worker
+    # Métricas do feedback e da execução em sombra (aristo_shadow_*), expostas pelo worker (WORKER_METRICS_PORT).
+    static_configs:
+      - targets: ["celery_feedback_worker:9101"]
+
   - job_name: prometheus
     scrape_interval: 60s
     metrics_path: /metrics
