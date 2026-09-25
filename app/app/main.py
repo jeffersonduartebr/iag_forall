@@ -51,6 +51,7 @@ from .api.auth import AuthContext, optional_api_auth, require_api_auth
 # Re-export para testes que fazem patch de `main._require_admin`.
 from .api.deps import require_admin as _require_admin  # noqa: F401
 from .api.openai_compat_routes import router as openai_compat_router
+from .api.research_routes import router as research_router
 from .config.constants import GZIP_MIN_SIZE
 from .correlation import (
     CORRELATION_ID_HEADER,
@@ -230,6 +231,7 @@ app.include_router(expert_router)
 app.include_router(feedback_router)
 app.include_router(ops_router)
 app.include_router(openai_compat_router)
+app.include_router(research_router)
 
 # A allowlist é resolvida por pedido, não no import: ver middleware/cors.py.
 # O valor lido aqui é só a rede para quando a leitura da definição falhar.
