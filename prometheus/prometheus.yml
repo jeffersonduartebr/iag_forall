@@ -35,9 +35,14 @@ scrape_configs:
           env: production
 
   - job_name: celery_feedback_worker
-    # Métricas do feedback e da execução em sombra (aristo_shadow_*), expostas pelo worker (WORKER_METRICS_PORT).
+    # Métricas do feedback, expostas pelo worker (WORKER_METRICS_PORT).
     static_configs:
       - targets: ["celery_feedback_worker:9101"]
+
+  - job_name: celery_shadow_worker
+    # Métricas da execução em sombra (aristo_shadow_*), do worker dedicado.
+    static_configs:
+      - targets: ["celery_shadow_worker:9102"]
 
   - job_name: prometheus
     scrape_interval: 60s

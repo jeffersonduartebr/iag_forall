@@ -95,9 +95,12 @@ def _openrouter_configured() -> bool:
 
 
 async def _get_redis():
-    from app.utils.redis_client import get_redis_async_safe
+    # O cliente *async*: todo chamador aguarda. ``get_redis_async_safe`` (alias obsoleto) devolve o cliente
+    # SÍNCRONO apesar do nome; aguardar seu set/get/incr falhava em silêncio (produção, 2026-09-25): stats de
+    # exploração nunca salvas e os tetos diários de contagem/USD nunca contados.
+    from app.utils.redis_client import get_redis_async
 
-    return get_redis_async_safe()
+    return await get_redis_async()
 
 
 

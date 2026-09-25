@@ -267,8 +267,10 @@ async def call_model(
 
     except Exception as e:
         if em_sombra():  # falha da sombra: nem log de erro do sistema, nem métricas, nem marca de indisponível
+            categoria = _classify_provider_exception(e)
+            # Tipo e categoria bastam para diagnosticar; a mensagem do provedor fica de fora (pode ecoar conteúdo).
             raise ProviderCallError(
-                model=model, message=type(e).__name__, category=_classify_provider_exception(e), retryable=False
+                model=model, message=f"{type(e).__name__} ({categoria})", category=categoria, retryable=False
             ) from e
         structlog_logger.error(
             "call_model_wrapper_failed",

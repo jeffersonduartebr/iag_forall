@@ -108,7 +108,7 @@ async def _avaliar(job: Dict[str, Any], cfg: ConfigSombra, rds: Any, chamar, mod
     except asyncio.TimeoutError:
         return base(job, modelo, "sombra", executada=True, status="timeout")
     except Exception as exc:  # nunca o texto: só o tipo do erro
-        logger.warning("[sombra] %s falhou: %s", modelo, type(exc).__name__)
+        logger.warning("[sombra] %s falhou: %s (%s)", modelo, type(exc).__name__, getattr(exc, "category", "-"))
         return base(job, modelo, "sombra", executada=True, status="erro")
     finally:
         cotas.soltar_vaga(rds)

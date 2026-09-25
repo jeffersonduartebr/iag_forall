@@ -73,3 +73,26 @@ def test_provider_is_configured_by_vertex_project_alone(monkeypatch):
 
 def test_official_vertex_price():
     assert _lookup_fallback("gemini/gemini-3.8-flash") == {"in": 0.00075, "out": 0.00375}
+
+
+def test_concurrent_first_calls_build_a_single_client(sdk, monkeypatch):
+    """Production 2026-09-25: parallel judge calls each built a client; the replaced ones were collected and closed
+    their HTTP connection under a thread still using them ("the client has been closed")."""
+    import threading
+    import time
+
+    monkeypatch.setattr(_gemini, "GEMINI_VERTEX_PROJECT", "aristo-caso1")
+    original = sdk.Client
+
+    def _lento(**kw):
+        time.sleep(0.05)  # alarga a janela da corrida
+        return original(**kw)
+
+    monkeypatch.setattr(sdk, "Client", _lento)
+    obtidos = []
+    threads = [threading.Thread(target=lambda: obtidos.append(_gemini._cliente_genai())) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(sdk.criados) == 1 and len({id(c) for c in obtidos}) == 1

@@ -331,7 +331,7 @@ A comparação pareada serve à análise da tese.
 1. **Sorteio.** No fim de `route_and_answer_internal_impl` (`services/router_execution.py`), `services/sombra/captura.py` sorteia a requisição. É uma operação síncrona e barata: `sha256(correlation_id) < SHADOW_SAMPLE_RATE`.
    - Só entram requisições do tenant autorizado e com escolha roteada: não entram modelo fixo, acerto de cache nem turno de tool ou multi-turno.
    - O sorteio grava num job tudo o que a resposta entregue usou: prompt final, system prompt, contexto recuperado, parâmetros, candidatas e regime (aproveitamento ou exploração).
-   - O job vai para a fila Celery `shadow_queue`. A resposta ao usuário não espera nada.
+   - O job vai para a fila Celery `shadow_queue`, consumida por um worker próprio (`celery_shadow_worker`). A resposta ao usuário não espera nada, e o feedback real também não: dividir o worker represava o feedback atrás das tarefas de sombra, que levam de 2 a 3 minutos.
 2. **Execução.** O worker (`services/sombra/executor.py`), dentro de `modo_sombra()`, verifica o interruptor, o teto por tenant e o orçamento. Depois, para cada candidata:
    - admissibilidade (allowlist, região efetiva, modalidade), GPU ocupada, orçamento e vaga global;
    - chamada ao mesmo `call_model`, com os mesmos argumentos da entrega;
