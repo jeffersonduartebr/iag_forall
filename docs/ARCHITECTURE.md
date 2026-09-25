@@ -324,6 +324,33 @@ sequenceDiagram
 
 Nota: o worker pode degradar parcialmente em falhas de Redis ou judges; a intenção aqui é destacar a ordem das responsabilidades.
 
+## Execução em sombra
+
+A comparação pareada serve à análise da tese.
+
+1. **Sorteio.** No fim de `route_and_answer_internal_impl` (`services/router_execution.py`), `services/sombra/captura.py` sorteia a requisição. É uma operação síncrona e barata: `sha256(correlation_id) < SHADOW_SAMPLE_RATE`.
+   - Só entram requisições do tenant autorizado e com escolha roteada: não entram modelo fixo, acerto de cache nem turno de tool ou multi-turno.
+   - O sorteio grava num job tudo o que a resposta entregue usou: prompt final, system prompt, contexto recuperado, parâmetros, candidatas e regime (aproveitamento ou exploração).
+   - O job vai para a fila Celery `shadow_queue`. A resposta ao usuário não espera nada.
+2. **Execução.** O worker (`services/sombra/executor.py`), dentro de `modo_sombra()`, verifica o interruptor, o teto por tenant e o orçamento. Depois, para cada candidata:
+   - admissibilidade (allowlist, região efetiva, modalidade), GPU ocupada, orçamento e vaga global;
+   - chamada ao mesmo `call_model`, com os mesmos argumentos da entrega;
+   - os juízes do painel (`services/sombra/juizes.py`).
+
+   A resposta entregue é re-julgada pelo mesmo procedimento. A ligação com a nota original do `query_log` é pelo `correlation_id`.
+3. **Registro.** Uma linha por configuração em `shadow_evaluations`, inclusive das requisições sorteadas e cortadas (`executada = 0`).
+
+Garantias:
+- **Isolamento** (`services/sombra/contexto.py`). Em modo sombra, o provedor não aciona o circuit breaker, não marca nem limpa a indisponibilidade, não alimenta a EMA de tokens/s nem as métricas de custo e latência, e não conta na ocupação local.
+- **Política intacta.** A sombra não passa pelo feedback: bandit, EMAs, preditor, centróides, cache semântico e NSGA-II não veem nada. `tests/test_sombra_isolamento.py` compara o estado com a sombra ligada e desligada.
+- **Texto descartado.** O texto das respostas em sombra existe só na memória do worker. Não aparece em banco, log, Redis, métrica ou span, e erros são registrados só pelo tipo (`tests/test_sombra_texto.py`).
+- **Separação da curadoria.** A comparação `openrouter_shadow.py` serve à curadoria do catálogo de exploração: compara o explorado com o incumbente, sem RAG e com estatísticas no Redis. Não se mistura com esta: tabela, métricas e prefixo `shadow:` são próprios.
+
+Limites:
+- A região das chamadas ao OpenRouter não é verificável.
+- A sombra depende do Redis: sem ele, a requisição é registrada como `sem_redis` e não roda.
+- Uma requisição sorteada só se perde de verdade se o enfileiramento falhar (broker fora). Isso conta em `aristo_shadow_skipped_total{motivo="enfileiramento_falhou"}`.
+
 ## Decisões arquiteturais importantes
 1. **Separar caminho síncrono e assíncrono**
 - Síncrono: latência da resposta ao cliente.

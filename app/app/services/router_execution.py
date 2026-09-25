@@ -24,6 +24,7 @@ from app.services.router_stages import (
     restrict_to_tool_models,
     select_route,
 )
+from app.services.sombra.captura import talvez_agendar as talvez_agendar_sombra
 
 
 def _setting_value(settings: Any, key: str, default: Any) -> Any:
@@ -174,4 +175,7 @@ async def route_and_answer_internal_impl(
     )
     final_prompt, retrieval_bundle = await prepare_prompt(ctx, skip_rag)
     outcome = await execute_provider(ctx, choice, final_prompt)
-    return build_result(ctx, choice, outcome, uncertainty, retrieval_bundle)
+    result = build_result(ctx, choice, outcome, uncertainty, retrieval_bundle)
+    # Execução em sombra: só sorteia e enfileira (não espera nem altera a resposta).
+    talvez_agendar_sombra(ctx, choice, outcome, final_prompt, retrieval_bundle, result, float(uncertainty or 0.0))
+    return result

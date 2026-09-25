@@ -122,6 +122,7 @@ _FALLBACK_PRICES: tuple = (
     (("gpt-4o",), 0.0025, 0.01),
     # Vertex AI, preço introdutório até 2026-12-31; a partir de 2027-01-01 passa a 0.0015 / 0.0075.
     (("gemini-3.8-flash",), 0.00075, 0.00375),
+    (("gemini-3.1-pro",), 0.002, 0.012),  # Vertex AI (global): juiz da execução em sombra
     (("gemini-2.5-flash",), 0.0003, 0.0025),
     (("gemini-2.5",), 0.00125, 0.01),
     (("fable",), 0.010, 0.050),

@@ -50,3 +50,13 @@ groups:
           severity: warning
         annotations:
           summary: "Modelo {{ $labels.model }} devolvendo respostas vazias (cota de raciocínio?)"
+
+      # Execução em sombra: o orçamento diário esgotou antes das 18h no fuso SHADOW_BUDGET_TZ (a amostra da tarde
+      # fica cortada; a probabilidade de inclusão passa a depender do horário).
+      - alert: ShadowBudgetExhaustedEarly
+        expr: max(aristo_shadow_budget_exhausted_hour) >= 0 and max(aristo_shadow_budget_exhausted_hour) < 18
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Orçamento diário da sombra esgotado antes das 18h ({{ $value }}h)"

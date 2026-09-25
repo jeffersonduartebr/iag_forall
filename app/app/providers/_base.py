@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 import app.providers_async as _pa
 from app.services.orcamento_tempo import registrar_vazao
+from app.services.sombra.contexto import em_sombra
 
 from ._ollama import (
     _mark_ollama_model_state,
@@ -83,6 +84,8 @@ class BaseProvider(ABC):
         wait_started_at = time.time()
         await self.semaphore.acquire()
         waited = time.time() - wait_started_at
+        if em_sombra():  # a ocupação e as métricas de fila contam só o atendimento real (R2, R10)
+            return
         if self.name == "ollama":
             _mark_ollama_model_state(model, inflight_delta=1, queue_wait_seconds=waited)
         try:
@@ -96,6 +99,8 @@ class BaseProvider(ABC):
         try:
             self.semaphore.release()
         finally:
+            if em_sombra():
+                return
             if self.name == "ollama":
                 _mark_ollama_model_state(model, inflight_delta=-1)
             try:
@@ -104,7 +109,9 @@ class BaseProvider(ABC):
                 pass
 
     def _record_metrics(self, model: str, latency: float, cost: float, success: bool):
-        """Publish provider-level success, latency, and cost metrics."""
+        """Publish provider-level success, latency, and cost metrics (never for shadow calls)."""
+        if em_sombra():
+            return
         _pa.PROV_REQ.labels(model=model).inc()
         if success:
             _pa.PROV_OK.labels(model=model).inc()
@@ -114,7 +121,9 @@ class BaseProvider(ABC):
             _pa.PROV_ERR.labels(model=model).inc()
 
     def _record_generation_metrics(self, model: str, completion_tokens: int, latency: float) -> None:
-        """Publish generation throughput metrics for successful responses."""
+        """Publish generation throughput metrics and feed the throughput EMA (never for shadow calls)."""
+        if em_sombra():
+            return
         if latency <= 0 or completion_tokens <= 0:
             return
         try:

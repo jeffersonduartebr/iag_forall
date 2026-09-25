@@ -92,6 +92,10 @@ def guarded_by(breaker: pybreaker.CircuitBreaker) -> Callable:
     def _decorate(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @wraps(func)
         async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+            from app.services.sombra.contexto import em_sombra
+
+            if em_sombra():  # chamada em sombra: não conta sucesso nem falha no breaker do atendimento
+                return await func(*args, **kwargs)
             return await call_through_breaker(breaker, func, *args, **kwargs)
 
         return _wrapper

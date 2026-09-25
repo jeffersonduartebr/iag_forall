@@ -648,6 +648,118 @@
       ],
       "title": "Falhas e dependencias",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 16,
+      "title": "Execução em sombra (pesquisa — custo separado do sistema)",
+      "type": "row",
+      "panels": []
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 37
+      },
+      "id": 17,
+      "title": "Orçamento restante hoje (US$)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max(aristo_shadow_budget_remaining_usd)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 37
+      },
+      "id": 18,
+      "title": "Custo da sombra por modelo (US$/h)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (model) (increase(aristo_shadow_cost_usd_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 37
+      },
+      "id": 19,
+      "title": "Chamadas em sombra por status",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(aristo_shadow_calls_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus_llm_router"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 37
+      },
+      "id": 20,
+      "title": "Cortes por motivo",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (motivo) (increase(aristo_shadow_skipped_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{motivo}}"
+        }
+      ]
     }
   ],
   "refresh": "30s",

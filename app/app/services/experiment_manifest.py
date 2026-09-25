@@ -97,6 +97,20 @@ def _config_snapshot() -> Dict[str, Any]:
         "REWARD_COST_BASELINE_PER_1K",
         "LOCAL_COST_IMPUTATION_ENABLED",
         "LOCAL_COST_USD_PER_HOUR",
+        # Execução em sombra: o estado de cada chave fica registrado a cada execução.
+        "SHADOW_EXECUTION_ENABLED",
+        "SHADOW_TENANT_ALLOWLIST",
+        "SHADOW_SAMPLE_RATE",
+        "SHADOW_STRATA",
+        "SHADOW_PROVIDER_ALLOWLIST",
+        "SHADOW_REQUIRED_CLOUD_REGION",
+        "SHADOW_MAX_CONCURRENCY",
+        "SHADOW_LOCAL_MAX_CONCURRENCY",
+        "SHADOW_DAILY_BUDGET",
+        "SHADOW_RATE_LIMIT_PER_TENANT_HOUR",
+        "SHADOW_TIMEOUT_S",
+        "SHADOW_BUDGET_TZ",
+        "SHADOW_JUDGE_MODELS",
     ]
     snapshot: Dict[str, Any] = {}
     for key in keys:

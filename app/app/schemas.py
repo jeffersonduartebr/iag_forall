@@ -127,6 +127,7 @@ class QueryRequest(BaseModel):
     policy_version: Annotated[Optional[str], Field(max_length=128, description="Versão de política de roteamento solicitada.")] = None
     experiment_id: Annotated[Optional[str], Field(max_length=128, description="ID de experimento A/B para atribuição de variante.")] = None
     user_key: Annotated[Optional[str], Field(max_length=256, description="Chave estável de usuário para assignment consistente em experimento.")] = None
+    episode_id: Annotated[Optional[str], Field(max_length=128, description="Episódio pedagógico da requisição (execução em sombra e análise pareada).")] = None
     webhook_url: Annotated[Optional[str], Field(max_length=2048, description="URL para notificação HTTP quando job assíncrono (202) for concluído.")] = None
     workload_hints: Annotated[Optional[WorkloadHints], Field(description="Optional domain hints; routing complexity is inferred at runtime.")] = None
     pinned_model: Annotated[Optional[str], Field(max_length=256, description="Modelo fixo para chamadas de instrumento de medida: ignora a seleção e não alimenta bandit/EMA. Exige o papel 'instrument'.")] = None

@@ -403,6 +403,7 @@ def seed_pricing_data(conn):
         ("gemini-2.5-pro", 0.00125, 0.0100),
         ("gemini-2.5-flash", 0.00030, 0.0025),
         ("gemini-3.8-flash", 0.00075, 0.00375),  # Vertex AI, introdutório até 2026-12-31
+        ("gemini-3.1-pro-preview", 0.00200, 0.0120),  # Vertex AI (global), juiz da execução em sombra
 
         # --- Anthropic Claude (Novos modelos 4.5) ---
         ("claude-opus-4.5", 0.00500, 0.0250),

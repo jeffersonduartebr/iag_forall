@@ -134,6 +134,40 @@ Além de settings dinâmicos globais, o sistema agora suporta:
 Observação:
 - A governança por tenant é aplicada quando `tenant_id` é enviado no `POST /query`.
 
+## Execução em sombra (pesquisa, Caso 1)
+
+Para uma amostra de requisições, as demais configurações candidatas admissíveis recebem o mesmo prompt final e o
+mesmo contexto recuperado da resposta entregue. Todas são pontuadas pelo mesmo painel de juízes. Só números vão para
+`shadow_evaluations`: escores, custo, latência, tokens e o SHA-256 do texto. O funcionamento está em
+`docs/ARCHITECTURE.md`, e a análise em `docs/FORMATIVE_EVALUATION.md` §6.
+
+| Chave | Padrão | Significado |
+|---|---|---|
+| `SHADOW_EXECUTION_ENABLED` | `1` | Interruptor global. É lido a cada requisição, então desliga sem reiniciar. |
+| `SHADOW_TENANT_ALLOWLIST` | `ifrn-caso1` | Tenants em que a sombra roda. Vazio desliga para todos. |
+| `SHADOW_SAMPLE_RATE` | `0.15` | Probabilidade de uma requisição elegível entrar na amostra. O sorteio é determinístico pelo `correlation_id`. |
+| `SHADOW_STRATA` | `disciplina,faixa_incerteza,modalidade` | Campos gravados como estrato (sorteio e análise). |
+| `SHADOW_PROVIDER_ALLOWLIST` | `gemini/,openrouter/` | Prefixos autorizados para candidatas e juízes. |
+| `SHADOW_REQUIRED_CLOUD_REGION` | vazio | Vazio desliga a verificação. Preenchido, só passa quem tem região verificável e igual à exigida (ver abaixo). |
+| `SHADOW_MAX_CONCURRENCY` | `16` | Chamadas em sombra simultâneas no total, somando todos os processos (contador no Redis). |
+| `SHADOW_LOCAL_MAX_CONCURRENCY` | `1` | Chamadas em sombra simultâneas a modelos locais, por processo. |
+| `SHADOW_DAILY_BUDGET` | `4.00` | Teto diário, em US$, de candidatas e juízes da sombra. |
+| `SHADOW_RATE_LIMIT_PER_TENANT_HOUR` | `30` | Requisições amostradas por tenant e por hora local. |
+| `SHADOW_TIMEOUT_S` | `120` | Tempo máximo por chamada em sombra. |
+| `SHADOW_BUDGET_TZ` | `America/Fortaleza` | Fuso em que o dia do orçamento (e a hora do teto) é apurado. |
+| `SHADOW_JUDGE_MODELS` | gemini-3.1-pro-preview (Vertex), claude-opus-5.5, grok-4.7, gpt-5.6-sol (OpenRouter) | Painel base. Cada candidata perde os juízes da própria empresa. |
+
+Todas as chaves entram no manifesto do experimento (`experiment_manifest`).
+
+- **Região:**
+  - Gemini: é lida do cliente efetivo. Com Vertex AI é a location do cliente (`GEMINI_VERTEX_LOCATION`, hoje `global`); com chave do AI Studio, fica desconhecida.
+  - OpenRouter: sempre desconhecida.
+  - Com `SHADOW_REQUIRED_CLOUD_REGION` preenchido, região desconhecida é recusada.
+  - Em 25/09/2026, de 13 modelos testados em southamerica-east1, só `gemini-2.5-flash` é servido lá.
+- **Custo:** fica separado do sistema, nas métricas `aristo_shadow_*` expostas pelo worker (`WORKER_METRICS_PORT`, job `celery_feedback_worker`). O custo das chamadas em sombra não entra nas métricas de custo nem de eficiência do roteador.
+- **Suspensão:** o orçamento esgotado ou o teto por tenant suspendem a sombra até o dia (ou a hora) seguinte. O intervalo fica em `shadow_suspensions`. O alerta `ShadowBudgetExhaustedEarly` dispara quando o orçamento acaba antes das 18h. Em produção, onde o perfil de observabilidade não roda, a mesma condição vira a linha de log `orcamento diario esgotado ... antes_18h=1`, coberta por um alerta do Cloud Monitoring.
+- **Política congelada:** a sombra roda normalmente com a política congelada, porque não a altera, e grava o `frozen_run_id` em cada linha.
+
 ## Perfis sugeridos
 ### Perfil mais barato
 - Aumentar peso de custo (`NSGA_W_COST`).

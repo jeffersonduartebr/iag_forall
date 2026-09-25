@@ -238,3 +238,20 @@ Três ressalvas que têm de acompanhar qualquer percentagem daqui:
    complexidade.
 3. **O denominador não é o tráfego total.** `persist_log` não corre para turnos
    de tool nem para acertos do cache semântico.
+
+## 6. Execução em sombra: arrependimento, melhor configuração fixa e oráculo
+
+`scripts/exportar_sombra.py` lê `shadow_evaluations` e monta, por requisição, a matriz de escores das configurações:
+a entregue e as candidatas, todas com o mesmo prompt, o mesmo contexto e o mesmo painel de juízes. O escore é
+`Q_calibrado` na semântica formativa, e `Q` na rubrica simples.
+
+- **Probabilidade efetiva de inclusão.** Cortes por orçamento, teto por tenant, região ou GPU fazem a inclusão depender do horário e da carga. Dentro de cada estrato × dia local, as sorteadas estimam `elegíveis × p`, então `π̂ = p · executadas / sorteadas`. Cada requisição executada pesa `1/π̂` (Horvitz–Thompson). Por isso toda requisição sorteada é registrada, inclusive as cortadas.
+- **Arrependimento por decisão:** `max_c escore(c) − escore(entregue)`. O acumulado é a soma ponderada ao longo do tempo.
+- **Ganho sobre a melhor configuração fixa a posteriori:** média ponderada da entregue menos a da configuração de maior média ponderada, nas requisições em que esta foi avaliada.
+- **Concordância com o oráculo:** fração ponderada de requisições em que a entregue atinge o máximo.
+- Tudo é calculado por estrato e no agregado, separando as entregas em aproveitamento e em exploração. A saída em CSV e JSON inclui a semente do sorteio, o manifesto e as contagens de sorteadas, executadas e cortadas por motivo.
+
+Limites:
+- O painel não é uniforme quando as candidatas são de empresas diferentes, porque cada uma perde os juízes da própria empresa. A marca `painel_uniforme` e as notas por juiz permitem restringir a comparação aos juízes em comum.
+- O regime de exploração do protocolo ainda não está implementado: não há teto de 15% por participante nem janela de 20 episódios, e a probabilidade de atribuição não é registrada. Por isso `p_atribuicao` fica vazio e o regime é inferido da decisão do bandit ou da exploração do OpenRouter.
+

@@ -568,10 +568,11 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
       - C_FORCE_ROOT=true
+      - WORKER_METRICS_PORT=9101  # métricas do feedback e da sombra (prometheus.yml: job celery_feedback_worker)
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    command: celery -A app.celery_app worker --loglevel=info --queues=feedback_queue --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
+    command: celery -A app.celery_app worker --loglevel=info --queues=feedback_queue,shadow_queue --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
 
     volumes:
       - ./state:/app/state

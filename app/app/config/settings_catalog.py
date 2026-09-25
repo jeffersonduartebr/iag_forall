@@ -289,6 +289,33 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "CIRCUIT_BREAKER_LOCAL_FAIL_MAX": "3",
         "CIRCUIT_BREAKER_LOCAL_RESET_TIMEOUT": "30",
     },
+    # Execução em sombra (services/sombra): para uma amostra de requisições, as demais candidatas admissíveis
+    # recebem o mesmo prompt e contexto e são julgadas pelo mesmo painel; só escores, custo, latência, tokens e
+    # o hash do texto são gravados (shadow_evaluations). Nunca atrasa a resposta nem altera a política.
+    # Padrões do protocolo emendado do Caso 1 (25/09/2026): Gemini (Vertex) e OpenRouter, sem restrição de região.
+    "shadow": {
+        "SHADOW_EXECUTION_ENABLED": "1",
+        "SHADOW_TENANT_ALLOWLIST": "ifrn-caso1",
+        "SHADOW_SAMPLE_RATE": "0.15",
+        "SHADOW_STRATA": "disciplina,faixa_incerteza,modalidade",
+        "SHADOW_PROVIDER_ALLOWLIST": "gemini/,openrouter/",
+        # Vazio desliga a verificação; preenchido, só passa candidata com região verificável e igual.
+        "SHADOW_REQUIRED_CLOUD_REGION": "",
+        "SHADOW_MAX_CONCURRENCY": "16",
+        "SHADOW_LOCAL_MAX_CONCURRENCY": "1",
+        "SHADOW_DAILY_BUDGET": "4.00",
+        "SHADOW_RATE_LIMIT_PER_TENANT_HOUR": "30",
+        "SHADOW_TIMEOUT_S": "120",
+        "SHADOW_BUDGET_TZ": "America/Fortaleza",
+        "SHADOW_JUDGE_MODELS": json.dumps(
+            [
+                "gemini/gemini-3.1-pro-preview",
+                "openrouter/anthropic/claude-opus-5.5",
+                "openrouter/x-ai/grok-4.7",
+                "openrouter/openai/gpt-5.6-sol",
+            ]
+        ),
+    },
     "adversarial_governance": {
         # Closed-loop adversarial governance (roadmap #17). Off by default so
         # production routing is unaffected until explicitly enabled.

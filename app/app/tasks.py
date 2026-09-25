@@ -153,6 +153,22 @@ def task_process_feedback(
         raise self.retry(exc=e)
 
 
+@celery_app.task(queue="shadow_queue", acks_late=False)
+def task_shadow_evaluate(job: dict) -> int:
+    """Execução em sombra de uma requisição amostrada (services/sombra). Sem retry: a linha registra o status.
+
+    ``acks_late=False``: uma sombra reentregue depois de uma queda do worker pagaria as mesmas chamadas duas
+    vezes; perder uma amostra rara é preferível (e a ausência aparece no número de sorteadas × gravadas).
+    """
+    from app.services.sombra.executor import executar
+
+    try:
+        return len(run_async(executar(job)))
+    except Exception as exc:  # nunca propaga: a sombra não tem efeito sobre o atendimento
+        logger.warning("[sombra] tarefa falhou: %s", type(exc).__name__)
+        return 0
+
+
 @celery_app.task(bind=True, queue="feedback_queue", max_retries=1, retry_backoff=True)
 def task_execute_eval_run(
     self,
