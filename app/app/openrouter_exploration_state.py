@@ -95,8 +95,8 @@ async def _increment_daily(rds, cost_usd: float = 0.0) -> None:
     if not rds:
         return
     try:
-        today = time.strftime("%Y-%m-%d")
-        await rds.set(REDIS_DAILY_DATE_KEY, today)
+        # Vira o dia antes de somar: sem isto, um outcome logo após a meia-noite herdava o contador de ontem.
+        await _get_daily_count(rds)
         await rds.incr(REDIS_DAILY_COUNTER_KEY)
         if cost_usd > 0:
             await rds.incrbyfloat(REDIS_DAILY_USD_KEY, float(cost_usd))
