@@ -521,6 +521,8 @@ services:
     volumes:
       - ./state:/app/state
       - ./data:/app/data
+      # O mesmo Chroma da API: sem ele os jobs assíncronos (202) faziam RAG numa coleção vazia do container.
+      - ./chromadb-data:/data/chroma
       
     networks:
       - ai_net
@@ -574,6 +576,8 @@ services:
     volumes:
       - ./state:/app/state
       - ./data:/app/data
+      # O mesmo Chroma da API: sem ele os jobs assíncronos (202) faziam RAG numa coleção vazia do container.
+      - ./chromadb-data:/data/chroma
 
     networks:
       - ai_net

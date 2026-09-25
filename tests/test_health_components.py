@@ -56,6 +56,10 @@ async def test_component_health_checks_success_paths(monkeypatch):
         PersistentClient=lambda path, **kw: SimpleNamespace(list_collections=lambda: ["c1", "c2"])
     )
     monkeypatch.setitem(sys.modules, "chromadb", fake_chromadb)
+    # O health usa o cliente do próprio processo (não abre um segundo PersistentClient a cada chamada).
+    import app.vectorstore as vs
+
+    monkeypatch.setattr(vs, "get_chroma_client", lambda: SimpleNamespace(list_collections=lambda: ["c1", "c2"]))
 
     client = SimpleNamespace(head=AsyncMock(return_value=_Response({"models": [{"name": "m1"}, {"name": "m2"}]})))
     monkeypatch.setattr("app.providers_async.get_http_client", AsyncMock(return_value=client))

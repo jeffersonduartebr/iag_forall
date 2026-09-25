@@ -66,6 +66,10 @@ def _sanitize_model_name(model_name: str) -> str:
     return re.sub(r"_+", "_", clean).strip("_")
 
 
+TEXT_SCHEMA = "d2"
+COSINE = {"hnsw:space": "cosine"}
+
+
 def _get_versioned_collection_name(base_name: str, modality: str) -> str:
     """Return the collection name bound to the embedding model active for a modality."""
     if modality == "text" or modality == "cache":
@@ -76,6 +80,10 @@ def _get_versioned_collection_name(base_name: str, modality: str) -> str:
         model = settings.MULTIMODAL_EMBEDDING_MODEL or "default_mm"
 
     version_suffix = _sanitize_model_name(model)
+    if base_name == BASE_TEXT_COLLECTION:
+        # d2: documentos com prefixo search_document e espaço cosseno. Os vetores antigos (prefixo de consulta,
+        # L2) não são comparáveis; a coleção nova começa vazia e o acervo é reingerido.
+        return f"{base_name}_{version_suffix}_{TEXT_SCHEMA}"
     return f"{base_name}_{version_suffix}"
 
 
@@ -232,10 +240,10 @@ def init_vectorstore():
         cache_col = _get_versioned_collection_name(BASE_CACHE_COLLECTION, "text")
 
         for name in (txt_col, img_col, mm_col, cache_col):
-            get_chroma_client().get_or_create_collection(
-                name=name,
-                metadata={"modality": "auto-versioned", "model_context": name},
-            )
+            meta = {"modality": "auto-versioned", "model_context": name}
+            if name == txt_col:
+                meta.update(COSINE)  # só a coleção nova: o espaço de uma coleção existente não muda
+            get_chroma_client().get_or_create_collection(name=name, metadata=meta)
         logger.info(f"[vectorstore] Coleções ativas e versionadas: {txt_col}, {img_col}, {mm_col}, {cache_col}")
     except Exception as e:
         logger.error(f"[vectorstore] Falha ao inicializar coleções: {e}")
@@ -245,6 +253,12 @@ def init_vectorstore():
 # ============================================================
 # Inserção (Com Auto-Healing)
 # ============================================================
+def _vetor_utilizavel(embedding) -> bool:
+    """A real embedding: more than one dimension and not all zeros (the failure fallbacks are neither)."""
+    vec = _ensure_list_of_floats(embedding)
+    return len(vec) > 1 and any(vec)
+
+
 def _insert_embedding_sync(
     collection_name: str,
     doc_id: str,
@@ -252,20 +266,23 @@ def _insert_embedding_sync(
     embedding: List[float],
     metadata: Optional[Dict[str, Any]],
 ) -> bool:
-    """Insert one embedding into Chroma, recovering from dimension drift.
+    """Upsert one embedding into Chroma; returns whether the document is actually stored.
 
-    Returns whether the document is actually in the collection. It used to
-    return ``None`` in every case, including total failure, and the caller
-    reported success regardless — so an ingest against a dead ChromaDB answered
-    ``200 OK`` and indexed nothing.
+    Never deletes a collection. The old "auto-healing" dropped and recreated the whole collection on a
+    dimension mismatch — and the usual cause of a mismatch is a failed embedding (``[0.0]``, a zero vector,
+    or the 1536-d OpenAI fallback), so one failed ingest could wipe the corpus. Degenerate vectors are now
+    refused before they reach Chroma, and a mismatch is reported, not "healed".
+
+    ``upsert`` instead of ``add``: ``add`` silently ignored an id that already existed, so re-ingesting an
+    edited material kept the old text while BM25 got the new one.
     """
+    if not _vetor_utilizavel(embedding):
+        logger.error(f"[vectorstore] doc_id={doc_id}: embedding inválido (falha do modelo); não inserido.")
+        return False
     try:
-        col = get_chroma_client().get_or_create_collection(
-            name=collection_name,
-            metadata=_safe_metadata(metadata),
-        )
-
-        col.add(
+        metadata_colecao = COSINE if collection_name.endswith(f"_{TEXT_SCHEMA}") else None
+        col = get_chroma_client().get_or_create_collection(name=collection_name, metadata=metadata_colecao)
+        col.upsert(
             ids=[str(doc_id)],
             documents=[text or ""],
             embeddings=[_ensure_list_of_floats(embedding)],
@@ -274,24 +291,12 @@ def _insert_embedding_sync(
         return True
     except Exception as e:
         msg = str(e).lower()
-        # AUTO-HEALING: Se a dimensão não bater, reseta a coleção
         if "dimension" in msg and "match" in msg:
-            logger.warning(f"[vectorstore] ⚠️ Dimensão incompatível em '{collection_name}'. Resetando coleção para corrigir...")
-            try:
-                get_chroma_client().delete_collection(collection_name)
-                # Recria imediatamente
-                col = get_chroma_client().create_collection(name=collection_name)
-                col.add(
-                    ids=[str(doc_id)],
-                    documents=[text or ""],
-                    embeddings=[_ensure_list_of_floats(embedding)],
-                    metadatas=[_safe_metadata(metadata)],
-                )
-                logger.info("[vectorstore] ✅ Coleção recriada e documento inserido com sucesso.")
-                return True
-            except Exception as e2:
-                logger.error(f"[vectorstore] ❌ Falha crítica ao recriar coleção: {e2}")
-                return False
+            logger.error(
+                f"[vectorstore] Dimensão incompatível em '{collection_name}' (modelo de embeddings trocado ou "
+                f"falhou): doc_id={doc_id} não inserido. A coleção NÃO foi apagada. {e}"
+            )
+            return False
         logger.error(f"[vectorstore] Erro na inserção: {e}")
         return False
 
@@ -302,8 +307,12 @@ async def add_document(
     text: Optional[str] = None,
     image_b64: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    colecao: Optional[str] = None,
 ) -> bool:
     """Embed and persist one document into the collection that matches the modality.
+
+    ``colecao`` overrides the target collection (e.g. the RAG healthcheck's own); such documents never
+    enter the BM25 index of the corpus.
 
     The helper resolves the correct embedding path, computes the target
     collection name, stores the dense vector in Chroma, and mirrors the text
@@ -319,7 +328,9 @@ async def add_document(
     modality = _normalize_modality(modality)
 
     # --- 1. Processamento Vetorial (ChromaDB) ---
-    if modality == "text" or modality == "cache":
+    if modality == "text":
+        embedding = await asyncio.to_thread(embed_text, text or "", "documento")
+    elif modality == "cache":  # o cache semântico guarda consultas: compara consulta com consulta
         embedding = await asyncio.to_thread(embed_text, text or "")
     elif modality == "vision":
         embedding = await asyncio.to_thread(embed_image, image_b64 or "")
@@ -327,7 +338,7 @@ async def add_document(
         emb = await asyncio.to_thread(embed_multimodal, text or "", image_b64)
         embedding = cast(List[float], emb.get("multimodal"))
 
-    collection_name = _collection_for_modality(modality)
+    collection_name = colecao or _collection_for_modality(modality)
 
     stored = await asyncio.to_thread(
         _insert_embedding_sync,
@@ -343,7 +354,7 @@ async def add_document(
 
     # --- 2. Processamento Esparso (BM25) ---
     # Apenas para texto ou multimodal que tenha texto
-    if text and modality in ("text", "multimodal"):
+    if text and modality in ("text", "multimodal") and not colecao:
         # Adiciona ao índice em memória
         sparse_index.add_document(doc_id, text)
         # Commita (em produção, faríamos isso em batch ou periodicamente)

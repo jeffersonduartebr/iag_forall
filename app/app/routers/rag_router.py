@@ -7,10 +7,10 @@ Permite upload de PDFs, Markdown e TXT, processando e
 inserindo no ChromaDB via vectorstore unificado.
 """
 
+import hashlib
 import logging
 import os
 import re
-import uuid
 from typing import Annotated, Any, Dict, Optional, Union
 
 from app.api.auth import AuthContext, require_api_auth
@@ -144,7 +144,8 @@ async def add_doc(
         # 🔹 Processamento e Inserção
         for idx, frag in enumerate(fragments):
             try:
-                doc_id = str(uuid.uuid4())
+                # Id determinístico (arquivo + posição + conteúdo): reenviar o mesmo arquivo atualiza, não duplica.
+                doc_id = "upload:" + hashlib.sha256(f"{filename}|{idx}|{frag}".encode()).hexdigest()[:32]
 
                 success = await add_document(
                     modality="text",

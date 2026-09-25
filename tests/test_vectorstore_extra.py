@@ -121,7 +121,7 @@ The class groups the state and behavior required for ColOK."""
 The constructor keeps setup local to the object so callers can use it without additional bootstrapping."""
             self.add_calls = 0
 
-        def add(self, **kwargs):
+        def upsert(self, **kwargs):
             """Execute the add routine.
 
 This helper encapsulates one focused step used by the surrounding workflow."""
@@ -137,7 +137,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         """Represent `_ColDimFail` within this module.
 
 The class groups the state and behavior required for ColDimFail."""
-        def add(self, **kwargs):
+        def upsert(self, **kwargs):
             """Execute the add routine.
 
 This helper encapsulates one focused step used by the surrounding workflow."""
@@ -147,7 +147,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         """Represent `_ColOtherFail` within this module.
 
 The class groups the state and behavior required for ColOtherFail."""
-        def add(self, **kwargs):
+        def upsert(self, **kwargs):
             """Execute the add routine.
 
 This helper encapsulates one focused step used by the surrounding workflow."""
@@ -187,9 +187,9 @@ This helper centralizes retrieval logic so callers do not have to duplicate look
 
     dim_client = _Client(_ColDimFail())
     monkeypatch.setattr(vs, "chroma_client", dim_client)
-    vs._insert_embedding_sync("c2", "d2", "txt", [1, 2], {"a": 1})
-    assert dim_client.deleted == ["c2"]
-    assert dim_client.created == ["c2"]
+    # Uma dimensão incompatível nunca apaga a coleção (apagava: uma falha do modelo zerava o corpus).
+    assert vs._insert_embedding_sync("c2", "d2", "txt", [1, 2], {"a": 1}) is False
+    assert dim_client.deleted == [] and dim_client.created == []
 
     other_client = _Client(_ColOtherFail())
     monkeypatch.setattr(vs, "chroma_client", other_client)
@@ -237,7 +237,7 @@ async def test_add_query_reset_and_health(monkeypatch):
     sparse_added = []
     committed = {"n": 0}
 
-    monkeypatch.setattr(vs, "embed_text", lambda txt: [0.1, 0.2])
+    monkeypatch.setattr(vs, "embed_text", lambda txt, *tarefa: [0.1, 0.2])
     monkeypatch.setattr(vs, "embed_image", lambda img: [0.3, 0.4])
     monkeypatch.setattr(vs, "embed_multimodal", lambda txt, img: {"multimodal": [0.5, 0.6]})
     # O fake tem de honrar o contrato: _insert_embedding_sync devolve se o

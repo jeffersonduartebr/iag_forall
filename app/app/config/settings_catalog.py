@@ -186,7 +186,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "RAG_CONTEXT_TOKEN_BUDGET": "1200",
         "RAG_CONTEXT_QUALITY_MIN_DOCS": "2",
         "RERANK_ENABLED_FOR_LIGHT_RETRIEVAL": "0",
-        "RERANK_MODEL": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "RERANK_MODEL": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
         "RERANK_ENABLED": "1",
         "RAG_DATA_DIR": "/app/data",
         "CHROMA_HOST": "",

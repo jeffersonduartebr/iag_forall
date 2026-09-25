@@ -100,14 +100,17 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # 4) Inserção no vectorstore
     t = time.time()
     try:
-        doc_id = f"hc:{int(time.time() * 1000)}"
-        # d_vec pode ser np.ndarray ou list — o vectorstore já faz a blindagem
-        await add_document(
+        # Coleção própria e id fixo (upsert): o healthcheck gravava um documento novo por execução no corpus
+        # de produção (e no BM25), que depois aparecia nas buscas dos alunos.
+        stored = await add_document(
             modality="text",
-            doc_id=doc_id,
+            doc_id="hc",
             text=DOC_TEXT,
             metadata={"kind": "hc"},
+            colecao=COLLECTION,
         )
+        if not stored:
+            raise RuntimeError("documento de verificação não foi gravado")
         report["steps"]["vectorstore_insert"] = {
             "ok": True,
             "latency_s": round(time.time() - t, 3),
@@ -119,7 +122,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # 5) Query no vectorstore
     t = time.time()
     try:
-        res = await query_embedding("text", q_vec, n_results=1)
+        res = await query_embedding(COLLECTION, q_vec, n_results=1)
         ok = bool(res and "documents" in res and res["documents"])
         report["steps"]["vectorstore_query"] = {
             "ok": ok,

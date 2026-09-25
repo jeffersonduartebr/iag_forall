@@ -21,7 +21,7 @@ async def test_add_document_reports_a_failed_insertion(monkeypatch):
     against a dead ChromaDB answered 200 and indexed nothing.
     """
     sparse_added = []
-    monkeypatch.setattr(vs, "embed_text", lambda txt: [0.1, 0.2])
+    monkeypatch.setattr(vs, "embed_text", lambda txt, *tarefa: [0.1, 0.2])
     monkeypatch.setattr(vs, "_insert_embedding_sync", lambda *a, **k: False)
     monkeypatch.setattr(vs.sparse_index, "add_document", lambda did, txt: sparse_added.append(did))
 
