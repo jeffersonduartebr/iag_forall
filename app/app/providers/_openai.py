@@ -7,11 +7,12 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
 from app.observability import logger as structlog_logger
+from app.services.orcamento_tempo import orcamento_raciocinio, tokens_totais
 from app.utils.breaker_async import guarded_by
 
 from ._base import (
@@ -80,10 +81,11 @@ class OpenAIProvider(BaseProvider):
                 api_args["response_format"] = response_format
 
             if model.startswith("o1-") or "gpt-5" in model:
-                api_args["max_completion_tokens"] = max_tokens
+                api_args["max_completion_tokens"] = tokens_totais(max_tokens)
             else:
                 api_args["max_tokens"] = max_tokens
                 api_args["temperature"] = temperature
+            api_args.update(self._reasoning_args(max_tokens))
 
             # Sem isto o SDK usa o seu default de 600 s e o `timeout_seconds`
             # calculado pelo router era simplesmente ignorado.
@@ -92,6 +94,7 @@ class OpenAIProvider(BaseProvider):
 
             choice = resp.choices[0]
             text_out = choice.message.content or ""
+            reasoning = getattr(choice.message, "reasoning", None)  # OpenRouter devolve o raciocínio à parte
             tool_calls = ptools.serialize_openai_tool_calls(getattr(choice.message, "tool_calls", None))
             finish_reason = ptools.openai_finish_reason(getattr(choice, "finish_reason", None), bool(tool_calls))
             usage = resp.usage
@@ -117,7 +120,7 @@ class OpenAIProvider(BaseProvider):
                 completion_tokens=c_tok,
                 model_used=model,
                 raw_payload=raw_payload,
-                reasoning=None,
+                reasoning=reasoning if isinstance(reasoning, str) and reasoning else None,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
             )
@@ -127,6 +130,10 @@ class OpenAIProvider(BaseProvider):
             raise
         finally:
             self._release_slot(model)
+
+    def _reasoning_args(self, max_tokens: int) -> Dict[str, Any]:
+        """OpenAI reasoning models take the quota inside ``max_completion_tokens`` (set above)."""
+        return {}
 
 
 class OpenRouterProvider(OpenAIProvider):
@@ -138,6 +145,16 @@ class OpenRouterProvider(OpenAIProvider):
         self._api_key = ""
         self._refresh_client()
         BaseProvider.__init__(self, "openrouter", concurrency_limit=100)
+
+    def _reasoning_args(self, max_tokens: int) -> Dict[str, Any]:
+        """Unified ``reasoning`` param: caps thinking and leaves ``max_tokens`` for the visible answer.
+
+        OpenRouter counts reasoning inside ``max_tokens``; models that do not reason ignore the param.
+        """
+        budget = orcamento_raciocinio()
+        if not budget:
+            return {}
+        return {"max_tokens": tokens_totais(max_tokens), "extra_body": {"reasoning": {"max_tokens": budget}}}
 
     def _refresh_client(self) -> None:
         from app.openrouter_catalog import get_openrouter_api_key

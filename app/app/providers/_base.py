@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 import app.providers_async as _pa
+from app.services.orcamento_tempo import registrar_vazao
 
 from ._ollama import (
     _mark_ollama_model_state,
@@ -120,3 +121,4 @@ class BaseProvider(ABC):
             _pa.GENERATION_TOKENS_PER_SECOND.labels(model=model).observe(completion_tokens / latency)
         except Exception:
             pass
+        registrar_vazao(model, completion_tokens, latency)

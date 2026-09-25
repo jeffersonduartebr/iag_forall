@@ -58,6 +58,8 @@ class RouteContext:
     #: Preenchidos pelo estágio de selecção, para o registo auditável da decisão.
     scored_candidates: List[Any] = field(default_factory=list)
     strategy_weights: Dict[str, float] = field(default_factory=dict)
+    #: O pool de candidatos da selecção: é dele que sai a cadeia de fallback.
+    candidates: List[str] = field(default_factory=list)
 
     @property
     def hints(self) -> Dict[str, Any]:

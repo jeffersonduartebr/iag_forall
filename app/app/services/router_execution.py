@@ -104,6 +104,7 @@ async def _choose_route(ctx: RouteContext, uncertainty: float) -> RouteChoice:
         ctx.observe_stage("selection", started)
         return pinned
     models = restrict_to_tool_models(ctx, await resolve_candidates(ctx))
+    ctx.candidates = list(models)
     choice = await select_route(ctx, models, uncertainty)
     ctx.observe_stage("selection", started)
     ctx.deps["logger"].info(

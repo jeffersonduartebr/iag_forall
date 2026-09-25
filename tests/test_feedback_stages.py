@@ -51,7 +51,7 @@ def test_exploration_always_judged_even_when_throttled():
 
 @pytest.mark.asyncio
 async def test_judge_quality_learns_only_from_real_judgments():
-    async def rubric(q, a):
+    async def rubric(q, a, **_):
         return [{"judge_id": "llm_rubric", "score": 0.8, "dimensions": {"clareza": 8}}]
 
     risk = _risk()
@@ -59,7 +59,7 @@ async def test_judge_quality_learns_only_from_real_judgments():
     assert (quality.value, quality.source) == (8.0, "judge") and quality.judge_rubric["dimensions"] == {"clareza": 8}
     assert risk.predictor.learned == [True]
 
-    async def heuristic(q, a):
+    async def heuristic(q, a, **_):
         return [{"judge_id": "heuristic_fallback", "score": 0.4}]
 
     risk = _risk()
@@ -69,7 +69,7 @@ async def test_judge_quality_learns_only_from_real_judgments():
 
 @pytest.mark.asyncio
 async def test_judge_failure_falls_back_to_neutral_quality():
-    async def boom(q, a):
+    async def boom(q, a, **_):
         raise RuntimeError("judge down")
 
     quality = await fs.judge_quality(_deps(judge_answer=boom), _fb(), _risk(), fs.JudgeDecision(True, 0.5))

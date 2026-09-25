@@ -318,6 +318,7 @@ async def execute_with_fallback(
     primary_model: str,
     execute_fn: Callable[[str], Any],
     max_fallbacks: int = 3,
+    candidates: Optional[List[str]] = None,
 ) -> FallbackResult:
     """
     Execute a request with automatic fallback to alternative models.
@@ -326,6 +327,7 @@ async def execute_with_fallback(
         primary_model: Primary model to use
         execute_fn: Async function that takes model name and executes request
         max_fallbacks: Maximum number of fallback attempts
+        candidates: Ordered fallback models; defaults to the registry's static chain
 
     Returns:
         FallbackResult with the outcome
@@ -336,9 +338,12 @@ async def execute_with_fallback(
     # Build the list of models to try
     models_to_try = [primary_model]
 
-    # Add fallback models
-    fallback_chain = registry.get_fallback_chain(primary_model, max_depth=max_fallbacks)
-    models_to_try.extend([m.full_name for m in fallback_chain])
+    # Fallbacks: the caller's ordered candidates (the router's own pool) or the static registry chain.
+    if candidates is not None:
+        models_to_try.extend(m for m in candidates if m != primary_model)
+    else:
+        fallback_chain = registry.get_fallback_chain(primary_model, max_depth=max_fallbacks)
+        models_to_try.extend([m.full_name for m in fallback_chain])
 
     models_tried = []
     errors = []

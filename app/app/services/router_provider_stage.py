@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from app.services.orcamento_tempo import ordem_de_fallback, prazo_da_chamada, reserva_de_fallback
 from app.services.router_stages import RouteChoice, RouteContext, quietly
 
 
@@ -91,16 +92,25 @@ def _use_hedging(ctx: RouteContext, choice: RouteChoice) -> bool:
     )
 
 
-def _provider_call(ctx: RouteContext, final_prompt: str):
+def _call_timeout(ctx: RouteContext, model: str) -> Optional[float]:
+    """Per-model timeout: the model's measured throughput for the requested tokens, within the deadline."""
+    remaining = deadline_remaining_seconds(ctx.runtime_hints)
+    configured = effective_provider_timeout_seconds(ctx.runtime_hints)
+    if remaining == float("inf"):
+        return configured
+    return prazo_da_chamada(model, int(ctx.max_tokens), remaining, piso=configured or 0.0)
+
+
+def _provider_call(ctx: RouteContext, final_prompt: str, retry_empty: bool):
     async def _execute(model_name: str):
-        return await ctx.deps["call_model"](
+        out, meta = await ctx.deps["call_model"](
             model=model_name,
             prompt=final_prompt,
             modality=ctx.modality,
             image_b64=ctx.image_b64,
             temperature=ctx.temperature,
             max_tokens=ctx.max_tokens,
-            timeout_seconds=effective_provider_timeout_seconds(ctx.runtime_hints),
+            timeout_seconds=_call_timeout(ctx, model_name),
             workload_class=ctx.hints.get("workload_class"),
             tools=ctx.tools,
             tool_choice=ctx.tool_choice,
@@ -108,8 +118,21 @@ def _provider_call(ctx: RouteContext, final_prompt: str):
             response_format=ctx.response_format,
             system_prompt=ctx.system_prompt,
         )
+        if retry_empty:
+            _raise_if_empty(ctx, model_name, out, meta)
+        return out, meta
 
     return _execute
+
+
+def _raise_if_empty(ctx: RouteContext, model: str, out: Any, meta: Any) -> None:
+    """An empty answer (e.g. reasoning ate the token budget) is a failed attempt, so the chain moves on."""
+    tool_calls = meta.get("tool_calls") if isinstance(meta, dict) else None
+    if tool_calls or (out if isinstance(out, str) else str(out or "")).strip():
+        return
+    raise ctx.deps["ProviderCallError"](
+        model=model, message="Empty answer from provider", category="empty_answer", retryable=True
+    )
 
 
 def _deadline_guard(ctx: RouteContext, model: str) -> None:
@@ -169,9 +192,7 @@ def _fallback_budget(ctx: RouteContext) -> int:
     """Max fallbacks, or 0 when the remaining deadline cannot fit another attempt."""
     deps = ctx.deps
     max_fallbacks = int(ctx.hints.get("max_fallbacks", deps["_safe_setting_int"]("REQUEST_MAX_FALLBACKS", 2)))
-    timeout = effective_provider_timeout_seconds(ctx.runtime_hints)
-    remaining = deadline_remaining_seconds(ctx.runtime_hints)
-    if remaining != float("inf") and timeout is not None and remaining <= timeout + 2.0:
+    if deadline_remaining_seconds(ctx.runtime_hints) < reserva_de_fallback():
         quietly(lambda: deps["ROUTER_FALLBACK_SKIPPED"].labels(reason="insufficient_deadline_budget").inc())
         return 0
     return max_fallbacks
@@ -182,7 +203,10 @@ async def _run_fallback_chain(ctx: RouteContext, choice: RouteChoice, execute) -
     max_fallbacks = _fallback_budget(ctx)
     started = time.time()
     result = await ctx.deps["execute_with_fallback"](
-        primary_model=choice.chosen, execute_fn=execute, max_fallbacks=max_fallbacks
+        primary_model=choice.chosen,
+        execute_fn=execute,
+        max_fallbacks=max_fallbacks,
+        candidates=ordem_de_fallback(ctx.candidates, choice.chosen),
     )
     ctx.observe_stage("provider_call", started)
     return _finalize(ctx, choice.chosen, result)
@@ -198,10 +222,14 @@ async def _run_direct(ctx: RouteContext, choice: RouteChoice, execute) -> Provid
 
 async def execute_provider(ctx: RouteContext, choice: RouteChoice, final_prompt: str) -> ProviderOutcome:
     """Call the provider: hedged race, fallback chain or a single direct call."""
-    execute = _provider_call(ctx, final_prompt)
-    if _use_hedging(ctx, choice):
+    # Uma resposta vazia só vira falha quando há outro modelo para tentar; numa chamada directa ela segue
+    # para a abstenção (query_reliability), que é o que o cliente sabe tratar.
+    hedged = _use_hedging(ctx, choice)
+    chained = not hedged and ctx.deps["_safe_setting_bool"]("REQUEST_FALLBACK_ENABLED", False)
+    execute = _provider_call(ctx, final_prompt, retry_empty=hedged or chained)
+    if hedged:
         return await _run_hedged(ctx, choice, execute)
-    if ctx.deps["_safe_setting_bool"]("REQUEST_FALLBACK_ENABLED", False):
+    if chained:
         return await _run_fallback_chain(ctx, choice, execute)
     return await _run_direct(ctx, choice, execute)
 
