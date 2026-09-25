@@ -226,14 +226,10 @@ async def get_full_health_check(force_refresh: bool = False) -> Dict[str, Any]:
     start = time.time()
 
     # Run all checks concurrently
-    checks = await asyncio.gather(
-        check_redis_health(),
-        check_database_health(),
-        check_vectorstore_health(),
-        check_ollama_health(),
-        check_circuit_breakers_health(),
-        return_exceptions=True,
-    )
+    probes = [check_redis_health(), check_database_health(), check_vectorstore_health()]
+    if _ollama_in_use():  # sem modelo local configurado, um Ollama ausente não é degradação
+        probes.append(check_ollama_health())
+    checks = await asyncio.gather(*probes, check_circuit_breakers_health(), return_exceptions=True)
 
     # Process results
     components = []
@@ -316,6 +312,15 @@ async def get_readiness_check() -> Dict[str, Any]:
         # Informativo: sem os modelos locais aquecidos o roteador ainda atende pela nuvem.
         "ollama_warmed_at": _ollama_warmed_at(),
     }
+
+
+def _ollama_in_use() -> bool:
+    try:
+        from .services.ollama_preload import ollama_in_use
+
+        return ollama_in_use()
+    except Exception:
+        return True
 
 
 def _ollama_warmed_at():
