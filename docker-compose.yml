@@ -451,6 +451,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis
+    # Sem política de reinício o Redis ficava parado depois de qualquer restart do Docker ou da VM (produção,
+    # 2026-09-25), e a API seguia sem bandit, cache nem orçamento de erros.
+    restart: unless-stopped
 
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD required}"]
 
