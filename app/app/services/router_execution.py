@@ -11,6 +11,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
+from app.services.regime.regeneracao import talvez_regenerar
+from app.services.regime.sorteio import rota_do_regime
 from app.services.router_cache_stage import try_cache_hit
 from app.services.router_provider_stage import build_result, execute_provider
 from app.services.router_services import spawn_via_deps
@@ -106,7 +108,8 @@ async def _choose_route(ctx: RouteContext, uncertainty: float) -> RouteChoice:
         return pinned
     models = restrict_to_tool_models(ctx, await resolve_candidates(ctx))
     ctx.candidates = list(models)
-    choice = await select_route(ctx, models, uncertainty)
+    # Regime de exploração do protocolo (tenants configurados): sorteio explícito com probabilidade registrada.
+    choice = await rota_do_regime(ctx, models, uncertainty) or await select_route(ctx, models, uncertainty)
     ctx.observe_stage("selection", started)
     ctx.deps["logger"].info(
         f"[router] Model: {choice.chosen} | UQ: {uncertainty:.2f} | exploration={choice.exploration_mode}"
@@ -176,6 +179,9 @@ async def route_and_answer_internal_impl(
     final_prompt, retrieval_bundle = await prepare_prompt(ctx, skip_rag)
     outcome = await execute_provider(ctx, choice, final_prompt)
     result = build_result(ctx, choice, outcome, uncertainty, retrieval_bundle)
+    choice, outcome, result = await talvez_regenerar(
+        ctx, choice, outcome, final_prompt, retrieval_bundle, result, float(uncertainty or 0.0)
+    )
     # Execução em sombra: só sorteia e enfileira (não espera nem altera a resposta).
     talvez_agendar_sombra(ctx, choice, outcome, final_prompt, retrieval_bundle, result, float(uncertainty or 0.0))
     return result

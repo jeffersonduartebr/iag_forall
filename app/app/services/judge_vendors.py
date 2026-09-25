@@ -20,6 +20,7 @@ EMPRESAS = (
     ("gpt", "openai"), ("openai", "openai"), ("o1-", "openai"), ("o3-", "openai"),
     ("deepseek", "deepseek"), ("granite", "ibm"), ("llama", "meta"), ("qwen", "alibaba"),
     ("mistral", "mistral"), ("mixtral", "mistral"), ("phi", "microsoft"), ("grok", "xai"),
+    ("glm", "zhipu"), ("z-ai/", "zhipu"), ("kimi", "moonshot"), ("moonshotai/", "moonshot"),
 )
 _ROTAS = ("ollama/", "openrouter/", "gemini/", "anthropic/", "openai/")
 

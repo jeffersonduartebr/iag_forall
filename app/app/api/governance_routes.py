@@ -115,7 +115,7 @@ def upsert_tenant_budget(
     enabled = bool(payload.enabled)
     set_tenant_budget(tenant_id=tenant_id, daily_usd_limit=daily, monthly_usd_limit=monthly, enabled=enabled)
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         action="budget_upsert",
         resource="tenant_budgets",
         tenant_id=tenant_id,
@@ -200,7 +200,7 @@ def create_policy(
     config = dict(payload.config or {})
     create_policy_version(version=version, config=config, description=description)
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         action="policy_upsert",
         resource="policy_versions",
         metadata={"version": version, "roles": auth["roles"]},
@@ -224,7 +224,7 @@ def activate_policy(
     except Exception:
         pass
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         action="policy_activate",
         resource="policy_versions",
         metadata={"version": version, "roles": auth["roles"]},
@@ -307,14 +307,14 @@ def apply_response_review(
     updated = update_response_review(
         review_id,
         review_status=review_status,
-        reviewer_id=x_user_id or auth["authorized_by"],
+        reviewer_id=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         reviewer_notes=str(payload.reviewer_notes or "") or None,
         corrected_answer=str(payload.corrected_answer or "") or None,
     )
     if not updated:
         raise HTTPException(status_code=404, detail=f"Review item not found: {review_id}")
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         action="response_review_update",
         resource="response_reviews",
         metadata={"review_id": review_id, "review_status": review_status, "roles": auth["roles"]},

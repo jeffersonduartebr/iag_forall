@@ -253,5 +253,5 @@ a entregue e as candidatas, todas com o mesmo prompt, o mesmo contexto e o mesmo
 
 Limites:
 - O painel não é uniforme quando as candidatas são de empresas diferentes, porque cada uma perde os juízes da própria empresa. A marca `painel_uniforme` e as notas por juiz permitem restringir a comparação aos juízes em comum.
-- O regime de exploração do protocolo ainda não está implementado: não há teto de 15% por participante nem janela de 20 episódios, e a probabilidade de atribuição não é registrada. Por isso `p_atribuicao` fica vazio e o regime é inferido da decisão do bandit ou da exploração do OpenRouter.
+- A probabilidade de atribuição vem do regime de exploração (`decision_json.regime.p_atribuicao`; ver `docs/CONFIGURATION.md`) e é exata: `1 − ε` para o aproveitamento e `ε/K` para cada braço explorado, com ε = 0 quando o teto da janela do participante é atingido. Uma entrega regenerada fica marcada como `exploracao_regenerada`.
 

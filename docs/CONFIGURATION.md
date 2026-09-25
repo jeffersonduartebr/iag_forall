@@ -134,6 +134,24 @@ Além de settings dinâmicos globais, o sistema agora suporta:
 Observação:
 - A governança por tenant é aplicada quando `tenant_id` é enviado no `POST /query`.
 
+## Regime de exploração do protocolo (Caso 1)
+
+Nos tenants de `REGIME_EXPLORACAO_TENANTS` (padrão `ifrn-caso1`), a rota vem de um sorteio explícito, e não do voto do meta-bandit. Assim a probabilidade de atribuição de cada resposta é conhecida e fica registrada em `decision_json.regime`.
+
+| Chave | Padrão | Significado |
+|---|---|---|
+| `REGIME_EXPLORACAO_TENANTS` | `ifrn-caso1` | Tenants sob o regime. Vazio desliga. |
+| `REGIME_EPSILON` | `0.15` | Probabilidade nominal de exploração. |
+| `REGIME_TETO` | `0.15` | Fração máxima de requisições exploradas por participante na janela. |
+| `REGIME_JANELA_EPISODIOS` | `20` | Tamanho da janela móvel: últimos episódios do participante, o atual incluído. |
+
+- **Aproveitamento:** a candidata de maior recompensa média posterior no contexto do bandit. O empate se resolve pelo escore NSGA-II. Probabilidade `1 − ε`.
+- **Exploração:** sorteio uniforme entre as demais candidatas admissíveis e o conjunto do catálogo do OpenRouter em exploração (enquanto o explorador está ligado e dentro dos tetos diários). Probabilidade `ε/K` para cada braço.
+- **Quando ε = 0:** se explorar agora faria as explorações passarem de `REGIME_TETO` das requisições do participante na janela (contando esta), ou se não há participante (`user_key`), não há Redis ou a política está congelada. O motivo fica registrado.
+- **Requisição sem `episode_id`:** conta como episódio próprio.
+- **Regeneração:** se a resposta explorada falharia na verificação de incerteza, a configuração de aproveitamento é chamada e sua resposta é a entregue. O registro guarda o modelo explorado e o motivo.
+- **Reprodutibilidade:** o sorteio é determinístico pelo `correlation_id`.
+
 ## Execução em sombra (pesquisa, Caso 1)
 
 Para uma amostra de requisições, as demais configurações candidatas admissíveis recebem o mesmo prompt final e o
@@ -153,7 +171,7 @@ mesmo contexto recuperado da resposta entregue. Todas são pontuadas pelo mesmo 
 | `SHADOW_LOCAL_MAX_CONCURRENCY` | `1` | Chamadas em sombra simultâneas a modelos locais, por processo. |
 | `SHADOW_DAILY_BUDGET` | `4.00` | Teto diário, em US$, de candidatas e juízes da sombra. |
 | `SHADOW_RATE_LIMIT_PER_TENANT_HOUR` | `30` | Requisições amostradas por tenant e por hora local. |
-| `SHADOW_TIMEOUT_S` | `120` | Tempo máximo por chamada em sombra. |
+| `SHADOW_TIMEOUT_S` | `300` | Tempo máximo por chamada em sombra. |
 | `SHADOW_BUDGET_TZ` | `America/Fortaleza` | Fuso em que o dia do orçamento (e a hora do teto) é apurado. |
 | `SHADOW_JUDGE_MODELS` | gemini-3.1-pro-preview (Vertex), claude-opus-5.5, grok-4.7, gpt-5.6-sol (OpenRouter) | Painel base. Cada candidata perde os juízes da própria empresa. |
 

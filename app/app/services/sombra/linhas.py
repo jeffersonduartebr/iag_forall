@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any, Dict, Optional
 
-from app.services.query_reliability import abstain_reason, confidence_band, confidence_score, verification_status
+from app.services.regime.verificacao import reprovaria
 
 from .admissibilidade import regiao_efetiva
 
@@ -44,17 +44,8 @@ def versao(modelo: str, meta: Optional[Dict[str, Any]]) -> str:
 
 def teria_abstido(job: Dict[str, Any], texto: str) -> bool:
     """Would the delivery path's uncertainty check have replaced this answer? Pure: no metric, no side effect."""
-    answered = bool((texto or "").strip())
-    grounded = bool(job.get("grounded"))
-    retrieval_used = str(job.get("retrieval_mode") or "no_retrieval") != "no_retrieval"
-    score = confidence_score(
-        float(job.get("incerteza", 0.5) or 0.5), answered=answered, grounded=grounded,
-        retrieval_used=retrieval_used, fallback_used=False, flagged=False,
+    return reprovaria(
+        texto, incerteza=float(job.get("incerteza", 0.5) or 0.5), grounded=bool(job.get("grounded")),
+        retrieval_mode=job.get("retrieval_mode"), workload_class=job.get("workload_class"),
+        complexidade=job.get("complexidade"),
     )
-    band = confidence_band(score)
-    verificacao = verification_status(answered=answered, grounded=grounded, score=score)
-    motivo = abstain_reason(
-        answered=answered, band=band, verification=verificacao, workload_class=str(job.get("workload_class") or "reasoning"),
-        complexity=str(job.get("complexidade") or ""), retrieval_used=retrieval_used, grounded=grounded, score=score,
-    )
-    return motivo is not None
