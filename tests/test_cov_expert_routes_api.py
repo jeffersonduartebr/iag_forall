@@ -22,7 +22,7 @@ def _fake_authorizer(*, admin_token, user_id, user_roles_header, authorization, 
     roles = [r.strip() for r in (user_roles_header or "").split(",") if r.strip()]
     if not any(r in roles for r in required_roles):
         raise HTTPException(status_code=403, detail={"required_roles": required_roles})
-    return {"authorized_by": "rbac", "roles": roles}
+    return {"authorized_by": "rbac", "user_id": user_id, "roles": roles}
 
 
 @pytest.fixture
@@ -31,7 +31,6 @@ def api(monkeypatch):
 
     monkeypatch.setattr("app.api.dependencies.require_admin_or_role", _fake_authorizer)
     monkeypatch.setattr(routes, "_roles_from_jwt", lambda a: ((a or "").removeprefix("Bearer ") or None, None, []))
-    monkeypatch.setattr(routes, "_header_identity_trusted", lambda: False)
     audit = []
     monkeypatch.setattr(routes, "log_audit_event", lambda **kw: audit.append(kw))
     monkeypatch.setattr(routes, "ensure_expert_profile", lambda uid: {"user_id": uid, "theme_ids": ["hist"]})
@@ -86,6 +85,22 @@ def test_list_and_create_accounts(api, monkeypatch):
     assert audit[-1]["actor"] == "rbac" and audit[-1]["metadata"]["roles"] == ["admin"]
 
 
+def test_audit_actor_is_the_authenticated_identity_not_the_header(api, monkeypatch):
+    """Um admin autenticado pelo token não pode assinar a auditoria como outra pessoa via X-User-Id."""
+    client, routes, audit = api
+    monkeypatch.setattr(
+        "app.api.dependencies.require_admin_or_role",
+        lambda **kw: {"authorized_by": "admin_token", "user_id": "admin", "roles": ["admin"]},
+    )
+    monkeypatch.setattr(routes, "register_expert_account", lambda **kw: {"id": 2, "email": kw["email"]})
+    monkeypatch.setattr(routes, "update_expert_account_admin", lambda account_id, **kw: {"id": 3, "email": "c@x"})
+    body = {"display_name": "Ana", "email": "a@x.org", "password": "senha1234"}
+    client.post("/admin/experts/accounts", json=body, headers={"X-User-Id": "vitima"})
+    assert audit[-1]["actor"] == "admin"
+    client.put("/admin/experts/accounts/3", json={"enabled": False}, headers={"X-User-Id": "vitima"})
+    assert audit[-1]["actor"] == "admin"
+
+
 def test_create_account_value_error_is_400(api, monkeypatch):
     client, routes, audit = api
 
@@ -119,12 +134,22 @@ def test_profile_uses_signed_identity_not_header(api, monkeypatch):
     client, routes, _ = api
     resp = client.get("/admin/experts/profile", headers=_h("expert_reviewer", user="outro", jwt="eu@x.org"))
     assert resp.json()["user_id"] == "eu@x.org"
-    # Sem JWT e sem confiança em cabeçalhos, o X-User-Id é ignorado.
-    assert (
-        client.get("/admin/experts/profile", headers=_h("expert_reviewer", user="outro")).json()["user_id"] != "outro"
-    )
-    monkeypatch.setattr(routes, "_header_identity_trusted", lambda: True)
+    # Sem JWT, a identidade é o X-User-Id que a RBAC verificou.
     assert client.get("/admin/experts/profile", headers=_h("expert_reviewer", user="svc")).json()["user_id"] == "svc"
+
+
+def test_rbac_experts_without_jwt_do_not_share_one_identity(api):
+    """Regressão: todo perito autorizado por RBAC virava o literal "rbac" (perfil e avaliações partilhados)."""
+    client, _, _ = api
+    ana = client.get("/admin/experts/profile", headers=_h("expert_reviewer", user="ana")).json()["user_id"]
+    bia = client.get("/admin/experts/profile", headers=_h("expert_reviewer", user="bia")).json()["user_id"]
+    assert (ana, bia) == ("ana", "bia")
+
+
+def test_no_authorized_identity_is_refused_not_pooled(api):
+    client, _, _ = api
+    resp = client.get("/admin/experts/profile", headers=_h("expert_reviewer"))
+    assert resp.status_code == 403
 
 
 def test_put_profile_updates_and_audits(api, monkeypatch):
@@ -160,7 +185,8 @@ def test_themes_and_next_item(api, monkeypatch):
 def test_assessment_theme_outside_profile_is_forbidden(api, monkeypatch):
     client, routes, audit = api
     monkeypatch.setattr(routes, "submit_expert_assessment", lambda *a, **k: pytest.fail("não devia gravar"))
-    resp = client.post("/admin/experts/assessments", json={**ASSESSMENT, "theme": "fis"}, headers=_h("expert_reviewer"))
+    headers = _h("expert_reviewer", user="ana")
+    resp = client.post("/admin/experts/assessments", json={**ASSESSMENT, "theme": "fis"}, headers=headers)
     assert resp.status_code == 403 and "fis" in resp.json()["detail"]
     assert audit == []
 
@@ -178,7 +204,7 @@ def test_assessment_saved_and_listed(api, monkeypatch):
     monkeypatch.setattr(routes, "ensure_expert_profile", lambda uid: {"theme_ids": []})
     assert (
         client.post(
-            "/admin/experts/assessments", json={**ASSESSMENT, "theme": "fis"}, headers=_h("expert_reviewer")
+            "/admin/experts/assessments", json={**ASSESSMENT, "theme": "fis"}, headers=_h("expert_reviewer", user="a")
         ).status_code
         == 200
     )

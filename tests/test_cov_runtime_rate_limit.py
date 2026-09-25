@@ -160,21 +160,41 @@ async def test_disabled_limiter_and_polling_bypass_admission(limiter):
     assert "X-Admission-State" not in response.headers
 
 
+@pytest.fixture
+def signed(monkeypatch):
+    """``Bearer tok-a``/``tok-b`` are verified JWTs for tenants escola-a/escola-b."""
+    import app.api.auth as auth
+
+    claims = {t: auth.AuthContext(authenticated=True, method="jwt", tenant_id=f"escola-{t[-1]}") for t in ("tok-a", "tok-b")}
+    monkeypatch.setattr(auth, "_auth_from_jwt", lambda tok: claims.get(tok))
+    monkeypatch.setattr(auth, "_auth_from_api_key", lambda tok: None)
+    return lambda t: {"Authorization": f"Bearer {t}"}
+
+
 @pytest.mark.asyncio
-async def test_per_tenant_buckets_are_isolated(limiter):
+async def test_per_tenant_buckets_are_isolated(limiter, signed):
     mw = limiter.mw
-    first = await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
+    first = await mw.dispatch(_request("/admin/s", signed("tok-a")), _ok)
     assert first.headers["X-RateLimit-Limit"] == "2"
     assert first.headers["X-RateLimit-Window"] == "15"
-    await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
-    blocked = await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
+    await mw.dispatch(_request("/admin/s", signed("tok-a")), _ok)
+    blocked = await mw.dispatch(_request("/admin/s", signed("tok-a")), _ok)
     assert blocked.status_code == 429
     assert blocked.headers["Retry-After"] == "2"  # elevated → short retry
-    other = await mw.dispatch(_request("/admin/s", {"X-School-ID": "escola-b"}), _ok)
+    other = await mw.dispatch(_request("/admin/s", signed("tok-b")), _ok)
     assert other.status_code == 200
-    via_query = await mw.dispatch(_request("/admin/s", query_string=b"tenant_id=escola-a"), _ok)
-    assert via_query.status_code == 429  # query-param tenant shares the header tenant's bucket
     assert (await mw.dispatch(_request("/admin/s"), _ok)).status_code == 200  # IP fallback bucket
+
+
+@pytest.mark.asyncio
+async def test_client_chosen_tenant_headers_and_query_share_the_ip_bucket(limiter):
+    """Regressão: rodar X-Tenant-ID / ?tenant_id= a cada pedido fugia à quota do limitador adaptativo."""
+    mw = limiter.mw
+    await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
+    await mw.dispatch(_request("/admin/s", {"X-School-ID": "escola-b"}), _ok)
+    blocked = await mw.dispatch(_request("/admin/s", query_string=b"tenant_id=escola-c"), _ok)
+    assert blocked.status_code == 429
+    assert (await mw.dispatch(_request("/admin/s", {"X-Tenant": "x"}, client="10.0.0.2"), _ok)).status_code == 200
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from app.api.auth import _auth_from_jwt, _extract_bearer_token
+from app.middleware.trusted_identity import client_ip, verified_identity
 from app.settings_dynamic import settings
 from app.utils.redis_distributed import redis_sliding_window_limit
 
@@ -45,7 +45,7 @@ class TenantRateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         tenant_id = await self._resolve_tenant(request)
-        identity = tenant_id or (request.client.host if request.client else "unknown")
+        identity = tenant_id or client_ip(request)
         scope = f"tenant:{identity}"
         limited = await redis_sliding_window_limit(
             scope,
@@ -75,16 +75,5 @@ class TenantRateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
     async def _resolve_tenant(self, request: Request) -> Optional[str]:
-        auth_hdr = request.headers.get("authorization")
-        token = _extract_bearer_token(auth_hdr)
-        if token:
-            ctx = _auth_from_jwt(token)
-            if ctx and ctx.tenant_id:
-                return ctx.tenant_id
-            if ctx and ctx.user_id:
-                return f"user:{ctx.user_id}"
-        for header in ("X-Tenant-ID", "X-Tenant", "X-School-ID"):
-            value = (request.headers.get(header) or "").strip()
-            if value:
-                return value
-        return None
+        """Tenant from verified auth only — ``X-Tenant-ID`` & co. are client-chosen and ignored."""
+        return verified_identity(request)

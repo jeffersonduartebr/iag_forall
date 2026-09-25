@@ -26,7 +26,6 @@ from ..services.expert_review import (
     submit_expert_assessment,
     update_expert_profile,
 )
-from ..settings_dynamic import settings
 from .dependencies import require_roles
 
 router = APIRouter()
@@ -38,31 +37,29 @@ _ADMIN_MANAGE_ROLES = ["platform_admin", "eval_admin", "governance_admin", "admi
 def _expert_id(x_user_id: Optional[str], auth: dict, authorization: Optional[str] = None) -> str:
     """Whose data this request acts on.
 
-    O cabeçalho ``X-User-Id`` vinha **primeiro**, antes do JWT. Um perito
-    autenticado bastava enviar o id de outro para ler e escrever como ele: o
-    perfil, o email e o telefone do colega, as avaliações dele, e sobretudo as
-    etiquetas humanas que calibram o juiz. Um cabeçalho que o cliente escolhe
-    não pode ter precedência sobre uma identidade assinada.
+    O cabeçalho ``X-User-Id`` vinha **primeiro**, antes do JWT: um perito
+    autenticado bastava enviar o id de outro para ler e escrever como ele.
+    Depois, sem JWT, caía-se em ``authorized_by`` — e todo o perito autorizado
+    por RBAC virava o literal ``"rbac"``: um só perfil, um só conjunto de
+    avaliações e de itens "já avaliados" partilhado por todos.
 
-    O cabeçalho continua a ser aceite — é como os serviços internos e a
-    federação de identidade se apresentam — mas só quando não há JWT, e só se
-    ``TRUST_HEADER_ROLES`` disser que esta instalação confia em cabeçalhos.
+    A identidade é agora a que a autorização efetivamente verificou: o sujeito
+    do JWT, senão o ``user_id`` devolvido por ``require_admin_or_role`` (o
+    ``X-User-Id`` cujos papéis a RBAC conferiu, ou ``"admin"`` para o token de
+    administração). ``x_user_id`` é ignorado quando não foi a base da decisão.
     """
     jwt_user, _, _ = _roles_from_jwt(authorization)
     if jwt_user:
         return str(jwt_user).strip()[:128]
-    if x_user_id and str(x_user_id).strip() and _header_identity_trusted():
-        return str(x_user_id).strip()[:128]
-    username = auth.get("username") or auth.get("authorized_by") or "anonymous"
-    return str(username)[:128]
+    who = str(auth.get("user_id") or auth.get("username") or "").strip()
+    if not who:
+        raise HTTPException(status_code=403, detail="Identidade do especialista não determinada.")
+    return who[:128]
 
 
-def _header_identity_trusted() -> bool:
-    """Whether ``X-User-Id`` may name the acting user on this deployment."""
-    try:
-        return str(settings.get("TRUST_HEADER_ROLES", "0")).strip() == "1"
-    except Exception:
-        return False
+def _actor(auth: dict) -> str:
+    """Audit actor: the authenticated identity, never the client-chosen ``X-User-Id``."""
+    return str(auth.get("user_id") or auth.get("username") or auth.get("authorized_by") or "unknown")[:128]
 
 
 @router.get("/admin/experts/accounts", tags=["Experts"], dependencies=[Depends(require_roles(*_ADMIN_MANAGE_ROLES))])
@@ -74,7 +71,6 @@ def list_expert_accounts_route():
 @router.post("/admin/experts/accounts", tags=["Experts"])
 def create_expert_account_route(
     payload: ExpertAccountCreateRequest,
-    x_user_id: Optional[str] = Header(None),
     auth: dict = Depends(require_roles(*_ADMIN_MANAGE_ROLES)),
 ):
     """Register a new expert with name, phone, email and password."""
@@ -88,7 +84,7 @@ def create_expert_account_route(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=_actor(auth),
         action="expert_account_create",
         resource="expert_accounts",
         metadata={"email": account.get("email"), "roles": auth["roles"]},
@@ -100,7 +96,6 @@ def create_expert_account_route(
 def update_expert_account_route(
     account_id: int,
     payload: ExpertAccountUpdateRequest,
-    x_user_id: Optional[str] = Header(None),
     auth: dict = Depends(require_roles(*_ADMIN_MANAGE_ROLES)),
 ):
     """Update expert account fields or reset password."""
@@ -117,7 +112,7 @@ def update_expert_account_route(
     if not account:
         raise HTTPException(status_code=404, detail="Especialista não encontrado.")
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=_actor(auth),
         action="expert_account_update",
         resource="expert_accounts",
         metadata={"account_id": account_id, "email": account.get("email"), "roles": auth["roles"]},

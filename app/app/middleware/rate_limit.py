@@ -5,8 +5,8 @@
 The original middleware enforced a fixed sliding-window limit per client IP,
 which was too blunt for local inference traffic and synthetic load tests. This
 module keeps the sliding-window store, but uses it only when the local provider
-is under pressure. Requests are segmented by tenant first, route class second,
-and IP only as a fallback identity.
+is under pressure. Requests are segmented by verified tenant first (JWT claim or API key, never a
+client-chosen header), route class second, and IP as the fallback identity.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.middleware.backpressure import get_backpressure
+from app.middleware.trusted_identity import verified_identity
 from app.observability import (
     ADAPTIVE_LIMITER_IDENTITY_BUCKETS,
     ADAPTIVE_LIMITER_OVERLOAD_EVENTS,
@@ -265,7 +266,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     )
     QUERY_PATHS = frozenset(["/query", "/query/stream", "/v1/query"])
     QUERY_JOB_POLLING_PREFIXES = ("/query/jobs/", "/v1/query/jobs/")
-    TENANT_HEADERS = ("X-Tenant-ID", "X-Tenant", "X-School-ID")
 
     async def dispatch(self, request: Request, call_next):
         """Admit or reject one request based on runtime pressure and route class."""
@@ -402,15 +402,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return "admin_eval_governance"
 
     async def _resolve_identity(self, request: Request) -> Tuple[str, str]:
-        """Resolve tenant-first identity for adaptive-limiter buckets."""
-        for header in self.TENANT_HEADERS:
-            value = (request.headers.get(header) or "").strip()
-            if value:
-                return value[:128], "tenant"
-        tenant_query = (request.query_params.get("tenant_id") or "").strip()
-        if tenant_query:
-            return tenant_query[:128], "tenant"
-        return self._client_ip(request), "ip"
+        """Verified tenant (JWT/API key) first, else client IP — never a client-chosen tenant header."""
+        tenant = verified_identity(request)
+        return (tenant, "tenant") if tenant else (self._client_ip(request), "ip")
 
     def _client_ip(self, request: Request) -> str:
         """Resolve the client IP, honoring X-Forwarded-For only behind trusted proxies."""

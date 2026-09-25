@@ -47,16 +47,40 @@ async def _hit(mw, clock, n, **kw):
     return out
 
 
+@pytest.fixture
+def jwt_claims(monkeypatch):
+    """Signed tokens stand in for real JWTs: ``Bearer tok-a`` carries tenant ``escola-a``."""
+    import app.api.auth as auth
+
+    claims = {
+        "tok-a": auth.AuthContext(authenticated=True, method="jwt", tenant_id="escola-a", user_id="u1"),
+        "tok-b": auth.AuthContext(authenticated=True, method="jwt", tenant_id="escola-b", user_id="u2"),
+        "tok-u": auth.AuthContext(authenticated=True, method="jwt", user_id="u9"),
+    }
+    monkeypatch.setattr(auth, "_auth_from_jwt", lambda tok: claims.get(tok))
+    monkeypatch.setattr(auth, "_auth_from_api_key", lambda tok: None)
+    return claims
+
+
 @pytest.mark.asyncio
-async def test_tenants_have_independent_quotas_and_window_expires(tenant):
-    a = await _hit(tenant.mw, tenant.clock, 3, headers={"X-Tenant-ID": "escola-a"})
+async def test_tenants_have_independent_quotas_and_window_expires(tenant, jwt_claims):
+    a = await _hit(tenant.mw, tenant.clock, 3, headers={"Authorization": "Bearer tok-a"})
     assert [r.status_code for r in a] == [200, 200, 429]
     assert a[0].headers["X-Tenant-RateLimit-Limit"] == "2"
     assert a[2].headers["Retry-After"] == "60"
-    b = await _hit(tenant.mw, tenant.clock, 1, headers={"X-School-ID": "escola-b"})
+    b = await _hit(tenant.mw, tenant.clock, 1, headers={"Authorization": "Bearer tok-b"})
     assert b[0].status_code == 200
     tenant.clock.advance(61)
-    assert (await _hit(tenant.mw, tenant.clock, 1, headers={"X-Tenant-ID": "escola-a"}))[0].status_code == 200
+    assert (await _hit(tenant.mw, tenant.clock, 1, headers={"Authorization": "Bearer tok-a"}))[0].status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_rotating_tenant_headers_does_not_escape_the_quota(tenant):
+    """Regressão: sem JWT, cada X-Tenant-ID novo abria um balde novo e a quota nunca se aplicava."""
+    rotated = []
+    for i, h in enumerate(("X-Tenant-ID", "X-Tenant", "X-School-ID")):
+        rotated += await _hit(tenant.mw, tenant.clock, 1, headers={h: f"t{i}"})
+    assert [r.status_code for r in rotated] == [200, 200, 429]
 
 
 @pytest.mark.asyncio
@@ -67,14 +91,12 @@ async def test_anonymous_callers_are_bucketed_by_ip(tenant):
 
 
 @pytest.mark.asyncio
-async def test_jwt_identity_wins_over_spoofable_header(tenant, monkeypatch):
-    claims = {"tok-t": SimpleNamespace(tenant_id="real", user_id="u1"), "tok-u": SimpleNamespace(tenant_id=None, user_id="u9")}
-    monkeypatch.setattr(tl, "_extract_bearer_token", lambda h: (h or "").removeprefix("Bearer ") or None)
-    monkeypatch.setattr(tl, "_auth_from_jwt", lambda tok: claims.get(tok))
+async def test_only_verified_auth_names_the_tenant(tenant, jwt_claims):
     mw = tenant.mw
-    assert await mw._resolve_tenant(_request(headers={"Authorization": "Bearer tok-t", "X-Tenant-ID": "fake"})) == "real"
+    assert await mw._resolve_tenant(_request(headers={"Authorization": "Bearer tok-a", "X-Tenant-ID": "fake"})) == "escola-a"
     assert await mw._resolve_tenant(_request(headers={"Authorization": "Bearer tok-u"})) == "user:u9"
-    assert await mw._resolve_tenant(_request(headers={"Authorization": "Bearer bad", "X-Tenant": "h"})) == "h"
+    assert await mw._resolve_tenant(_request(headers={"Authorization": "Bearer bad", "X-Tenant": "h"})) is None
+    assert await mw._resolve_tenant(_request(headers={"X-School-ID": "h"})) is None
 
 
 @pytest.mark.asyncio

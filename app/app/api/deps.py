@@ -12,12 +12,12 @@ from ..settings_dynamic import settings
 from .auth import _auth_from_jwt, _extract_bearer_token
 
 
-def require_admin(token: Optional[str] = None, authorization: Optional[str] = None) -> None:
-    """Authorize a request using admin token or admin JWT session."""
+def require_admin(token: Optional[str] = None, authorization: Optional[str] = None) -> Dict[str, Any]:
+    """Authorize a request using admin token or admin JWT session; return the session."""
     from .admin_auth_routes import resolve_admin_session
 
     try:
-        resolve_admin_session(x_admin_token=token, authorization=authorization)
+        return resolve_admin_session(x_admin_token=token, authorization=authorization)
     except HTTPException as exc:
         raise HTTPException(status_code=401, detail=exc.detail) from exc
 
@@ -49,10 +49,17 @@ def require_admin_or_role(
     tenant_id: Optional[str] = None,
     authorization: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Authorize request by admin token, JWT, or DB-backed RBAC."""
+    """Authorize request by admin token, JWT, or DB-backed RBAC.
+
+    ``user_id`` in the result is the identity that was actually authorized: the
+    admin session's user, the JWT subject, or — for RBAC — the ``X-User-Id``
+    whose database roles were checked. Callers use it as the acting identity
+    instead of re-reading a header that may not have been the basis of the
+    decision.
+    """
     try:
-        require_admin(admin_token, authorization)
-        return {"authorized_by": "admin_token", "roles": ["admin"]}
+        session = require_admin(admin_token, authorization) or {}
+        return {"authorized_by": "admin_token", "user_id": str(session.get("username") or "admin"), "roles": ["admin"]}
     except HTTPException:
         pass
 
@@ -72,7 +79,9 @@ def require_admin_or_role(
         jwt_roles=jwt_roles or None,
     )
     if decision.allowed:
-        return {"authorized_by": decision.reason, "roles": decision.roles}
+        # O X-User-Id só é a identidade quando foi ele que a RBAC verificou.
+        who = jwt_user or (user_id if decision.reason == "rbac" else None)
+        return {"authorized_by": decision.reason, "user_id": who, "roles": decision.roles}
     raise HTTPException(
         status_code=403,
         detail={"error": True, "message": "Acesso negado.", "required_roles": required_roles},
