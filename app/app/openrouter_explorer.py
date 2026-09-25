@@ -271,7 +271,9 @@ def _eligible_catalog_models(catalog: List[Dict[str, Any]], known_models: Set[st
         if not full_name.startswith("openrouter/") or full_name in known_models or full_name in blocklist:
             continue
         slug = _model_slug(full_name)
-        if _provider_allowed(slug, cfg) and _price_within_budget(slug, cfg):
+        # ":free" são endpoints gratuitos: limitados por taxa (429 em série no teste de 2026-09-25) e, em geral,
+        # com retenção/treino sobre os prompts — incompatível com dados de estudantes. Nunca são explorados.
+        if ":free" not in slug and _provider_allowed(slug, cfg) and _price_within_budget(slug, cfg):
             eligible.append(full_name)
     return eligible
 
