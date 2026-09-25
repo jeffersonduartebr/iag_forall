@@ -77,6 +77,18 @@ def collect_targets(configured: Sequence[str]) -> List[str]:
     return list(dict.fromkeys(prefixed))
 
 
+def ollama_in_use() -> bool:
+    """Whether any configured route (candidates, judges, warm list, local VLMs) needs the Ollama daemon.
+
+    A deployment without local models (Caso 1 after 2026-09-25: Gemini + OpenRouter only) must neither pull
+    models from an absent daemon nor report itself degraded because that daemon does not answer.
+    """
+    listas = ("CANDIDATE_MODELS_LIST", "CANDIDATE_VISION_MODELS_LIST", "CANDIDATE_MULTIMODAL_MODELS_LIST", "JUDGE_MODELS")
+    modelos = [m for chave in listas for m in (getattr(settings, chave, None) or [])]
+    modelos += list(get_configured_ollama_warm_models()) + [f"ollama/{m}" for m in VLM_OLLAMA_MODELS]
+    return any(str(m).startswith("ollama/") for m in modelos)
+
+
 async def _available_tags() -> Set[str]:
     """Models Ollama already has. An unreachable daemon means "pull everything"."""
     try:
@@ -138,6 +150,9 @@ async def preload_ollama_models() -> None:
     Warmup is best-effort by design — the router must be able to start and
     serve cloud traffic even with no local daemon at all.
     """
+    if not ollama_in_use():
+        logger.info("[ollama-preload] Nenhum modelo ollama/ configurado: nada a baixar nem aquecer.")
+        return
     if not _claim_warmup():
         logger.info("[ollama-preload] Outro worker já está aquecendo; este não repete.")
         return
