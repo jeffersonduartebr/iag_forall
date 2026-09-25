@@ -62,7 +62,12 @@ def test_genai_plain_text_returns_text_namespace(genai_client):
     ((_, kwargs),) = genai_client.calls
     assert kwargs["model"] == "gemini-x"
     assert kwargs["contents"] == [{"text": "oi"}, {"inline_data": {"mime_type": "image/jpeg", "data": "aW1n"}}]
-    assert kwargs["config"] == {"temperature": 0.2, "max_output_tokens": 64, "system_instruction": "seja breve"}
+    assert kwargs["config"] == {
+        "temperature": 0.2,
+        "max_output_tokens": 64 + 4096,  # o raciocínio conta dentro do teto de saída
+        "thinking_config": {"thinking_budget": 4096},
+        "system_instruction": "seja breve",
+    }
 
 
 def test_genai_with_tools_returns_raw_response(genai_client):

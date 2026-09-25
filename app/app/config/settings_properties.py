@@ -98,7 +98,7 @@ class TypedSettingsMixin:
     @property
     def MAX_TOKENS_DEFAULT(self) -> int:
         """Obtém o valor da configuração `MAX_TOKENS_DEFAULT`."""
-        return self._get_int("MAX_TOKENS_DEFAULT", 2000)
+        return self._get_int("MAX_TOKENS_DEFAULT", 4096)
 
     @property
     def TEMPERATURE_DEFAULT(self) -> float:

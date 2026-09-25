@@ -313,4 +313,15 @@ async def get_readiness_check() -> Dict[str, Any]:
         "timestamp": time.time(),
         "redis": redis_health.healthy,
         "database": db_health.healthy,
+        # Informativo: sem os modelos locais aquecidos o roteador ainda atende pela nuvem.
+        "ollama_warmed_at": _ollama_warmed_at(),
     }
+
+
+def _ollama_warmed_at():
+    try:
+        from .services.ollama_preload import ollama_warmed_at
+
+        return ollama_warmed_at()
+    except Exception:
+        return None

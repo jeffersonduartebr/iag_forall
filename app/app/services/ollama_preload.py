@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import List, Sequence, Set
 
 from app.providers_async import (
@@ -137,6 +138,9 @@ async def preload_ollama_models() -> None:
     Warmup is best-effort by design — the router must be able to start and
     serve cloud traffic even with no local daemon at all.
     """
+    if not _claim_warmup():
+        logger.info("[ollama-preload] Outro worker já está aquecendo; este não repete.")
+        return
     try:
         logger.info("[ollama-preload] Iniciando verificação...")
         configured = get_configured_ollama_warm_models()
@@ -145,6 +149,61 @@ async def preload_ollama_models() -> None:
             return
         await pull_missing(models)
         await warm_runtimes(models, configured)
+        _mark_warm()
         logger.info("[ollama-preload] Concluído.")
     except Exception as e:
         logger.exception(f"[ollama-preload] Erro geral: {e}")
+    finally:
+        _release_warmup()  # uma trava esquecida impediria o aquecimento do próximo deploy
+
+
+#: Cada worker uvicorn roda o startup: sem a trava, os dois aqueciam os mesmos modelos ao mesmo tempo e a GPU
+#: recebia cargas em dobro (a tempestade de cold start da carga do Caso 1).
+WARMUP_LOCK_KEY, WARMUP_DONE_KEY = "warmup:ollama:lock", "warmup:ollama:done"
+
+
+def _redis():
+    try:
+        from app.utils.redis_client import get_redis_sync_nonblocking
+
+        return get_redis_sync_nonblocking()
+    except Exception:
+        return None
+
+
+def _claim_warmup() -> bool:
+    """One warmup per deployment: the first worker to take the lock does it; no Redis means each warms alone."""
+    rds = _redis()
+    if rds is None:
+        return True
+    try:
+        return bool(rds.set(WARMUP_LOCK_KEY, os.getpid(), nx=True, ex=int(PULL_TIMEOUT_S)))
+    except Exception:
+        return True
+
+
+def _release_warmup() -> None:
+    _quiet_redis(lambda rds: rds.delete(WARMUP_LOCK_KEY))
+
+
+def _mark_warm() -> None:
+    _quiet_redis(lambda rds: rds.set(WARMUP_DONE_KEY, f"{time.time():.0f}", ex=86400))
+
+
+def _quiet_redis(op) -> None:
+    rds = _redis()
+    try:
+        if rds is not None:
+            op(rds)
+    except Exception as exc:
+        logger.debug("[ollama-preload] Redis indisponível para a marca de aquecimento: %s", exc)
+
+
+def ollama_warmed_at() -> float | None:
+    """Epoch of the last completed warmup (None when never, or when Redis cannot tell)."""
+    rds = _redis()
+    try:
+        valor = rds.get(WARMUP_DONE_KEY) if rds is not None else None
+        return float(valor) if valor else None
+    except Exception:
+        return None

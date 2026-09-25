@@ -194,13 +194,17 @@ async def get_redis_async():
         except Exception:
             _async_redis_client = None
 
+    # A trava (threading) só protege a criação do cliente, nunca um await: segurá-la durante o ping deixava
+    # a segunda corrotina concorrente bloqueando a thread do event loop para sempre (deadlock).
+    try:
+        import redis.asyncio as aioredis
+    except Exception as exc:
+        logger.warning("[redis_client] Async Redis unavailable: %s", exc)
+        return None
     with _async_redis_lock:
-        if _async_redis_client is not None:
-            return _async_redis_client
-        try:
-            import redis.asyncio as aioredis
-
-            _async_redis_client = aioredis.Redis(
+        client = _async_redis_client
+        if client is None:
+            client = _async_redis_client = aioredis.Redis(
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 db=REDIS_DB,
@@ -209,11 +213,15 @@ async def get_redis_async():
                 socket_timeout=REDIS_SOCKET_TIMEOUT,
                 socket_connect_timeout=REDIS_SOCKET_CONNECT_TIMEOUT,
             )
-            await _async_redis_client.ping()
-            return _async_redis_client
-        except Exception as exc:
-            logger.warning("[redis_client] Async Redis unavailable: %s", exc)
-            return None
+    try:
+        await client.ping()
+        return client
+    except Exception as exc:
+        logger.warning("[redis_client] Async Redis unavailable: %s", exc)
+        with _async_redis_lock:
+            if _async_redis_client is client:
+                _async_redis_client = None
+        return None
 
 
 async def close_redis_async() -> None:

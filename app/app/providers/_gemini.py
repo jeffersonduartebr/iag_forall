@@ -12,6 +12,7 @@ from typing import Any, Dict, NamedTuple, Optional
 
 import app.providers_async as _pa
 from app import provider_tools as ptools  # type: ignore[attr-defined]
+from app.services.orcamento_tempo import orcamento_raciocinio, tokens_totais
 from app.utils.breaker_async import guarded_by
 from app.utils.executors import run_blocking_provider
 
@@ -121,7 +122,13 @@ class GeminiProvider(BaseProvider):
         @staticmethod
         def _generate_genai(model_name: str, contents: list, options: "_GenOptions"):
             """``google-genai`` SDK: one client call with everything in ``config``."""
-            config: Dict[str, Any] = {"temperature": options.temperature, "max_output_tokens": options.max_tokens}
+            # O raciocínio conta dentro de max_output_tokens: sem a folga, o pensamento consumia o teto da
+            # resposta. thinking_budget limita o que ele pode gastar.
+            config: Dict[str, Any] = {
+                "temperature": options.temperature,
+                "max_output_tokens": tokens_totais(options.max_tokens),
+                "thinking_config": {"thinking_budget": orcamento_raciocinio()},
+            }
             if options.system_instruction:
                 config["system_instruction"] = options.system_instruction
             if options.tools:

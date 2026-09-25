@@ -27,7 +27,7 @@ def env(monkeypatch):
         calls.append(kwargs)
         return "resposta incumbente", {"usage": {}}
 
-    async def judge_answer(query, answer):
+    async def judge_answer(query, answer, **kwargs):
         return [{"score": 8.0}, {"score": 6.0}, {"error": "timeout"}]
 
     deps = {

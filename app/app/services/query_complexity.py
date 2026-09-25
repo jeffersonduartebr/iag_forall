@@ -6,6 +6,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from .orcamento_tempo import prazo_da_requisicao
+
 _EXPERT_HINTS = (
     "system design",
     "distributed lock",
@@ -153,8 +155,12 @@ def apply_complexity_runtime_adjustments(
     deadline_bonus = _COMPLEXITY_SYNC_DEADLINE_BONUS.get(complexity, 0)
 
     effective_max_tokens = max(int(max_tokens), min_tokens)
-    effective_sync_deadline = int(sync_deadline_seconds * multiplier) + deadline_bonus
     effective_provider_timeout = int(provider_timeout_seconds * multiplier) + max(0, deadline_bonus - 5)
+    # O prazo fixo por workload não cabia uma resposta longa (nem a cota de raciocínio) e não deixava tempo
+    # para o fallback: ele passa a crescer com os tokens pedidos, até PRAZO_MAXIMO_S.
+    effective_sync_deadline = int(
+        prazo_da_requisicao(effective_max_tokens, int(sync_deadline_seconds * multiplier) + deadline_bonus)
+    )
 
     theme = None
     benchmark_id = None

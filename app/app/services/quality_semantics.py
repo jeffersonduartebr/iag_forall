@@ -58,14 +58,30 @@ def current_semantics() -> str:
     return value
 
 
+#: A study period (e.g. ``2026s2``) gets its own learned state: a period's bandit starts from its own prior
+#: and the previous period's state stays frozen and readable, instead of one policy spanning both.
+POLICY_NAMESPACE_KEY = "BANDIT_POLICY_NAMESPACE"
+
+
+def policy_namespace() -> Optional[str]:
+    """The operator-set period namespace, or ``None`` when unset (only ``[A-Za-z0-9_.-]`` survives)."""
+    try:
+        raw = str(settings.get(POLICY_NAMESPACE_KEY, "") or "").strip()
+    except Exception:
+        return None
+    clean = "".join(ch for ch in raw if ch.isalnum() or ch in "_.-")
+    return clean or None
+
+
 def state_namespace() -> Optional[str]:
-    """The prefix for learned state, or ``None`` under the legacy semantics.
+    """The prefix for learned state, or ``None`` under the legacy semantics and no period.
 
     ``None`` is what makes the default a no-op: every existing Redis key and
     every existing row keeps the identifier it already has.
     """
     semantics = current_semantics()
-    return None if semantics == DEFAULT_SEMANTICS else semantics
+    parts = [p for p in (None if semantics == DEFAULT_SEMANTICS else semantics, policy_namespace()) if p]
+    return ":".join(parts) or None
 
 
 def namespaced(value: str) -> str:

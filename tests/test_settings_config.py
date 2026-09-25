@@ -18,7 +18,7 @@ from app.settings_dynamic import DynamicSettings
 def test_settings_catalog_is_flattened_from_domains():
     """Flattened defaults should preserve domain keys and metadata."""
     assert "runtime" in SETTINGS_BY_DOMAIN
-    assert SETTINGS_DEFAULTS["MAX_TOKENS_DEFAULT"] == "2000"
+    assert SETTINGS_DEFAULTS["MAX_TOKENS_DEFAULT"] == "4096"
     assert SETTING_METADATA["MAX_TOKENS_DEFAULT"]["domain"] == "runtime"
     assert "OLLAMA_HOST" in known_setting_keys()
 

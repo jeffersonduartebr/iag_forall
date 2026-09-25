@@ -26,7 +26,6 @@ def _ctx(**deps_overrides):
         "settings": settings,
         "BLOCKED_PREFIXES": ("blocked/",),
         "logger": SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, debug=lambda *a, **k: None),
-        "_is_error_budget_exceeded": lambda: False,
         "ProviderCallError": _ProviderCallError,
         "_safe_setting_int": lambda key, default: default,
     }
@@ -60,13 +59,27 @@ async def test_resolve_candidates_filters_and_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_error_budget_forces_local_models(monkeypatch):
+async def test_a_provider_over_its_error_budget_is_routed_around(monkeypatch):
+    """Only the failing provider leaves the pool; the old global budget forced local-only instead."""
     monkeypatch.setattr(rs, "filter_configured_model_names", lambda models: list(models))
 
-    async def exceeded():
-        return True
+    async def ollama_failing():
+        return {"ollama"}
 
-    assert await rs.resolve_candidates(_ctx(_is_error_budget_exceeded_async=exceeded)) == ["ollama/gemma3:4b"]
+    assert await rs.resolve_candidates(_ctx(providers_over_budget=ollama_failing)) == ["openai/gpt-5.5"]
+
+
+@pytest.mark.asyncio
+async def test_when_every_provider_is_over_budget_all_candidates_stay(monkeypatch):
+    monkeypatch.setattr(rs, "filter_configured_model_names", lambda models: list(models))
+
+    async def all_failing():
+        return {"ollama", "openai"}
+
+    assert await rs.resolve_candidates(_ctx(providers_over_budget=all_failing)) == [
+        "openai/gpt-5.5",
+        "ollama/gemma3:4b",
+    ]
 
 
 def test_restrict_to_tool_models_rejects_when_none_capable(monkeypatch):
@@ -110,27 +123,19 @@ def test_finalize_success_reports_fallback():
     assert (outcome.chosen, outcome.fallback_used, outcome.retry_count) == ("m2", True, 1)
 
 
-@pytest.mark.asyncio
-async def test_error_budget_never_forces_local_models_with_open_breakers(monkeypatch):
-    """Production (2026-09-24): forcing locals whose breaker was open failed every request and kept the error
-    budget exceeded forever (89/100 queries in 502). Without a healthy local model, keep all candidates."""
-    monkeypatch.setattr(rs, "filter_configured_model_names", lambda models: list(models))
-    monkeypatch.setattr(rs, "_saudavel", lambda model: False)
+def test_decision_record_flags_an_exploratory_bandit_pick():
+    """The per-model comparison must separate what the bandit chose to learn from what it chose to exploit."""
+    from app.services.bandit_policy import LAST_CHOICE, meta_combine_choices
+    from app.services.route_decision import Candidate
 
-    async def exceeded():
-        return True
-
-    assert await rs.resolve_candidates(_ctx(_is_error_budget_exceeded_async=exceeded)) == ["openai/gpt-5.5", "ollama/gemma3:4b"]
-    monkeypatch.setattr(rs, "_saudavel", lambda model: True)
-    assert await rs.resolve_candidates(_ctx(_is_error_budget_exceeded_async=exceeded)) == ["ollama/gemma3:4b"]
-
-
-def test_health_check_uses_the_breaker_and_tolerates_errors(monkeypatch):
-    from types import SimpleNamespace
-
-    import app.reliability as rel
-
-    monkeypatch.setattr(rel, "get_circuit_breaker_manager", lambda: SimpleNamespace(is_available=lambda m: m == "ollama/ok"))
-    assert rs._saudavel("ollama/ok") and not rs._saudavel("ollama/aberto")
-    monkeypatch.setattr(rel, "get_circuit_breaker_manager", lambda: (_ for _ in ()).throw(RuntimeError("x")))
-    assert rs._saudavel("ollama/qualquer")
+    stats = {"a": {"mean": 0.9, "count": 50}, "b": {"mean": 0.1, "count": 50}}
+    meta_combine_choices(["a", "b"], stats, default_epsilon=0.0, preferred_strategy="epsilon_greedy")
+    ctx = _ctx()
+    ctx.scored_candidates = [Candidate(model="a", quality=1, latency_s=1, cost_usd=0, risk=0, score=1)]
+    assert rs._decision_record(ctx, "b", ["a", "b"], 0.1)["bandit"]["explored"] is True
+    assert rs._decision_record(ctx, "a", ["a", "b"], 0.1)["bandit"] == {
+        "greedy": "a",
+        "votes": LAST_CHOICE.get()["votes"],
+        "strategy": "epsilon_greedy",
+        "explored": False,
+    }

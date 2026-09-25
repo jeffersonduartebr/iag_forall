@@ -46,7 +46,7 @@ async def test_router_feedback_paths_cover_judge_and_fallback_quality():
         def set(self, key, value):
             self.data[key] = value
 
-    async def _judge_answer(query, answer):
+    async def _judge_answer(query, answer, evaluated_model=None):
         return [{"score": 0.8}, {"score": 1.0}]
 
     async def _to_thread(fn, *args, **kwargs):
@@ -278,7 +278,7 @@ async def test_router_feedback_covers_failure_branches():
         def set(self, key, value):
             raise RuntimeError("history fail")
 
-    async def _judge_answer(query, answer):
+    async def _judge_answer(query, answer, evaluated_model=None):
         return [{"score": 0.8}]
 
     async def _store_cache(**kwargs):

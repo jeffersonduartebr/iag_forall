@@ -157,7 +157,7 @@ async def judge_quality(deps: Dict[str, Any], fb: FeedbackRequest, risk: ErrorRi
         f"(p={decision.probability:.2f}, pred_err={risk.predicted_error_prob:.2f})"
     )
     try:
-        scores = await deps["judge_answer"](fb.query, fb.answer)
+        scores = await deps["judge_answer"](fb.query, fb.answer, evaluated_model=fb.chosen_model)
         valid = [s["score"] for s in scores if "score" in s]
         value = round((float(np.mean(valid)) if valid else 5.0) * 10.0, 2)
         heuristic_only = bool(scores) and all(s.get("judge_id") == "heuristic_fallback" for s in scores)

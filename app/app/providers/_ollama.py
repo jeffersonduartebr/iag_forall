@@ -370,7 +370,7 @@ async def warm_ollama_model_runtime(model_name: str) -> bool:
                 "prompt": "Reply only with OK.",
                 "stream": False,
                 "think": False,
-                "keep_alive": "15m",
+                # Sem keep_alive próprio: vale o OLLAMA_KEEP_ALIVE do servidor, o mesmo dos pedidos reais.
                 "options": {
                     "temperature": 0.0,
                     "num_predict": 4,

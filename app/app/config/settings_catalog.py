@@ -28,8 +28,8 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "ROADMAP_AUTO_DDL": "1",
     },
     "runtime": {
-        "MAX_TOKENS_DEFAULT": "2000",
-        "ROUTER_SIMPLE_QUERY_MAX_TOKENS": "512",
+        "MAX_TOKENS_DEFAULT": "4096",
+        "ROUTER_SIMPLE_QUERY_MAX_TOKENS": "1024",
         "ROUTER_SIMPLE_TEXT_MAX_FALLBACKS": "1",
         "TEMPERATURE_DEFAULT": "0.55",
         "QUERY_LOG_RETENTION_DAYS": "7",
@@ -270,6 +270,20 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         # não dá para outra tentativa.
         "REQUEST_FALLBACK_ENABLED": "1",
         "REQUEST_MAX_FALLBACKS": "2",
+        # Orçamento de tempo por vazão medida (services/orcamento_tempo.py): o prazo de cada chamada é
+        # latência inicial + tokens pedidos / tokens-por-segundo do modelo (EMA no Redis), e o da
+        # requisição cresce com max_tokens até PRAZO_MAXIMO_S, reservando tempo para um fallback.
+        "TPS_PADRAO_LOCAL": "10",
+        "TPS_PADRAO_NUVEM": "40",
+        "LATENCIA_INICIAL_S": "4",
+        "RESERVA_FALLBACK_S": "45",
+        "PRAZO_MAXIMO_S": "240",
+        # Cota de raciocínio (thinking) dos modelos de nuvem, somada ao teto da resposta visível:
+        # sem ela o raciocínio consumia max_tokens e a resposta vinha vazia.
+        "REASONING_BUDGET_TOKENS": "4096",
+        # Período de estudo (ex.: 2026s2): estado do bandit/EMA próprio por período (quality_semantics).
+        # Vazio = sem prefixo (o estado existente continua com as mesmas chaves).
+        "BANDIT_POLICY_NAMESPACE": "",
         "CIRCUIT_BREAKER_FAIL_MAX": "5",
         "CIRCUIT_BREAKER_RESET_TIMEOUT": "60",
         "CIRCUIT_BREAKER_LOCAL_FAIL_MAX": "3",
