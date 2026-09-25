@@ -173,7 +173,7 @@ class GeminiProvider(BaseProvider):
         gem_tools = None
         gem_tool_config = None
         gem_contents = None
-        gem_system = None
+        gem_system = kwargs.get("system_prompt") or None  # system_instruction nativo também no turno único
         if tools and not ptools.tools_disabled(tool_choice):
             gem_tools = ptools.to_gemini_tools(tools)
             gem_tool_config = ptools.to_gemini_tool_config(tool_choice)

@@ -143,13 +143,11 @@ async def check_vectorstore_health() -> ComponentHealth:
                 details={"collections": len(collections), "mode": "remote", "host": chroma_host},
             )
 
-        import chromadb
-        chroma_path = os.getenv("CHROMA_PERSIST_PATH", os.getenv("CHROMA_PATH", "/data/chroma"))
+        # O mesmo cliente do processo: abrir um PersistentClient novo a cada /health criava um segundo índice
+        # HNSW em memória sobre o mesmo diretório.
+        from .vectorstore import get_chroma_client
 
-        from .vectorstore import chroma_client_settings
-
-        client = chromadb.PersistentClient(path=chroma_path, settings=chroma_client_settings())
-        collections = client.list_collections()
+        collections = get_chroma_client().list_collections()
         latency_ms = (time.time() - start) * 1000
 
         return ComponentHealth(

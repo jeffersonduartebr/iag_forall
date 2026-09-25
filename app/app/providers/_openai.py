@@ -85,7 +85,9 @@ class OpenAIProvider(BaseProvider):
             else:
                 api_args["max_tokens"] = max_tokens
                 api_args["temperature"] = temperature
-            api_args.update(self._reasoning_args(max_tokens))
+            api_args.update(self._reasoning_args(model, max_tokens))
+            if "max_tokens" in api_args:
+                api_args.pop("max_completion_tokens", None)  # um teto só: o do provedor que reescreveu os args
 
             # Sem isto o SDK usa o seu default de 600 s e o `timeout_seconds`
             # calculado pelo router era simplesmente ignorado.
@@ -101,7 +103,9 @@ class OpenAIProvider(BaseProvider):
             p_tok = usage.prompt_tokens if usage else 0
             c_tok = usage.completion_tokens if usage else 0
 
-            cost = get_model_cost(model, p_tok, c_tok)
+            # O OpenRouter devolve o custo real (com desconto de cache e raciocínio cobrado); o catálogo é o fallback.
+            cost_real = (getattr(usage, "model_extra", None) or {}).get("cost") if usage else None
+            cost = float(cost_real) if isinstance(cost_real, (int, float)) else get_model_cost(model, p_tok, c_tok)
             latency = time.time() - start
             self._record_metrics(model, latency, cost, True)
             self._record_generation_metrics(model, c_tok, latency)
@@ -131,7 +135,7 @@ class OpenAIProvider(BaseProvider):
         finally:
             self._release_slot(model)
 
-    def _reasoning_args(self, max_tokens: int) -> Dict[str, Any]:
+    def _reasoning_args(self, model: str, max_tokens: int) -> Dict[str, Any]:
         """OpenAI reasoning models take the quota inside ``max_completion_tokens`` (set above)."""
         return {}
 
@@ -146,15 +150,23 @@ class OpenRouterProvider(OpenAIProvider):
         self._refresh_client()
         BaseProvider.__init__(self, "openrouter", concurrency_limit=100)
 
-    def _reasoning_args(self, max_tokens: int) -> Dict[str, Any]:
-        """Unified ``reasoning`` param: caps thinking and leaves ``max_tokens`` for the visible answer.
+    def _reasoning_args(self, model: str, max_tokens: int) -> Dict[str, Any]:
+        """Reasoning quota, output ceiling and provider policy for one OpenRouter call.
 
-        OpenRouter counts reasoning inside ``max_tokens``; models that do not reason ignore the param.
+        - OpenRouter counts reasoning inside ``max_tokens``, so the ceiling is answer + quota. OpenAI models only
+          accept ``reasoning.effort`` (not ``max_tokens``); the others take the token budget. Models that do
+          not reason ignore the param (https://openrouter.ai/docs/use-cases/reasoning-tokens).
+        - ``data_collection: deny`` routes only to providers that do not retain or train on prompts: the traffic
+          carries minors' submissions (LGPD) (https://openrouter.ai/docs/features/provider-routing).
         """
+        extra: Dict[str, Any] = {"provider": {"data_collection": "deny"}}
+        args: Dict[str, Any] = {"extra_body": extra}
         budget = orcamento_raciocinio()
-        if not budget:
-            return {}
-        return {"max_tokens": tokens_totais(max_tokens), "extra_body": {"reasoning": {"max_tokens": budget}}}
+        if budget:
+            args["max_tokens"] = tokens_totais(max_tokens)
+            openai = str(model).startswith("openai/")
+            extra["reasoning"] = {"effort": "medium"} if openai else {"max_tokens": budget}
+        return args
 
     def _refresh_client(self) -> None:
         from app.openrouter_catalog import get_openrouter_api_key

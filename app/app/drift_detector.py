@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 REDIS_KEY_BASELINE_CENTROID = "drift:baseline_centroid"
 REDIS_KEY_RECENT_EMBEDDINGS = "drift:recent_embeddings"
 REDIS_KEY_DRIFT_STATS = "drift:stats"
+BASELINE_READY_SAMPLES = 50
 
 
 def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
@@ -195,7 +196,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         self._window_size = settings.DRIFT_WINDOW_SIZE
 
         # Update baseline if we don't have one or it's very small
-        if self._baseline_centroid is None or self._baseline_sample_count < 50:
+        if self._baseline_centroid is None or self._baseline_sample_count < BASELINE_READY_SAMPLES:
             self._update_baseline(emb_array)
             return {
                 "drift_detected": False,
@@ -233,8 +234,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             self._baseline_centroid = (self._baseline_centroid * n + new_embedding) / (n + 1)
             self._baseline_sample_count += 1
 
-        # Periodically save baseline
-        if self._baseline_sample_count % 100 == 0:
+        # Persist once the baseline becomes ready (recording stops growing it at
+        # BASELINE_READY_SAMPLES, so a %100 check alone would never fire) and periodically after.
+        if self._baseline_sample_count == BASELINE_READY_SAMPLES or self._baseline_sample_count % 100 == 0:
             self._save_baseline()
 
     def _check_drift(self) -> Dict[str, Any]:
@@ -252,14 +254,14 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             return {"drift_detected": False, "drift_score": 0.0, "message": "No recent data"}
 
         # Compute drift score
-        drift_score = cosine_distance(self._baseline_centroid, recent_centroid)
+        drift_score = float(cosine_distance(self._baseline_centroid, recent_centroid))
         self._last_drift_score = drift_score
 
         # Update Prometheus metric
         QUERY_DRIFT_SCORE.set(drift_score)
 
         # Check if drift exceeds threshold
-        drift_detected = drift_score > self._threshold
+        drift_detected = bool(drift_score > self._threshold)  # plain bool: numpy.bool_ breaks json.dumps
 
         if drift_detected:
             self._drift_events += 1
@@ -287,7 +289,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
             "window_size": self._window_size,
             "recent_samples": len(self._recent_embeddings),
             "baseline_samples": self._baseline_sample_count,
-            "baseline_ready": self._baseline_centroid is not None and self._baseline_sample_count >= 50,
+            "baseline_ready": self._baseline_centroid is not None and self._baseline_sample_count >= BASELINE_READY_SAMPLES,
             "drift_rate": (
                 round(self._drift_events / self._total_queries, 4)
                 if self._total_queries > 0

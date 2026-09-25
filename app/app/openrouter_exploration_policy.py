@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -231,15 +232,7 @@ def _enrich_models_with_cost_comparison(models: List[Dict[str, Any]]) -> Dict[st
         for m in models
         if m.get("mean_observed_usd_per_1k") is not None and int(m.get("observed_cost_samples", 0)) > 0
     ]
-    pool_median = 0.0
-    if observed_values:
-        sorted_vals = sorted(observed_values)
-        mid = len(sorted_vals) // 2
-        pool_median = (
-            sorted_vals[mid]
-            if len(sorted_vals) % 2 == 1
-            else (sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0
-        )
+    pool_median = float(statistics.median(observed_values)) if observed_values else 0.0
 
     for model in models:
         catalog = model.get("catalog_usd_per_1k") or {}
@@ -268,7 +261,8 @@ def _price_within_budget(slug: str, cfg: ExplorationConfig) -> bool:
     pricing = get_openrouter_pricing_per_1k(slug)
     if not pricing:
         return True
-    return pricing["in"] <= cfg.max_price_prompt_per_1k and pricing["out"] <= cfg.max_price_completion_per_1k
+    # Preço negativo ("-1" no catálogo) = preço variável (ex.: openrouter/auto): sem teto possível, fica de fora.
+    return 0.0 <= pricing["in"] <= cfg.max_price_prompt_per_1k and 0.0 <= pricing["out"] <= cfg.max_price_completion_per_1k
 
 
 def _provider_allowed(slug: str, cfg: ExplorationConfig) -> bool:
@@ -296,6 +290,20 @@ def _pick_ucb_from_pool(pool: List[str], stats_map: Dict[str, Dict[str, Any]]) -
     return best_model
 
 
+def _next_judge_stats(stats: Dict[str, Any], judge_quality: Optional[float]) -> Dict[str, Any]:
+    """Judge mean over judged outcomes only; an unjudged outcome keeps (not erases) the judge history."""
+    carried = {k: stats[k] for k in ("judge_samples", "last_judge_quality", "mean_judge_quality") if k in stats}
+    if judge_quality is None:
+        return carried
+    samples = int(stats.get("judge_samples", 1 if "mean_judge_quality" in stats else 0)) + 1
+    prev = float(stats.get("mean_judge_quality", judge_quality))
+    return {
+        "judge_samples": samples,
+        "last_judge_quality": round(float(judge_quality), 2),
+        "mean_judge_quality": round(_running_mean(prev, samples, float(judge_quality)), 2),
+    }
+
+
 def next_exploration_stats(
     stats: Dict[str, Any],
     *,
@@ -315,14 +323,8 @@ def next_exploration_stats(
     prev_mean_cost = float(stats.get("mean_cost_usd", 0.0))
     prev_mean_observed = float(stats.get("mean_observed_usd_per_1k", 0.0))
     observed_samples = int(stats.get("observed_cost_samples", 0))
-    failure_count = int(stats.get("failure_count", 0))
-    consecutive_failures = int(stats.get("consecutive_failures", 0))
-
-    if not success:
-        failure_count += 1
-        consecutive_failures += 1
-    else:
-        consecutive_failures = 0
+    failure_count = int(stats.get("failure_count", 0)) + (0 if success else 1)
+    consecutive_failures = 0 if success else int(stats.get("consecutive_failures", 0)) + 1
 
     mean_reward = _running_mean(prev_mean_reward, count, reward)
     mean_latency = _running_mean(prev_mean_latency, count, latency_s)
@@ -354,10 +356,9 @@ def next_exploration_stats(
         "last_completion_tokens": int(completion_tokens),
         "updated_at": time.time(),
     }
-    if judge_quality is not None:
-        updated["last_judge_quality"] = round(float(judge_quality), 2)
-        prev_judge = float(stats.get("mean_judge_quality", judge_quality))
-        updated["mean_judge_quality"] = round(_running_mean(prev_judge, count, float(judge_quality)), 2)
+    updated.update(_next_judge_stats(stats, judge_quality))
+    if stats.get("auto_promoted_at"):  # a promoção é permanente: sem isto o modelo era re-promovido
+        updated["auto_promoted_at"] = stats["auto_promoted_at"]
 
     if catalog_usd_per_1k:
         updated["catalog_usd_per_1k"] = {

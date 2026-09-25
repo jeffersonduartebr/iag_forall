@@ -39,6 +39,7 @@ except ImportError:
     # Optional dependency: fall back to a sentinel when the SDK is absent.
     OpenAIClient = None  # type: ignore[assignment,misc]
 
+from app.services.rag_esquema import CarregadorComRecuo, com_prefixo
 from app.settings_dynamic import settings
 from app.utils.redis_client import get_redis
 
@@ -125,20 +126,20 @@ EMBED_CACHE_TTL_S = 86400 * 7
 REDIS_KEY_PREFIX = "emb:v4"
 _rds = get_redis()
 
-# --- SINGLETON DO MODELO LOCAL ---
-# Carrega o modelo na memória na primeira chamada e mantém lá.
-_LOCAL_MODEL_INSTANCE = None
+# --- SINGLETON DO MODELO LOCAL (carga serializada, com recuo após falha) ---
+_CARREGADOR = CarregadorComRecuo(f"embeddings {EMBED_MODEL_TEXT}")
+
+
+def _carregar_modelo():
+    # trust_remote_code=True é necessário para Nomic
+    modelo = SentenceTransformer(EMBED_MODEL_TEXT, trust_remote_code=True)
+    modelo.eval()
+    return modelo
+
 
 def get_local_model():
-    """Lazily load and return the local SentenceTransformer embedding model."""
-    global _LOCAL_MODEL_INSTANCE
-    if _LOCAL_MODEL_INSTANCE is None and ST_AVAILABLE:
-        logger.info(f"[Embeddings] Carregando modelo local CPU: {EMBED_MODEL_TEXT}...")
-        # trust_remote_code=True é necessário para Nomic
-        _LOCAL_MODEL_INSTANCE = SentenceTransformer(EMBED_MODEL_TEXT, trust_remote_code=True)
-        # Otimização para CPU
-        _LOCAL_MODEL_INSTANCE.eval()
-    return _LOCAL_MODEL_INSTANCE
+    """Lazily load and return the local SentenceTransformer embedding model (None while unavailable)."""
+    return _CARREGADOR.obter(_carregar_modelo) if ST_AVAILABLE else None
 
 # ============================================================
 # Utils
@@ -205,11 +206,7 @@ def _local_cpu_embed(text: str) -> List[float]:
     if not model:
         raise RuntimeError("SentenceTransformers não instalado ou falha ao carregar.")
 
-    # Prefixo específico para Nomic v1.5 (Melhora qualidade)
-    if "nomic" in EMBED_MODEL_TEXT and not text.startswith("search_"):
-        text = f"search_query: {text}"
-
-    # Gera vetor
+    # Gera vetor (o prefixo de tarefa do Nomic já vem aplicado por embed_text)
     vec = model.encode(text, convert_to_numpy=True, show_progress_bar=False)  # sem barra "Batches" nos logs
     return vec.tolist()
 
@@ -217,11 +214,15 @@ def _local_cpu_embed(text: str) -> List[float]:
 # API PÚBLICA
 # ============================================================
 
-def embed_text(text: str) -> List[float]:
-    """Generate a text embedding with layered cache lookup and CPU-first fallback."""
+def embed_text(text: str, tarefa: str = "consulta") -> List[float]:
+    """Generate a text embedding with layered cache lookup and CPU-first fallback.
+
+    ``tarefa`` is ``"consulta"`` (queries, the default) or ``"documento"`` (corpus chunks at ingest).
+    """
     text = (text or "").strip()
     if not text:
         return [0.0]
+    text = com_prefixo(text, tarefa, EMBED_MODEL_TEXT)  # documento x consulta (Nomic)
 
     # Cache key
     key = f"{REDIS_KEY_PREFIX}:{EMBED_MODEL_TEXT}:{_hash_text(text, EMBED_MODEL_TEXT)}"

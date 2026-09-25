@@ -19,31 +19,26 @@ try:
 except ImportError:
     CE_AVAILABLE = False
 
+from .services.rag_esquema import CarregadorComRecuo
 from .settings_dynamic import settings
 
 logger = logging.getLogger(__name__)
 
-# Singleton para evitar recarga do modelo a cada request
-_RERANKER_INSTANCE = None
-# Modelo leve e rápido treinado no MS MARCO
-DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+# Um modelo por processo: carga serializada, e uma falha só é tentada de novo após o recuo.
+_CARREGADOR = CarregadorComRecuo("reranker")
+# Multilíngue (mMARCO, 14 línguas com português; ~118M parâmetros, viável em CPU). O anterior,
+# ms-marco-MiniLM-L-6-v2, só foi treinado em inglês e reordenava mal o acervo em português.
+DEFAULT_RERANK_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 
 def get_reranker_model():
     """Return reranker model.
 
 This helper centralizes retrieval logic so callers do not have to duplicate lookup behavior."""
-    global _RERANKER_INSTANCE
-    if _RERANKER_INSTANCE is None and CE_AVAILABLE:
-        model_name = settings.get("RERANK_MODEL", DEFAULT_RERANK_MODEL)
-        logger.info(f"[ReRanker] Carregando Cross-Encoder: {model_name}...")
-        # device='cpu' é geralmente suficiente para o MiniLM e evita VRAM thrashing com o LLM
-        try:
-            _RERANKER_INSTANCE = CrossEncoder(model_name, device="cpu")
-        except Exception as e:
-            logger.error(f"[ReRanker] Erro ao carregar modelo: {e}")
-            _RERANKER_INSTANCE = None
+    if not CE_AVAILABLE:
+        return None
+    model_name = settings.get("RERANK_MODEL", DEFAULT_RERANK_MODEL)
+    return _CARREGADOR.obter(lambda: CrossEncoder(model_name, device="cpu"))
 
-    return _RERANKER_INSTANCE
 
 def rerank_documents(query: str, documents: List[str], top_k: int = 3) -> List[str]:
     """

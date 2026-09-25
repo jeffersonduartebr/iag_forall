@@ -70,7 +70,7 @@ def test_combine_ratings_mean_dispersion_and_median():
 
 def test_build_rubric_prompt_anchors_accuracy_on_reference():
     prompt = jr.build_rubric_prompt("q?", "resp", reference="42", rag_context="ctx")
-    assert "GABARITO OFICIAL" in prompt and "42" in prompt and "ctx" in prompt
+    assert "<gabarito>42</gabarito>" in prompt and "ctx" in prompt
     assert '"clareza": <0-10>' in prompt
 
 

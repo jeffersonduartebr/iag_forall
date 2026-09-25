@@ -94,11 +94,33 @@ jobs:
       - name: Pytest (unit/default markers + coverage)
         run: |
           PYTHONPATH=app pytest -q tests -m "not integration and not slow and not contract" \
-            --cov=app/app --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=80
+            --cov=app/app --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=86
 
-      # CRAP = CC² × (1 − cov)³ + CC por função; falha em função nova acima de 30 ou que piorou
-      # (scripts/crap_baseline.json, mesmo desenho do limite de SLOC).
-      - name: CRAP ratchet
+      - name: Upload coverage for the CRAP gate
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-json
+          path: coverage.json
+          retention-days: 7
+
+  # CRAP = CC² × (1 − cov)³ + CC por função; falha em função acima de 30 (scripts/crap_baseline.json vazio:
+  # nada é tolerado). Job próprio e check obrigatório da main: uma falha de CRAP aparece com nome próprio.
+  # Lê o coverage.json do tests_unit em vez de rodar a suíte de novo.
+  crap:
+    runs-on: ubuntu-latest
+    needs: tests_unit
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-json
+      - name: ruff (mede a complexidade ciclomática; mesma versão do requirements-dev.lock)
+        run: pip install ruff==0.16.8
+      - name: CRAP <= 30
         run: python3 scripts/crap_report.py --coverage-json coverage.json
 
   tests_integration:

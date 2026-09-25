@@ -82,14 +82,6 @@ def _job_ttl_seconds() -> int:
         return DEFAULT_JOB_TTL_SECONDS
 
 
-def _job_pending_limit() -> int:
-    """Return the maximum number of pending queued jobs per identity."""
-    try:
-        return max(1, int(settings.get("QUERY_JOB_MAX_PENDING_PER_TENANT", DEFAULT_MAX_PENDING_PER_TENANT)))
-    except Exception:
-        return DEFAULT_MAX_PENDING_PER_TENANT
-
-
 def _job_pending_limit_for(identity_type: str) -> int:
     """Return the maximum pending queued jobs for one identity type."""
     setting_key = "QUERY_JOB_MAX_PENDING_PER_IP" if identity_type == "ip" else "QUERY_JOB_MAX_PENDING_PER_TENANT"
@@ -360,8 +352,8 @@ def update_query_job_record(job_id: str, **fields: Any) -> None:
         return
     payload = _json_loads(raw)
     payload.update(fields)
-    ttl = max(1, int(redis_client.ttl(_job_key(job_id)) or _job_ttl_seconds()))
-    redis_client.setex(_job_key(job_id), ttl, _json_dumps(payload))
+    ttl = int(redis_client.ttl(_job_key(job_id)) or 0)  # -1 (sem TTL) / -2 não viram 1 s
+    redis_client.setex(_job_key(job_id), ttl if ttl > 0 else _job_ttl_seconds(), _json_dumps(payload))
 
 
 def _job_timings(payload: Dict[str, Any]) -> tuple[float, float]:
@@ -418,8 +410,9 @@ def finalize_query_job(job_id: str, *, status: QueryJobStatus, result: Optional[
     if raw is None:
         return
     payload = _json_loads(raw)
-    payload["status"] = status.value
-    payload["finished_at"] = time.time()
+    # task_acks_late: a redelivered task finalizes the same job again; its pending slot was already released.
+    released = bool(payload.get("pending_released"))
+    payload.update(status=status.value, finished_at=time.time(), pending_released=True)
     if result is not None:
         payload["result"] = result
     if error is not None:
@@ -429,8 +422,10 @@ def finalize_query_job(job_id: str, *, status: QueryJobStatus, result: Optional[
     pending_key = _tenant_pending_key(_payload_pending_identity(payload))
     pipe = redis_client.pipeline()
     pipe.setex(_job_key(job_id), ttl, _json_dumps(payload))
-    pipe.decr(pending_key)
+    pipe.decrby(pending_key, 0 if released else 1)
     pipe.expire(pending_key, ttl)
     pipe.execute()
+    if released:
+        return
     _observe_finished_job(status, *_job_timings(payload))
     _notify_job_webhook(job_id, payload, status, result, error)

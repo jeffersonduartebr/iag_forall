@@ -117,6 +117,8 @@ class OllamaProvider(BaseProvider):
         }
         if image_b64:
             payload["images"] = [image_b64]
+        if kwargs.get("system_prompt"):
+            payload["system"] = kwargs["system_prompt"]  # papel system nativo, fora do texto do usuário
         if ollama_format is not None:
             payload["format"] = ollama_format
         resp = await client.post(f"{self.host}/api/generate", json=payload, timeout=timeout)

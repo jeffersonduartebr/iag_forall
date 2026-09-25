@@ -289,21 +289,15 @@ class TestLocalCpuEmbed:
     """Tests for local CPU embedding generation."""
 
     @patch('app.embeddings.get_local_model')
-    def test_local_cpu_embed_adds_prefix_for_nomic(self, mock_get_model):
-        """Test that Nomic models get search_query prefix."""
-        mock_model = MagicMock()
-        mock_model.encode.return_value = np.array([0.1, 0.2])
-        mock_get_model.return_value = mock_model
+    def test_nomic_task_prefix_separates_documents_from_queries(self, mock_get_model):
+        """Nomic v1.5 needs search_document for corpus chunks and search_query for queries (was query for both)."""
+        from app.services.rag_esquema import com_prefixo
 
-        from app.embeddings import _local_cpu_embed
-
-        # This assumes EMBED_MODEL_TEXT contains "nomic"
-        with patch('app.embeddings.EMBED_MODEL_TEXT', 'nomic-ai/nomic-embed-text-v1.5'):
-            _local_cpu_embed("test query")
-
-        # Verify the prefix was added
-        call_args = mock_model.encode.call_args
-        assert call_args[0][0].startswith("search_query:")
+        nomic = "nomic-ai/nomic-embed-text-v1.5"
+        assert com_prefixo("x", "documento", nomic) == "search_document: x"
+        assert com_prefixo("x", "consulta", nomic) == "search_query: x"
+        assert com_prefixo("search_query: x", "documento", nomic) == "search_query: x"
+        assert com_prefixo("x", "documento", "sentence-transformers/all-MiniLM-L6-v2") == "x"
 
     @patch('app.embeddings.get_local_model')
     def test_local_cpu_embed_returns_list(self, mock_get_model):
