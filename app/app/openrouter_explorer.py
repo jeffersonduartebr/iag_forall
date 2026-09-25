@@ -95,12 +95,9 @@ def _openrouter_configured() -> bool:
 
 
 async def _get_redis():
-    """The *async* Redis client: every caller awaits it.
-
-    ``get_redis_async_safe`` (a deprecated alias) returns the **sync** client despite its name. Awaiting its
-    ``set``/``get``/``incr`` raised "object bool can't be used in 'await' expression", swallowed by each caller:
-    in production (2026-09-25) no exploration stats were saved and the daily count/USD caps were never counted.
-    """
+    # O cliente *async*: todo chamador aguarda. ``get_redis_async_safe`` (alias obsoleto) devolve o cliente
+    # SÍNCRONO apesar do nome; aguardar seu set/get/incr falhava em silêncio (produção, 2026-09-25): stats de
+    # exploração nunca salvas e os tetos diários de contagem/USD nunca contados.
     from app.utils.redis_client import get_redis_async
 
     return await get_redis_async()
