@@ -96,15 +96,15 @@ def test_combine_ratings_exact_payload():
 
 def test_build_rubric_prompt_blocks():
     plain = jr.build_rubric_prompt("Q?", "A.")
-    assert "PERGUNTA: Q?" in plain and "RESPOSTA DO MODELO: A." in plain
+    assert "<pergunta>Q?</pergunta>" in plain and "<resposta_do_modelo>A.</resposta_do_modelo>" in plain
     assert "GABARITO" not in plain and "RAG" not in plain and "IMAGEM" not in plain
     assert "Avalie a precisão factual e lógica." in plain
     assert '{"clareza": <0-10>, "acuracia": <0-10>, "alinhamento": <0-10>}' in plain
 
     full = jr.build_rubric_prompt("Q?", "A.", reference="42", rag_context="ctx", image_description="gato")
-    assert "GABARITO OFICIAL (GROUND TRUTH): 42" in full
-    assert "Compare com o GABARITO OFICIAL" in full
-    assert "CONTEXTO ADICIONAL (RAG):\nctx" in full and "DESCRIÇÃO DA IMAGEM:\ngato" in full
+    assert "<gabarito>42</gabarito>" in full
+    assert "Compare com o gabarito oficial" in full
+    assert "<contexto>\nctx\n</contexto>" in full and "<imagem>\ngato\n</imagem>" in full
 
 
 @pytest.mark.parametrize(

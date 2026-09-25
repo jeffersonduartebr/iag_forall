@@ -94,7 +94,9 @@ async def test_internal_full_flow_with_pricing_fallback(monkeypatch):
     assert out["answer"] == "answer"
     assert out["cost_per_1k"] == pytest.approx(0.123)
     assert out["metadata"]["prompt_tokens"] == 10
-    assert "System prompt" in call_model.await_args.kwargs["prompt"]
+    # O system prompt segue no papel system nativo, não embutido no texto do usuário (antes ia duas vezes).
+    assert call_model.await_args.kwargs["system_prompt"] == "System prompt"
+    assert "System prompt" not in call_model.await_args.kwargs["prompt"]
 
 
 @pytest.mark.asyncio
@@ -119,7 +121,7 @@ async def test_internal_rag_fallback_when_augmented_prompt_fails(monkeypatch):
         use_rag=True,
     )
     assert out["answer"] == "fallback answer"
-    assert "SYS" in call_model.await_args.kwargs["prompt"]
+    assert call_model.await_args.kwargs["system_prompt"] == "SYS" and "SYS" not in call_model.await_args.kwargs["prompt"]
     assert "Pergunta fallback" in call_model.await_args.kwargs["prompt"]
 
 

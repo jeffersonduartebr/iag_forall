@@ -167,12 +167,12 @@ exactly one place, so a failure names a single cause.
 |---|---|---|
 | **SLOC < 200** per file (logical lines) | `scripts/check_file_length.py` | `lint_typecheck` |
 | **CC < 15** per function | `ruff` C901 (`max-complexity = 14`) | `lint_typecheck` |
-| **CRAP ≤ 30** per function | `scripts/crap_report.py` | `tests_unit` |
+| **CRAP ≤ 30** per function | `scripts/crap_report.py` | `crap` (reads `tests_unit`'s coverage) |
 
 CRAP = CC² × (1 − cov)³ + CC, so the three compound: every extra branch costs
-*squared* in risk and has to be paid for in coverage. CRAP lives in `tests_unit`
-because it reads the `coverage.json` that job produces; splitting it out would
-mean running the suite twice.
+*squared* in risk and has to be paid for in coverage. CRAP is its own required
+job, `crap`, which downloads the `coverage.json` artifact that `tests_unit`
+produces (the suite runs once).
 
 - **SLOC** is scoped to `app/app/` and `tests/`. The 44 files already over 200
   are grandfathered in `scripts/sloc_baseline.json` (ratchet: they may shrink,
@@ -181,7 +181,7 @@ mean running the suite twice.
   Refactor roadmap in `docs/SLOC_REFACTOR_ROADMAP.md`.
 - **CRAP** has an empty baseline (`scripts/crap_baseline.json` is `{}`): nothing
   is grandfathered, so the limit is real for every function in the repo.
-- Coverage (lines + branches) has its own CI floor (`--cov-fail-under=80`).
+- Coverage (lines + branches) has its own CI floor (`--cov-fail-under=86`).
 - Test tooling: fakeredis fixtures (`fake_redis`, `fake_aioredis`), `fake_clock` for TTLs
   (no real sleeps), hypothesis property tests (`tests/test_properties_*.py`), schemathesis
   contract tests (`pytest -m contract tests/contract`), benchmarks

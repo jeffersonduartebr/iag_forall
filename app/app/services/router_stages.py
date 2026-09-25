@@ -322,7 +322,7 @@ async def prepare_prompt(ctx: RouteContext, skip_rag: bool) -> Tuple[str, Dict[s
     build = ctx.deps["build_final_prompt"]
     if skip_rag:
         bundle = _empty_bundle(ctx, "runtime_bypass", "no_retrieval")
-        return build(query=ctx.query, system_prompt=ctx.system_prompt, use_rag=False, rag_text=None), bundle
+        return build(query=ctx.query, use_rag=False, rag_text=None), bundle
     started = time.time()
     try:
         augmented, bundle = await _retrieve(ctx)
@@ -331,14 +331,13 @@ async def prepare_prompt(ctx: RouteContext, skip_rag: bool) -> Tuple[str, Dict[s
             bundle["grounded"] = False
         prompt = build(
             query=ctx.query,
-            system_prompt=ctx.system_prompt,
             use_rag=has_context,
             rag_text=augmented if has_context else None,
         )
         return prompt, bundle
     except Exception as exc:
         ctx.deps["logger"].warning(f"[router] RAG fail: {exc}")
-        prompt = build(query=ctx.query, system_prompt=ctx.system_prompt, use_rag=True, rag_text=None)
+        prompt = build(query=ctx.query, use_rag=True, rag_text=None)
         return prompt, _empty_bundle(ctx, "rag_failure", "full_retrieval")
     finally:
         ctx.observe_stage("retrieval", started)

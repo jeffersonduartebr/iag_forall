@@ -77,9 +77,7 @@ def deps_for_execution():
         "is_ollama_model_verified": lambda name: False,
         "_ensure_ollama_model": lambda name: None,
         "build_augmented_prompt": None,
-        "build_final_prompt": lambda **kwargs: (
-            f"{kwargs['system_prompt']}::{kwargs['query']}::{kwargs.get('rag_text')}"
-        ),
+        "build_final_prompt": lambda **kwargs: f"{kwargs['query']}::{kwargs.get('rag_text')}",
         "_safe_setting_bool": lambda key, default=False: False,
         "_safe_setting_int": lambda key, default=2: 2,
         "call_model": None,

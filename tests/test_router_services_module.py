@@ -10,10 +10,11 @@ def test_normalize_modality_and_final_prompt_paths():
     assert rs.normalize_modality("text", "img") == "vision"
     assert rs.normalize_modality("", None) == "text"
 
-    assert rs.build_final_prompt("Q", "SYS", use_rag=False, rag_text=None) == "SYS\n\nUsuário: Q"
-    assert rs.build_final_prompt("Q", "", use_rag=False, rag_text=None) == "Q"
-    assert rs.build_final_prompt("Q", "SYS", use_rag=True, rag_text=None) == "SYS\n\nUsuário: Q"
-    assert rs.build_final_prompt("Q", "", use_rag=True, rag_text="CTX") == "CTX"
+    # O system prompt vai no papel system nativo de cada provedor; nunca embutido no texto do usuário.
+    assert rs.build_final_prompt("Q", use_rag=False, rag_text=None) == "Q"
+    assert rs.build_final_prompt("Q", use_rag=True, rag_text=None) == "Q"
+    assert rs.build_final_prompt("Q", use_rag=True, rag_text="CTX") == "CTX"
+    assert rs.build_final_prompt("Q", use_rag=False, rag_text="CTX") == "Q"
 
 
 def test_parse_meta_cost_uses_explicit_and_fallback_cost_paths():
