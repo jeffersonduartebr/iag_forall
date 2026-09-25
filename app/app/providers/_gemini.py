@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Dict, NamedTuple, Optional
@@ -31,20 +32,30 @@ from ._infra import (
 )
 
 _CLIENTES: Dict[tuple, Any] = {}
+_TRAVA_CLIENTES = threading.Lock()
 
 
 def _cliente_genai():
     """``google-genai`` client: Vertex AI (billed to GEMINI_VERTEX_PROJECT) when configured, else the API key.
 
     Reused per configuration: a Vertex client holds the refreshed OAuth token of the VM's service account.
+    Created under a lock: calls run in the provider thread pool, and concurrent first calls each built a client
+    and overwrote the cache entry; the replaced client was garbage-collected, closing its HTTP connection under
+    the thread still using it ("Cannot send a request, as the client has been closed" — production, 2026-09-25).
     """
     chave = (id(google_genai), GEMINI_VERTEX_PROJECT, GEMINI_VERTEX_LOCATION, _pa.GEMINI_API_KEY)
-    if chave not in _CLIENTES:
-        if GEMINI_VERTEX_PROJECT:
-            _CLIENTES[chave] = google_genai.Client(vertexai=True, project=GEMINI_VERTEX_PROJECT, location=GEMINI_VERTEX_LOCATION)
-        else:
-            _CLIENTES[chave] = google_genai.Client(api_key=_pa.GEMINI_API_KEY or None)
-    return _CLIENTES[chave]
+    cliente = _CLIENTES.get(chave)
+    if cliente is not None:
+        return cliente
+    with _TRAVA_CLIENTES:
+        if chave not in _CLIENTES:
+            if GEMINI_VERTEX_PROJECT:
+                _CLIENTES[chave] = google_genai.Client(
+                    vertexai=True, project=GEMINI_VERTEX_PROJECT, location=GEMINI_VERTEX_LOCATION
+                )
+            else:
+                _CLIENTES[chave] = google_genai.Client(api_key=_pa.GEMINI_API_KEY or None)
+        return _CLIENTES[chave]
 
 
 def _tokens_cobrados(resp: Any) -> Optional[tuple[int, int]]:

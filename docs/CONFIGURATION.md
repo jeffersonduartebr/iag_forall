@@ -164,7 +164,7 @@ Todas as chaves entram no manifesto do experimento (`experiment_manifest`).
   - OpenRouter: sempre desconhecida.
   - Com `SHADOW_REQUIRED_CLOUD_REGION` preenchido, região desconhecida é recusada.
   - Em 25/09/2026, de 13 modelos testados em southamerica-east1, só `gemini-2.5-flash` é servido lá.
-- **Custo:** fica separado do sistema, nas métricas `aristo_shadow_*` expostas pelo worker (`WORKER_METRICS_PORT`, job `celery_feedback_worker`). O custo das chamadas em sombra não entra nas métricas de custo nem de eficiência do roteador.
+- **Custo:** fica separado do sistema, nas métricas `aristo_shadow_*` expostas pelo worker dedicado `celery_shadow_worker` (`WORKER_METRICS_PORT=9102`, job de scrape próprio). O custo das chamadas em sombra não entra nas métricas de custo nem de eficiência do roteador.
 - **Suspensão:** o orçamento esgotado ou o teto por tenant suspendem a sombra até o dia (ou a hora) seguinte. O intervalo fica em `shadow_suspensions`. O alerta `ShadowBudgetExhaustedEarly` dispara quando o orçamento acaba antes das 18h. Em produção, onde o perfil de observabilidade não roda, a mesma condição vira a linha de log `orcamento diario esgotado ... antes_18h=1`, coberta por um alerta do Cloud Monitoring.
 - **Política congelada:** a sombra roda normalmente com a política congelada, porque não a altera, e grava o `frozen_run_id` em cada linha.
 

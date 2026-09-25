@@ -168,7 +168,11 @@ async def test_blocklist_helpers_are_noops_without_redis(monkeypatch):
 @pytest.mark.asyncio
 async def test_redis_and_configuration_probes(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr("app.utils.redis_client.get_redis_async_safe", lambda: sentinel)
+
+    async def _async():
+        return sentinel
+
+    monkeypatch.setattr("app.utils.redis_client.get_redis_async", _async)  # o cliente async: todo uso é aguardado
     assert await ore._get_redis() is sentinel
     monkeypatch.setattr(cat, "get_openrouter_api_key", lambda: "sk-x")
     assert ore._openrouter_configured() is True

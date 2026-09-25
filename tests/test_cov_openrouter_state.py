@@ -121,3 +121,19 @@ async def test_save_model_stats_persists_and_tracks_the_model(fake_aioredis):
     many = await st._load_many_model_stats(fake_aioredis, ["openrouter/a/m", "openrouter/none"])
     assert many == {"openrouter/a/m": {"count": 4, "mean_reward": 0.9}, "openrouter/none": {}}
     assert await st._load_many_model_stats(fake_aioredis, []) == {}
+
+
+@pytest.mark.asyncio
+async def test_the_explorer_gets_the_async_redis_client(monkeypatch):
+    """Production 2026-09-25: the sync client was returned and every awaited call failed silently."""
+    import app.openrouter_explorer as ex
+    from app.utils import redis_client
+
+    sentinela = object()
+
+    async def _async():
+        return sentinela
+
+    monkeypatch.setattr(redis_client, "get_redis_async", _async)
+    monkeypatch.setattr(redis_client, "get_redis_async_safe", lambda: (_ for _ in ()).throw(AssertionError("sync")))
+    assert await ex._get_redis() is sentinela

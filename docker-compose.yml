@@ -568,11 +568,11 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
       - C_FORCE_ROOT=true
-      - WORKER_METRICS_PORT=9101  # métricas do feedback e da sombra (prometheus.yml: job celery_feedback_worker)
+      - WORKER_METRICS_PORT=9101  # métricas do feedback (prometheus.yml: job celery_feedback_worker)
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    command: celery -A app.celery_app worker --loglevel=info --queues=feedback_queue,shadow_queue --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
+    command: celery -A app.celery_app worker --loglevel=info --queues=feedback_queue --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
 
     volumes:
       - ./state:/app/state
@@ -580,6 +580,54 @@ services:
       # O mesmo Chroma da API: sem ele os jobs assíncronos (202) faziam RAG numa coleção vazia do container.
       - ./chromadb-data:/data/chroma
 
+    networks:
+      - ai_net
+
+  # =========================================================
+  # 👥 Celery Shadow Worker (execução em sombra, pesquisa)
+  # =========================================================
+  # Worker próprio: uma requisição em sombra leva 2-3 min (candidatas + juízes). Na fila do feedback ela
+  # represava o feedback real (31 tarefas na fila no teste de 100 consultas, 2026-09-25), atrasando o
+  # aprendizado do bandit e os juízes da resposta entregue.
+  celery_shadow_worker:
+    profiles: ["workers"]
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: celery_shadow_worker
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d celery@$$HOSTNAME | grep -q 'pong'"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 45s
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-router_user}
+      - DB_PASS=${DB_PASS:?DB_PASS required}
+      - DB_NAME=${DB_NAME:-routerdb}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - C_FORCE_ROOT=true
+      - WORKER_METRICS_PORT=9102  # métricas aristo_shadow_* (prometheus.yml: job celery_shadow_worker)
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    command: celery -A app.celery_app worker --loglevel=info --queues=shadow_queue --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=200 --time-limit=1800
+    volumes:
+      - ./state:/app/state
+      - ./data:/app/data
+      - ./chromadb-data:/data/chroma
     networks:
       - ai_net
 

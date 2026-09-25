@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import app.providers_async  # noqa: F401  (ordem de import dos provedores: _base antes dele forma um ciclo)
 import pybreaker
 import pytest
 from app.providers._base import BaseProvider, LLMResponse
