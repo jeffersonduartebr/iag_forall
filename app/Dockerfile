@@ -13,11 +13,6 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-# =========================================================
-# 📁 Copia os arquivos da aplicação
-# =========================================================
-COPY . /app
-
 # Instala dependências básicas
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -38,6 +33,13 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
 COPY requirements.lock /app/requirements.lock
 
 RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.lock
+
+# =========================================================
+# 📁 Copia os arquivos da aplicação
+# =========================================================
+# Depois das dependências: copiar o código antes invalidava a camada do `uv pip install` a cada mudança de
+# código, e todo deploy reinstalava os pacotes (torch incluído) — ~30 min na VM de produção.
+COPY . /app
 
 # =========================================================
 # 🧩 Configuração de ambiente
