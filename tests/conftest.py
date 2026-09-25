@@ -270,3 +270,14 @@ def mock_dependencies(monkeypatch):
     monkeypatch.setenv("NSGA_W_QUALITY", "1.0")
     monkeypatch.setenv("NSGA_W_LATENCY", "0.5")
     monkeypatch.setenv("NSGA_W_COST", "50.0")
+
+
+@pytest.fixture(autouse=True)
+def _sombra_desligada(monkeypatch):
+    """Shadow execution off in every test (no network, no Celery); shadow tests turn it on with fake providers."""
+    import dataclasses
+
+    from app.services.sombra import config as sombra_config
+
+    original = sombra_config.carregar
+    monkeypatch.setattr(sombra_config, "carregar", lambda: dataclasses.replace(original(), ligada=False))

@@ -268,6 +268,8 @@ def apply_query_runtime_profile(req: Any, modality: str, image_input: str | None
     effective_max_tokens = int(adjusted["max_tokens"])
     runtime_hints = adjusted["runtime_hints"]
     use_rag = _apply_rag_scope(req, runtime_hints, use_rag)
+    # Identidade pseudônima e episódio: só registro de pesquisa (execução em sombra), nunca roteamento.
+    runtime_hints.update(user_key=getattr(req, "user_key", None), episode_id=getattr(req, "episode_id", None))
     if getattr(req, "pinned_model", None):
         # Instrumento de medida: exatamente este modelo, sem fallback nem hedge para outro.
         runtime_hints.update(pinned_model=req.pinned_model, max_fallbacks=0)

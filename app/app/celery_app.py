@@ -20,9 +20,11 @@ by runtime code that needs to enqueue background jobs.
 """
 
 # app/celery_app.py
+import logging
 import os
 
 from celery import Celery
+from celery.signals import worker_ready
 
 # Configurações do Broker (Redis)
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -59,5 +61,26 @@ celery_app.conf.update(
         "app.tasks.task_process_feedback": {"queue": "feedback_queue"},
         "app.tasks.task_execute_eval_run": {"queue": "feedback_queue"},
         "app.tasks.task_execute_query_job": {"queue": "celery"},
+        "app.tasks.task_shadow_evaluate": {"queue": "shadow_queue"},
     }
 )
+
+
+@worker_ready.connect
+def _expor_metricas_do_worker(**_kwargs):
+    """Expose this worker's metrics (feedback and shadow) on WORKER_METRICS_PORT for Prometheus.
+
+    The API serves its own multiprocess directory; the worker's metrics lived in a directory nobody scraped.
+    Started once, in the worker's main process, aggregating its child processes (MultiProcessCollector).
+    """
+    porta = int(os.getenv("WORKER_METRICS_PORT", "0") or 0)
+    if not porta:
+        return
+    try:
+        from prometheus_client import CollectorRegistry, multiprocess, start_http_server
+
+        registro = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registro)
+        start_http_server(porta, registry=registro)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("[celery] métricas do worker indisponíveis: %s", exc)
