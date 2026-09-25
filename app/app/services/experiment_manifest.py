@@ -97,6 +97,11 @@ def _config_snapshot() -> Dict[str, Any]:
         "REWARD_COST_BASELINE_PER_1K",
         "LOCAL_COST_IMPUTATION_ENABLED",
         "LOCAL_COST_USD_PER_HOUR",
+        # Regime de exploração do protocolo.
+        "REGIME_EXPLORACAO_TENANTS",
+        "REGIME_EPSILON",
+        "REGIME_TETO",
+        "REGIME_JANELA_EPISODIOS",
         # Execução em sombra: o estado de cada chave fica registrado a cada execução.
         "SHADOW_EXECUTION_ENABLED",
         "SHADOW_TENANT_ALLOWLIST",

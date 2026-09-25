@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config.settings_sources import decode_redis_value
@@ -80,3 +81,34 @@ async def redis_pipeline_execute(build: Callable[[Any], None]) -> Optional[List[
         return await pipe.execute()
     except Exception:
         return None
+
+
+async def redis_sliding_window_hit(
+    key: str, *, now: float, window_seconds: float, max_requests: int, ttl_s: int
+) -> Optional[bool]:
+    """Count one hit in a sorted-set sliding window; ``True`` when over quota, ``None`` if Redis is unavailable.
+
+    The member is unique per request: with ``str(now)`` two requests sharing a
+    timestamp collapsed into one. A rejected request removes its own member, so
+    — like the in-memory limiter — only admitted requests use up the window.
+    """
+    member = f"{now}:{uuid.uuid4().hex[:8]}"
+
+    def _build(pipe: Any) -> None:
+        pipe.zremrangebyscore(key, 0, now - window_seconds)
+        pipe.zcard(key)
+        pipe.zadd(key, {member: now})
+        pipe.expire(key, ttl_s)
+
+    results = await redis_pipeline_execute(_build)
+    if results is None:
+        return None
+    if int(results[1] or 0) < max_requests:
+        return False
+    client = await get_redis_async()
+    try:
+        if client is not None:
+            await client.zrem(key, member)
+    except Exception:
+        pass
+    return True

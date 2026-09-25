@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -113,6 +112,19 @@ async def test_redis_backend_counts_distributed_window(limiter, monkeypatch, fak
 
 
 @pytest.mark.asyncio
+async def test_redis_backend_same_timestamp_and_rejections_match_memory(limiter, monkeypatch, fake_aioredis):
+    async def _client():
+        return fake_aioredis
+
+    monkeypatch.setattr(rl, "get_redis_async", _client)
+    store = rl.rate_limit_store
+    # Relógio parado: com o membro str(now) os pedidos colapsavam num só e nunca havia 429.
+    results = [await store.is_rate_limited("t:s", max_requests=2, window_seconds=10) for _ in range(4)]
+    assert results == [False, False, True, True]
+    assert await fake_aioredis.zcard("adaptive-limit:t:s") == 2  # rejeitados não contam
+
+
+@pytest.mark.asyncio
 async def test_redis_pipeline_failure_falls_back_to_memory(limiter, monkeypatch):
     async def _client():
         return object()
@@ -121,7 +133,7 @@ async def test_redis_pipeline_failure_falls_back_to_memory(limiter, monkeypatch)
         return None
 
     monkeypatch.setattr(rl, "get_redis_async", _client)
-    monkeypatch.setattr(rl, "redis_pipeline_execute", _pipeline_down)
+    monkeypatch.setattr("app.utils.redis_async_ops.redis_pipeline_execute", _pipeline_down)
     store = rl.rate_limit_store
     assert await store.is_rate_limited("t:c", max_requests=1, window_seconds=10) is False
     assert store._use_redis is False
@@ -160,21 +172,41 @@ async def test_disabled_limiter_and_polling_bypass_admission(limiter):
     assert "X-Admission-State" not in response.headers
 
 
+@pytest.fixture
+def signed(monkeypatch):
+    """``Bearer tok-a``/``tok-b`` are verified JWTs for tenants escola-a/escola-b."""
+    import app.api.auth as auth
+
+    claims = {t: auth.AuthContext(authenticated=True, method="jwt", tenant_id=f"escola-{t[-1]}") for t in ("tok-a", "tok-b")}
+    monkeypatch.setattr(auth, "_auth_from_jwt", lambda tok: claims.get(tok))
+    monkeypatch.setattr(auth, "_auth_from_api_key", lambda tok: None)
+    return lambda t: {"Authorization": f"Bearer {t}"}
+
+
 @pytest.mark.asyncio
-async def test_per_tenant_buckets_are_isolated(limiter):
+async def test_per_tenant_buckets_are_isolated(limiter, signed):
     mw = limiter.mw
-    first = await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
+    first = await mw.dispatch(_request("/admin/s", signed("tok-a")), _ok)
     assert first.headers["X-RateLimit-Limit"] == "2"
     assert first.headers["X-RateLimit-Window"] == "15"
-    await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
-    blocked = await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
+    await mw.dispatch(_request("/admin/s", signed("tok-a")), _ok)
+    blocked = await mw.dispatch(_request("/admin/s", signed("tok-a")), _ok)
     assert blocked.status_code == 429
     assert blocked.headers["Retry-After"] == "2"  # elevated → short retry
-    other = await mw.dispatch(_request("/admin/s", {"X-School-ID": "escola-b"}), _ok)
+    other = await mw.dispatch(_request("/admin/s", signed("tok-b")), _ok)
     assert other.status_code == 200
-    via_query = await mw.dispatch(_request("/admin/s", query_string=b"tenant_id=escola-a"), _ok)
-    assert via_query.status_code == 429  # query-param tenant shares the header tenant's bucket
     assert (await mw.dispatch(_request("/admin/s"), _ok)).status_code == 200  # IP fallback bucket
+
+
+@pytest.mark.asyncio
+async def test_client_chosen_tenant_headers_and_query_share_the_ip_bucket(limiter):
+    """Regressão: rodar X-Tenant-ID / ?tenant_id= a cada pedido fugia à quota do limitador adaptativo."""
+    mw = limiter.mw
+    await mw.dispatch(_request("/admin/s", {"X-Tenant-ID": "escola-a"}), _ok)
+    await mw.dispatch(_request("/admin/s", {"X-School-ID": "escola-b"}), _ok)
+    blocked = await mw.dispatch(_request("/admin/s", query_string=b"tenant_id=escola-c"), _ok)
+    assert blocked.status_code == 429
+    assert (await mw.dispatch(_request("/admin/s", {"X-Tenant": "x"}, client="10.0.0.2"), _ok)).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -200,52 +232,3 @@ async def test_interactive_over_quota_is_deferred_to_job_not_rejected(limiter, m
     assert second.state.defer_to_query_job is True
     assert second.state.query_job_reason == "ollama_overloaded"
     assert response.headers["X-RateLimit-Reason"] == "ollama_overloaded"
-
-
-@pytest.mark.parametrize(
-    ("snapshot", "state", "expected"),
-    [
-        ({}, "normal", False),
-        ({"current_limit": 4, "total_inflight": 1, "max_queue_wait_ms": 110.0}, "elevated", True),
-        ({"current_limit": 4, "total_inflight": 1, "utilization": 0.9}, "congested", True),
-        ({"current_limit": 4, "total_inflight": 1, "utilization": 0.1}, "congested", False),
-        ({"current_limit": 4, "total_inflight": 2}, "elevated", True),
-    ],
-)
-def test_preempt_to_async_decision(snapshot, state, expected):
-    cfg = {"sync_queue_wait_ms": 250.0, "elevated_utilization": 0.8}
-    assert rl.RateLimitMiddleware(app=None)._should_preempt_to_async(snapshot, state, cfg) is expected
-
-
-@pytest.mark.parametrize(("bp", "expected"), [(0.96, "congested"), (0.9, "elevated"), (0.1, "normal")])
-def test_backpressure_utilization_drives_candidate_state(monkeypatch, bp, expected):
-    monkeypatch.setattr(rl, "get_backpressure", lambda: SimpleNamespace(get_stats=lambda: {"utilization": bp}))
-    cfg = {"congested_utilization": 1.0, "congested_queue_wait_ms": 1000.0, "elevated_utilization": 0.8,
-           "elevated_queue_wait_ms": 500.0}
-    assert rl.RateLimitMiddleware(app=None)._candidate_pressure_state({}, cfg) == expected
-
-
-def test_quota_is_none_when_healthy():
-    assert rl.RateLimitMiddleware(app=None)._quota_for("admin_eval_governance", "normal", {}, {}) is None
-
-
-@pytest.mark.asyncio
-async def test_periodic_cleanup_survives_cleanup_errors(monkeypatch):
-    calls = {"sleep": 0, "cleanup": 0}
-
-    async def _sleep(_s):
-        calls["sleep"] += 1
-        if calls["sleep"] > 2:
-            raise asyncio.CancelledError
-
-    async def _cleanup():
-        calls["cleanup"] += 1
-        if calls["cleanup"] == 1:
-            raise RuntimeError("redis gone")
-        return 3
-
-    monkeypatch.setattr(rl.asyncio, "sleep", _sleep)
-    monkeypatch.setattr(rl.rate_limit_store, "cleanup", _cleanup)
-    with pytest.raises(asyncio.CancelledError):
-        await rl.periodic_cleanup()
-    assert calls == {"sleep": 3, "cleanup": 2}

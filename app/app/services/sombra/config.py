@@ -57,7 +57,7 @@ def carregar() -> ConfigSombra:
         max_local=max(0, int(_num("SHADOW_LOCAL_MAX_CONCURRENCY", 1))),
         orcamento_usd=max(0.0, _num("SHADOW_DAILY_BUDGET", 4.0)),
         teto_tenant_hora=max(0, int(_num("SHADOW_RATE_LIMIT_PER_TENANT_HOUR", 30))),
-        timeout_s=max(1.0, _num("SHADOW_TIMEOUT_S", 120.0)),
+        timeout_s=max(1.0, _num("SHADOW_TIMEOUT_S", 300.0)),
         fuso=str(settings.get("SHADOW_BUDGET_TZ", "America/Fortaleza") or "America/Fortaleza"),
         juizes=tuple(_lista(settings.get("SHADOW_JUDGE_MODELS", "[]"))),
     )

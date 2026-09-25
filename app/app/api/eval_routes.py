@@ -147,7 +147,7 @@ def create_eval(
         metadata=metadata,
     )
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         action="eval_create",
         resource="eval_runs",
         tenant_id=tenant_id,
@@ -217,7 +217,7 @@ def execute_eval(
         },
     )
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         action="eval_execute_queued",
         resource="eval_runs",
         tenant_id=run.get("tenant_id"),
@@ -454,7 +454,7 @@ def cancel_eval_task(
     """Cancel/revoke a queued eval Celery task."""
     celery_app.control.revoke(task_id, terminate=terminate)
     log_audit_event(
-        actor=x_user_id or auth["authorized_by"],
+        actor=str(auth.get("user_id") or auth.get("authorized_by") or "desconhecido"),
         action="eval_task_cancel",
         resource="celery_task",
         metadata={"task_id": task_id, "terminate": terminate, "roles": auth["roles"]},

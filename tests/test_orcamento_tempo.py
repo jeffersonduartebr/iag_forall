@@ -24,7 +24,7 @@ def test_throughput_ema_is_per_model_and_ignores_the_route_prefix(fake_redis):
 
 def test_request_deadline_grows_with_tokens_and_is_capped():
     curto, longo = ot.prazo_da_requisicao(256, 25), ot.prazo_da_requisicao(4096, 25)
-    assert 25 < curto < longo == 240.0
+    assert 25 < curto < longo <= 420.0
     assert ot.prazo_da_requisicao(256, 239) == 239  # nunca abaixo do piso do workload
 
 

@@ -34,32 +34,26 @@ class TestExpertIdentity:
         )
         assert self.expert_id("outro-perito", authorization="Bearer x") == "perito-real"
 
-    def test_the_header_is_ignored_unless_the_deployment_trusts_headers(self, monkeypatch):
+    def test_the_header_is_ignored_when_it_was_not_the_basis_of_authorization(self, monkeypatch):
+        """Admin-token callers keep their own identity whatever ``X-User-Id`` says."""
         monkeypatch.setattr("app.api.expert_routes._roles_from_jwt", lambda a: (None, [], {}))
-        monkeypatch.setattr(
-            "app.api.expert_routes.settings.get",
-            lambda key, default=None: "0" if key == "TRUST_HEADER_ROLES" else default,
-        )
-        assert self.expert_id("outro-perito", auth={"username": "eu"}) == "eu"
+        auth = {"authorized_by": "admin_token", "user_id": "admin"}
+        assert self.expert_id("outro-perito", auth=auth) == "admin"
 
-    def test_the_header_is_honoured_where_headers_are_trusted(self, monkeypatch):
-        """Internal services and identity federation present themselves this way."""
+    def test_rbac_identity_is_the_user_rbac_checked(self, monkeypatch):
+        """Regression: RBAC-authorized experts all became the literal ``"rbac"``."""
         monkeypatch.setattr("app.api.expert_routes._roles_from_jwt", lambda a: (None, [], {}))
-        monkeypatch.setattr(
-            "app.api.expert_routes.settings.get",
-            lambda key, default=None: "1" if key == "TRUST_HEADER_ROLES" else default,
-        )
-        assert self.expert_id("servico-interno", auth={"username": "eu"}) == "servico-interno"
+        ana = self.expert_id("ana", auth={"authorized_by": "rbac", "user_id": "ana"})
+        bia = self.expert_id("bia", auth={"authorized_by": "rbac", "user_id": "bia"})
+        assert (ana, bia) == ("ana", "bia")
 
-    def test_a_settings_backend_that_raises_does_not_trust_the_header(self, monkeypatch):
-        """Failing open here would re-open the IDOR during a Redis outage."""
+    def test_without_an_authorized_identity_the_request_is_refused(self, monkeypatch):
+        from fastapi import HTTPException
+
         monkeypatch.setattr("app.api.expert_routes._roles_from_jwt", lambda a: (None, [], {}))
-
-        def explode(key, default=None):
-            raise RuntimeError("redis em baixo")
-
-        monkeypatch.setattr("app.api.expert_routes.settings.get", explode)
-        assert self.expert_id("outro-perito", auth={"username": "eu"}) == "eu"
+        with pytest.raises(HTTPException) as exc:
+            self.expert_id("outro-perito", auth={"authorized_by": "rbac", "user_id": None})
+        assert exc.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

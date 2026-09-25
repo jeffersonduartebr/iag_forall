@@ -98,7 +98,7 @@ def prazo_da_requisicao(max_tokens: int, piso: float) -> float:
     by its own model's measured rate in :func:`prazo_da_chamada`.
     """
     necessario = _tempo(tokens_totais(max_tokens), _num("TPS_PADRAO_NUVEM", 40.0)) + reserva_de_fallback()
-    return min(max(piso, necessario), _num("PRAZO_MAXIMO_S", 240.0))
+    return min(max(piso, necessario), _num("PRAZO_MAXIMO_S", 420.0))
 
 
 def prazo_da_chamada(model: str, max_tokens: int, restante: float, piso: float = 0.0) -> float:

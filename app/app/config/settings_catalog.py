@@ -277,7 +277,9 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "TPS_PADRAO_NUVEM": "40",
         "LATENCIA_INICIAL_S": "4",
         "RESERVA_FALLBACK_S": "45",
-        "PRAZO_MAXIMO_S": "240",
+        # Teto do prazo síncrono: cobre modelos lentos com raciocínio longo (DeepSeek levou ~91 s no teste de 100
+        # consultas de 2026-09-25; a 30 tok/s, 2048 de resposta + 4096 de raciocínio passam de 270 s).
+        "PRAZO_MAXIMO_S": "420",
         # Cota de raciocínio (thinking) dos modelos de nuvem, somada ao teto da resposta visível:
         # sem ela o raciocínio consumia max_tokens e a resposta vinha vazia.
         "REASONING_BUDGET_TOKENS": "4096",
@@ -293,6 +295,15 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
     # recebem o mesmo prompt e contexto e são julgadas pelo mesmo painel; só escores, custo, latência, tokens e
     # o hash do texto são gravados (shadow_evaluations). Nunca atrasa a resposta nem altera a política.
     # Padrões do protocolo emendado do Caso 1 (25/09/2026): Gemini (Vertex) e OpenRouter, sem restrição de região.
+    # Regime de exploração do protocolo do Caso 1 (services/regime): sorteio explícito com probabilidade
+    # registrada, teto de exploração por participante numa janela móvel de episódios e regeneração em
+    # aproveitamento quando a resposta explorada falha na verificação de incerteza. Vazio = regime desligado.
+    "regime": {
+        "REGIME_EXPLORACAO_TENANTS": "ifrn-caso1",
+        "REGIME_EPSILON": "0.15",
+        "REGIME_TETO": "0.15",
+        "REGIME_JANELA_EPISODIOS": "20",
+    },
     "shadow": {
         "SHADOW_EXECUTION_ENABLED": "1",
         "SHADOW_TENANT_ALLOWLIST": "ifrn-caso1",
@@ -305,7 +316,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "SHADOW_LOCAL_MAX_CONCURRENCY": "1",
         "SHADOW_DAILY_BUDGET": "4.00",
         "SHADOW_RATE_LIMIT_PER_TENANT_HOUR": "30",
-        "SHADOW_TIMEOUT_S": "120",
+        "SHADOW_TIMEOUT_S": "300",
         "SHADOW_BUDGET_TZ": "America/Fortaleza",
         "SHADOW_JUDGE_MODELS": json.dumps(
             [
@@ -313,6 +324,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
                 "openrouter/anthropic/claude-opus-5.5",
                 "openrouter/x-ai/grok-4.7",
                 "openrouter/openai/gpt-5.6-sol",
+                "openrouter/z-ai/glm-5.3-prime",
             ]
         ),
     },

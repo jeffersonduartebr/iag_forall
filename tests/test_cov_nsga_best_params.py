@@ -99,6 +99,27 @@ def test_compute_model_weights_normalizes_quality_per_latency_and_cost(db):
     assert db.calls == [{"m": "text"}]
 
 
+def test_compute_model_weights_free_model_is_floored_at_cheapest_paid_cost(db):
+    # Com o piso 1e-6 o grátis tinha score 0.8/1e-6 e ficava com ~100% do peso.
+    db.rows = [
+        {"model": "free", "ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.0},
+        {"model": "cheap", "ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.01},
+        {"model": "pricey", "ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.02},
+    ]
+    weights = unb.compute_model_weights("text")
+    assert weights["free"] == pytest.approx(weights["cheap"]) == pytest.approx(0.4)
+    assert weights["pricey"] == pytest.approx(0.2)
+
+
+def test_compute_model_weights_all_free_and_zero_latency_do_not_discriminate(db):
+    db.rows = [
+        {"model": "a", "ema_latency": 0.0, "ema_quality": 6.0, "ema_cost": 0.0},
+        {"model": "b", "ema_latency": 2.0, "ema_quality": 6.0, "ema_cost": 0.0},
+    ]
+    # custo todo zero → 1.0 para ambos; latência 0 conta como a menor positiva (2.0).
+    assert unb.compute_model_weights("text") == {"a": pytest.approx(0.5), "b": pytest.approx(0.5)}
+
+
 def test_compute_model_weights_clamps_negative_scores_and_handles_all_zero(db):
     db.rows = [{"model": "bad", "ema_latency": 1.0, "ema_quality": -3.0, "ema_cost": 0.01}]
     assert unb.compute_model_weights("text") == {"bad": 0.0}

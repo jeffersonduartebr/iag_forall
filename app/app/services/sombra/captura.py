@@ -40,9 +40,14 @@ def _estrato(cfg: ConfigSombra, ctx: Any, incerteza: float) -> Dict[str, Any]:
     return {campo: disponiveis.get(campo) for campo in cfg.estratos}
 
 
-def _regime(choice: Any) -> str:
+def _regime(choice: Any) -> tuple:
+    """Delivery regime and assignment probability (exact under the protocol's regime; unknown otherwise)."""
+    regime = (choice.decision or {}).get("regime")
+    if regime:
+        rotulo = "exploracao" if regime.get("explorou") else "aproveitamento"
+        return (rotulo + "_regenerada" if regime.get("regenerado") else rotulo), regime.get("p_atribuicao")
     explorou = bool(choice.exploration_mode) or bool((choice.decision.get("bandit") or {}).get("explored"))
-    return "exploracao" if explorou else "aproveitamento"
+    return ("exploracao" if explorou else "aproveitamento"), None
 
 
 def montar_job(ctx: Any, choice: Any, outcome: Any, final_prompt: str, bundle: Dict[str, Any],
@@ -50,10 +55,11 @@ def montar_job(ctx: Any, choice: Any, outcome: Any, final_prompt: str, bundle: D
     """Everything a paired shadow evaluation needs, captured once: nothing is recomputed or re-retrieved later."""
     meta = result.get("metadata") or {}
     tenant = ctx.tenant_id or ""
+    regime, p_atribuicao = _regime(choice)
     return {
         "request_id": request_id, "episode_id": ctx.hints.get("episode_id"), "participante": ctx.hints.get("user_key"),
         "tenant": tenant, "caso": 1 if "caso1" in tenant else 2, "estrato": _estrato(cfg, ctx, incerteza),
-        "p_nominal": cfg.taxa, "regime_entrega": _regime(choice), "p_atribuicao": None,
+        "p_nominal": cfg.taxa, "regime_entrega": regime, "p_atribuicao": p_atribuicao,
         "frozen_run_id": None, "criado_em": agora_iso(),  # o worker lê a política congelada, fora do caminho da requisição
         "modelo_entregue": outcome.chosen, "resposta_entregue": result.get("answer") or "",
         "custo_entregue": result.get("estimated_cost_usd"), "latencia_entregue": result.get("latency_s"),

@@ -115,3 +115,26 @@ def test_redis_unavailable_means_not_frozen(fp, monkeypatch):
 )
 def test_should_skip_eval_feedback(fp, meta, skip):
     assert fp.should_skip_eval_feedback(meta) is skip
+
+
+def test_explicit_empty_snapshot_is_kept(fp, monkeypatch, fake_redis):
+    # `snapshot or build()` tratava {} como ausente e congelava os pesos correntes.
+    monkeypatch.setattr(fp, "build_frozen_snapshot", lambda: {"NSGA_W_QUALITY": 0.9})
+    assert fp.activate_frozen_policy("r1", snapshot={}) == {"run_id": "r1", "active": True}
+    assert fp.activate_frozen_policy("r2")["NSGA_W_QUALITY"] == 0.9
+
+
+def test_optional_frozen_policy_freezes_only_for_the_call(fp, monkeypatch, fake_redis):
+    monkeypatch.setattr(fp, "build_frozen_snapshot", lambda: {"BANDIT_EPSILON": 0.1})
+    with fp.optional_frozen_policy(False) as off:
+        assert off is None and fp.is_frozen_policy_active() is False
+    with fp.optional_frozen_policy(True) as on:
+        assert on["run_id"].startswith("preview:") and fp.is_frozen_policy_active() is True
+    assert fp.is_frozen_policy_active() is False
+
+
+def test_optional_frozen_policy_reuses_a_running_eval_freeze(fp, fake_redis):
+    eval_payload = fp.activate_frozen_policy("eval-1", snapshot={})
+    with fp.optional_frozen_policy(True) as reused:
+        assert reused == eval_payload
+    assert fake_redis.get("eval:frozen:active") == b"eval-1"  # o marcador da corrida sobrevive
