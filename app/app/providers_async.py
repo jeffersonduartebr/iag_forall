@@ -40,6 +40,7 @@ from app.observability import (
 from app.observability import (
     logger as structlog_logger,
 )
+from app.services.sombra.contexto import em_sombra
 from app.utils.pricing import get_model_cost
 
 # Utilitários de Precisão
@@ -257,13 +258,18 @@ async def call_model(
                 pass
 
         meta = _build_response_meta(result)
-        clear_provider_unavailable(model)
+        if not em_sombra():  # a sombra não mexe na saúde dos provedores do atendimento
+            clear_provider_unavailable(model)
         return result.text, meta
 
     except pybreaker.CircuitBreakerError as e:
         raise ProviderCircuitOpenError(model=model, message=str(e)) from e
 
     except Exception as e:
+        if em_sombra():  # falha da sombra: nem log de erro do sistema, nem métricas, nem marca de indisponível
+            raise ProviderCallError(
+                model=model, message=type(e).__name__, category=_classify_provider_exception(e), retryable=False
+            ) from e
         structlog_logger.error(
             "call_model_wrapper_failed",
             model=model,
