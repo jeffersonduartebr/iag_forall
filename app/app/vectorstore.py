@@ -27,6 +27,7 @@ import chromadb
 import numpy as np
 
 from .embeddings import embed_image, embed_multimodal, embed_text
+from .services.rag_esquema import COSINE, TEXT_SCHEMA, vetor_utilizavel
 from .settings_dynamic import settings
 from .sparse_index import sparse_index  # Integração com BM25
 
@@ -64,10 +65,6 @@ def _sanitize_model_name(model_name: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9]", "_", model_name)
     # Remove underscores duplicados e underscores nas pontas
     return re.sub(r"_+", "_", clean).strip("_")
-
-
-TEXT_SCHEMA = "d2"
-COSINE = {"hnsw:space": "cosine"}
 
 
 def _get_versioned_collection_name(base_name: str, modality: str) -> str:
@@ -240,9 +237,8 @@ def init_vectorstore():
         cache_col = _get_versioned_collection_name(BASE_CACHE_COLLECTION, "text")
 
         for name in (txt_col, img_col, mm_col, cache_col):
-            meta = {"modality": "auto-versioned", "model_context": name}
-            if name == txt_col:
-                meta.update(COSINE)  # só a coleção nova: o espaço de uma coleção existente não muda
+            # Cosseno só na coleção de texto nova: o espaço de uma coleção existente não muda.
+            meta = {"modality": "auto-versioned", "model_context": name, **(COSINE if name == txt_col else {})}
             get_chroma_client().get_or_create_collection(name=name, metadata=meta)
         logger.info(f"[vectorstore] Coleções ativas e versionadas: {txt_col}, {img_col}, {mm_col}, {cache_col}")
     except Exception as e:
@@ -253,12 +249,6 @@ def init_vectorstore():
 # ============================================================
 # Inserção (Com Auto-Healing)
 # ============================================================
-def _vetor_utilizavel(embedding) -> bool:
-    """A real embedding: more than one dimension and not all zeros (the failure fallbacks are neither)."""
-    vec = _ensure_list_of_floats(embedding)
-    return len(vec) > 1 and any(vec)
-
-
 def _insert_embedding_sync(
     collection_name: str,
     doc_id: str,
@@ -276,7 +266,7 @@ def _insert_embedding_sync(
     ``upsert`` instead of ``add``: ``add`` silently ignored an id that already existed, so re-ingesting an
     edited material kept the old text while BM25 got the new one.
     """
-    if not _vetor_utilizavel(embedding):
+    if not vetor_utilizavel(_ensure_list_of_floats(embedding)):
         logger.error(f"[vectorstore] doc_id={doc_id}: embedding inválido (falha do modelo); não inserido.")
         return False
     try:
@@ -290,14 +280,8 @@ def _insert_embedding_sync(
         )
         return True
     except Exception as e:
-        msg = str(e).lower()
-        if "dimension" in msg and "match" in msg:
-            logger.error(
-                f"[vectorstore] Dimensão incompatível em '{collection_name}' (modelo de embeddings trocado ou "
-                f"falhou): doc_id={doc_id} não inserido. A coleção NÃO foi apagada. {e}"
-            )
-            return False
-        logger.error(f"[vectorstore] Erro na inserção: {e}")
+        # Inclusive dimensão incompatível (modelo trocado ou falho): reporta e não insere; a coleção NÃO é apagada.
+        logger.error(f"[vectorstore] Erro na inserção em '{collection_name}' (doc_id={doc_id}): {e}")
         return False
 
 

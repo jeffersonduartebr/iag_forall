@@ -291,14 +291,13 @@ class TestLocalCpuEmbed:
     @patch('app.embeddings.get_local_model')
     def test_nomic_task_prefix_separates_documents_from_queries(self, mock_get_model):
         """Nomic v1.5 needs search_document for corpus chunks and search_query for queries (was query for both)."""
-        from app.embeddings import _com_prefixo
+        from app.services.rag_esquema import com_prefixo
 
-        with patch('app.embeddings.EMBED_MODEL_TEXT', 'nomic-ai/nomic-embed-text-v1.5'):
-            assert _com_prefixo("x", "documento") == "search_document: x"
-            assert _com_prefixo("x", "consulta") == "search_query: x"
-            assert _com_prefixo("search_query: x", "documento") == "search_query: x"
-        with patch('app.embeddings.EMBED_MODEL_TEXT', 'sentence-transformers/all-MiniLM-L6-v2'):
-            assert _com_prefixo("x", "documento") == "x"
+        nomic = "nomic-ai/nomic-embed-text-v1.5"
+        assert com_prefixo("x", "documento", nomic) == "search_document: x"
+        assert com_prefixo("x", "consulta", nomic) == "search_query: x"
+        assert com_prefixo("search_query: x", "documento", nomic) == "search_query: x"
+        assert com_prefixo("x", "documento", "sentence-transformers/all-MiniLM-L6-v2") == "x"
 
     @patch('app.embeddings.get_local_model')
     def test_local_cpu_embed_returns_list(self, mock_get_model):

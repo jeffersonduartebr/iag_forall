@@ -73,30 +73,26 @@ async def test_documents_are_embedded_as_documents_and_the_healthcheck_stays_out
     assert gravados[-1] == "rag_healthcheck" and len(bm25) == 1  # só o documento do corpus entra no BM25
 
 
-@pytest.mark.parametrize("modulo", [embeddings, reranker])
-def test_a_failed_model_load_is_not_retried_on_every_request(monkeypatch, modulo):
-    chamadas = []
+def test_a_failed_model_load_is_not_retried_on_every_request(monkeypatch):
+    """Loads are serialized and a failure backs off (it used to re-download the model on every request)."""
+    from app.services import rag_esquema
 
-    def _falha(*a, **k):
+    relogio, chamadas = [1000.0], []
+    monkeypatch.setattr(rag_esquema.time, "monotonic", lambda: relogio[0])
+    carregador = rag_esquema.CarregadorComRecuo("modelo", recuo_s=60.0)
+
+    def _falha():
         chamadas.append(1)
         raise OSError("sem rede para baixar o modelo")
 
-    relogio = [1000.0]
-    monkeypatch.setattr(modulo.time, "monotonic", lambda: relogio[0])
-    if modulo is embeddings:
-        monkeypatch.setattr(modulo, "ST_AVAILABLE", True)
-        monkeypatch.setattr(modulo, "SentenceTransformer", _falha, raising=False)
-        monkeypatch.setattr(modulo, "_LOCAL_MODEL_INSTANCE", None)
-        carregar = modulo.get_local_model
-    else:
-        monkeypatch.setattr(modulo, "CE_AVAILABLE", True)
-        monkeypatch.setattr(modulo, "CrossEncoder", _falha, raising=False)
-        monkeypatch.setattr(modulo, "_RERANKER_INSTANCE", None)
-        carregar = modulo.get_reranker_model
-    monkeypatch.setattr(modulo, "_LOAD_FAILED_AT", 0.0)
-    assert carregar() is None and carregar() is None and len(chamadas) == 1
-    relogio[0] += modulo.LOAD_RETRY_S
-    assert carregar() is None and len(chamadas) == 2
+    assert carregador.obter(_falha) is None and carregador.obter(_falha) is None and len(chamadas) == 1
+    relogio[0] += 60.0
+    assert carregador.obter(lambda: "ok") == "ok" and carregador.obter(_falha) == "ok"
+
+
+@pytest.mark.parametrize("modulo", [embeddings, reranker])
+def test_embeddings_and_reranker_load_through_the_shared_loader(modulo):
+    assert isinstance(modulo._CARREGADOR, __import__("app.services.rag_esquema", fromlist=["x"]).CarregadorComRecuo)
 
 
 def test_the_default_reranker_is_multilingual():

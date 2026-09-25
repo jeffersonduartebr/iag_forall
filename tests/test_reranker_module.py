@@ -11,13 +11,13 @@ from app import reranker as rr
 
 def test_get_reranker_model_and_rerank_paths(monkeypatch):
     """Testa get reranker model and rerank paths."""
-    rr._RERANKER_INSTANCE = None
+    rr._CARREGADOR.redefinir()
     monkeypatch.setattr(rr, "CE_AVAILABLE", False)
     assert rr.get_reranker_model() is None
     assert rr.rerank_documents("q", ["a", "b"], top_k=1) == ["a"]
     assert rr.rerank_documents("", ["a", "b"], top_k=1) == ["a"]
 
-    rr._RERANKER_INSTANCE = None
+    rr._CARREGADOR.redefinir()
     monkeypatch.setattr(rr, "CE_AVAILABLE", True)
 
     class _CE:
@@ -53,13 +53,13 @@ The class groups the state and behavior required for BrokenCE."""
 This helper encapsulates one focused step used by the surrounding workflow."""
             raise RuntimeError("x")
 
-    rr._RERANKER_INSTANCE = _BrokenCE("x")
+    rr._CARREGADOR.redefinir(_BrokenCE("x"))
     assert rr.rerank_documents("q", ["d1", "d2"], top_k=1) == ["d1"]
 
 
 def test_get_reranker_model_load_error(monkeypatch):
     """Testa get reranker model load error."""
-    rr._RERANKER_INSTANCE = None
+    rr._CARREGADOR.redefinir()
     monkeypatch.setattr(rr, "CE_AVAILABLE", True)
     monkeypatch.setattr(rr, "CrossEncoder", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("load fail")), raising=False)
     assert rr.get_reranker_model() is None
