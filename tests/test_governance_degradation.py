@@ -76,33 +76,18 @@ def test_degraded_budget_pass_serves_the_request_instead_of_crashing():
     _raise_if_budget_exceeded(SimpleNamespace(modality="text"), SimpleNamespace(allowed=True))
 
 
-def test_deploy_step_fails_the_deploy_when_tables_cannot_be_created(monkeypatch):
-    import pytest
+def test_migration_0008_creates_every_governance_table_the_runtime_knows():
+    """The governance tables have one owner (Alembic 0008): a fresh production database used to lack them."""
+    import importlib.util
+    import re
+    from pathlib import Path
 
-    from app import governance_ddl
+    from app.roadmap_features import DDL_STATEMENTS
 
-    class _Falha:
-        def begin(self):
-            raise RuntimeError("sem banco")
-
-    monkeypatch.setattr(governance_ddl, "get_engine", lambda: _Falha())
-    with pytest.raises(RuntimeError):
-        governance_ddl.criar_tabelas_de_governanca()
-
-
-def test_deploy_step_runs_every_governance_ddl(monkeypatch):
-    from contextlib import contextmanager
-
-    from app import governance_ddl
-
-    executados = []
-
-    class _Motor:
-        @contextmanager
-        def begin(self):
-            yield type("C", (), {"execute": lambda self, sql: executados.append(str(sql))})()
-
-    monkeypatch.setattr(governance_ddl, "get_engine", lambda: _Motor())
-    governance_ddl.criar_tabelas_de_governanca()
-    assert any("tenant_budgets" in sql for sql in executados)
-    assert len(executados) == len(governance_ddl.DDL_STATEMENTS) + 1
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0008_governance_tables.py"
+    spec = importlib.util.spec_from_file_location("m0008", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    runtime = {re.search(r"CREATE TABLE IF NOT EXISTS (\w+)", ddl).group(1) for ddl in DDL_STATEMENTS}
+    assert runtime <= set(mod.TABLES) and all("IF NOT EXISTS" in ddl for ddl in mod.DDL)
+    assert mod.down_revision == "0007_decision_audit"

@@ -51,7 +51,9 @@ def effective_provider_timeout_seconds(runtime_hints: Optional[Dict[str, Any]]) 
     return max(1.0, min(configured_timeout, budget))
 
 
-def hedge_delay_seconds(deps: Dict[str, Any], model: str, modality: str, runtime_hints: Optional[Dict[str, Any]]) -> float:
+def hedge_delay_seconds(
+    deps: Dict[str, Any], model: str, modality: str, runtime_hints: Optional[Dict[str, Any]]
+) -> float:
     """Seconds to wait before launching the hedge (backup) request.
 
     Fires the backup once the primary exceeds a multiple of its expected (EMA)
@@ -103,7 +105,18 @@ def _call_timeout(ctx: RouteContext, model: str) -> Optional[float]:
 
 def _provider_call(ctx: RouteContext, final_prompt: str, retry_empty: bool):
     async def _execute(model_name: str):
-        out, meta = await ctx.deps["call_model"](
+        try:
+            out, meta = await _call(model_name)
+            if retry_empty:
+                _raise_if_empty(ctx, model_name, out, meta)
+        except Exception:
+            _record_provider(ctx, model_name, False)
+            raise
+        _record_provider(ctx, model_name, True)
+        return out, meta
+
+    async def _call(model_name: str):
+        return await ctx.deps["call_model"](
             model=model_name,
             prompt=final_prompt,
             modality=ctx.modality,
@@ -118,11 +131,14 @@ def _provider_call(ctx: RouteContext, final_prompt: str, retry_empty: bool):
             response_format=ctx.response_format,
             system_prompt=ctx.system_prompt,
         )
-        if retry_empty:
-            _raise_if_empty(ctx, model_name, out, meta)
-        return out, meta
 
     return _execute
+
+
+def _record_provider(ctx: RouteContext, model: str, ok: bool) -> None:
+    record = ctx.deps.get("record_provider_outcome")
+    if record is not None:
+        quietly(lambda: record(model, ok))
 
 
 def _raise_if_empty(ctx: RouteContext, model: str, out: Any, meta: Any) -> None:
@@ -238,7 +254,9 @@ def _parse_cost(ctx: RouteContext, outcome: ProviderOutcome):
     deps = ctx.deps
     started = time.time()
     try:
-        return deps["parse_meta_cost"](meta=outcome.meta, chosen_model=outcome.chosen, cost_lookup=deps["get_model_cost"])
+        return deps["parse_meta_cost"](
+            meta=outcome.meta, chosen_model=outcome.chosen, cost_lookup=deps["get_model_cost"]
+        )
     except Exception as exc:
         deps["logger"].warning(f"[router] Metadata error: {exc}")
         return 0, 0, 0.0, 0.0, {}

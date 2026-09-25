@@ -281,6 +281,9 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         # Cota de raciocínio (thinking) dos modelos de nuvem, somada ao teto da resposta visível:
         # sem ela o raciocínio consumia max_tokens e a resposta vinha vazia.
         "REASONING_BUDGET_TOKENS": "4096",
+        # Período de estudo (ex.: 2026s2): estado do bandit/EMA próprio por período (quality_semantics).
+        # Vazio = sem prefixo (o estado existente continua com as mesmas chaves).
+        "BANDIT_POLICY_NAMESPACE": "",
         "CIRCUIT_BREAKER_FAIL_MAX": "5",
         "CIRCUIT_BREAKER_RESET_TIMEOUT": "60",
         "CIRCUIT_BREAKER_LOCAL_FAIL_MAX": "3",

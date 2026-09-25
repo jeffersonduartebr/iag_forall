@@ -33,3 +33,20 @@ groups:
           severity: warning
         annotations:
           summary: "Fila de jobs assíncronos elevada"
+
+      # Sinais da carga do Caso 1 (2026-09-24): prazos estourados e respostas vazias precediam os 502/504.
+      - alert: SyncDeadlineExceeded
+        expr: sum(rate(router_sync_deadline_exceeded_total[10m])) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pedidos estourando o prazo síncrono (ver vazão por modelo em tps:<modelo> no Redis)"
+
+      - alert: EmptyAnswers
+        expr: sum by (model) (rate(router_response_empty_total[15m])) > 0.005
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Modelo {{ $labels.model }} devolvendo respostas vazias (cota de raciocínio?)"

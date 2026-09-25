@@ -73,6 +73,7 @@ from .reliability import (  # noqa: F401  (get_request_deduplicator re-export p/
 from .router_strategy import choose_top2_models
 from .semantic_cache import check_cache, store_cache
 from .services.hedged_execution import execute_with_hedge
+from .services.provider_budget import providers_over_budget, record_provider_outcome
 from .services.router_execution import route_and_answer_internal_impl
 from .services.router_facade import (
     build_internal_route_coro,
@@ -88,12 +89,6 @@ from .services.router_resilience import (
 )
 from .services.router_resilience import (
     get_router_redis,
-)
-from .services.router_resilience import (
-    is_error_budget_exceeded as _is_error_budget_exceeded_impl,
-)
-from .services.router_resilience import (
-    is_error_budget_exceeded_async as _is_error_budget_exceeded_async_impl,
 )
 from .services.router_resilience import (
     record_dependency_breaker_metrics as _record_dependency_breaker_metrics_impl,
@@ -207,17 +202,6 @@ def _record_request_outcome(success: bool) -> None:
 This helper encapsulates one focused step used by the surrounding workflow."""
     _record_request_outcome_impl(settings_getter=_settings_getter, success=success)
 
-
-def _is_error_budget_exceeded() -> bool:
-    """Execute the is error budget exceeded routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-    return _is_error_budget_exceeded_impl(settings_getter=_settings_getter)
-
-
-async def _is_error_budget_exceeded_async() -> bool:
-    """Async error-budget check for request routing."""
-    return await _is_error_budget_exceeded_async_impl(settings_getter=_settings_getter)
 
 # ============================================================
 # EMA History com TTL e LRU Eviction
@@ -512,8 +496,8 @@ def _build_route_deps() -> Dict[str, Any]:
         "FALLBACK_USED": FALLBACK_USED,
         "get_uncertainty_score": get_uncertainty_score,
         "BLOCKED_PREFIXES": BLOCKED_PREFIXES,
-        "_is_error_budget_exceeded": _is_error_budget_exceeded,
-        "_is_error_budget_exceeded_async": _is_error_budget_exceeded_async,
+        "providers_over_budget": lambda: providers_over_budget(_settings_getter),
+        "record_provider_outcome": lambda model, ok: record_provider_outcome(_settings_getter, model, ok),
         "get_dynamic_strategy_weights": get_dynamic_strategy_weights,
         "get_dynamic_strategy_weights_async": get_dynamic_strategy_weights_async,
         "choose_top2_models": choose_top2_models,

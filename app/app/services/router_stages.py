@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.model_registry import filter_configured_model_names, filter_tool_capable_model_names
 from app.native_tools import filter_native_tool_capable_model_names, split_tools
 from app.services.adversarial_governance import advgov_escalate
+from app.services.bandit_policy import LAST_CHOICE
 from app.services.rag_scope import scope_where
 from app.services.route_decision import decision_record
 
@@ -150,25 +151,15 @@ def _configured_candidates(ctx: RouteContext) -> List[str]:
     return models
 
 
-async def _error_budget_exceeded(deps: Dict[str, Any]) -> bool:
-    check_async = deps.get("_is_error_budget_exceeded_async")
-    if check_async is not None:
-        return await check_async()
-    return deps["_is_error_budget_exceeded"]()
-
-
-def _saudavel(model: str) -> bool:
-    """Circuit breaker closed (or half-open) for this model; unknown state counts as healthy."""
+async def _providers_over_budget(deps: Dict[str, Any]) -> set:
     try:
-        from app.reliability import get_circuit_breaker_manager
-
-        return bool(get_circuit_breaker_manager().is_available(model))
+        return set(await deps["providers_over_budget"]()) if "providers_over_budget" in deps else set()
     except Exception:
-        return True
+        return set()
 
 
 async def resolve_candidates(ctx: RouteContext) -> List[str]:
-    """Configured candidates, with cloud/local fallbacks and the error-budget local-only mode."""
+    """Configured candidates, with cloud/local fallbacks, minus providers over their error budget."""
     deps = ctx.deps
     models = _configured_candidates(ctx)
     if not models:
@@ -178,12 +169,13 @@ async def resolve_candidates(ctx: RouteContext) -> List[str]:
         models = filter_configured_model_names(cloud_fallback)
     if not models:
         return ["ollama/phi4:latest"]
-    if await _error_budget_exceeded(deps):
-        # Só locais saudáveis: forçar locais com breaker aberto prendia o sistema em 100% de falha, e a própria
-        # falha mantinha o orçamento de erros estourado (produção, 2026-09-24: 89 de 100 consultas em 502).
-        local = [m for m in models if m.startswith("ollama/") and _saudavel(m)]
-        deps["logger"].warning(f"[router] Error budget exceeded; {'local-only' if local else 'no healthy local, all'} candidates")
-        return local or models
+    over = await _providers_over_budget(deps)
+    if over:
+        # Tira só o provedor que está falhando. O modo antigo (orçamento global -> só locais) prendia o sistema
+        # no provedor que falhava quando a falha era a própria GPU (2026-09-24: 89 de 100 consultas em 502).
+        kept = [m for m in models if m.split("/", 1)[0] not in over]
+        deps["logger"].warning(f"[router] Error budget exceeded for {sorted(over)}; {len(kept)} candidates left")
+        return kept or models
     return models
 
 
@@ -233,6 +225,7 @@ async def _top2_and_pick(ctx: RouteContext, models: List[str], uncertainty: floa
     top2, scored, weights = await _scored_top2(ctx, models, uncertainty)
     ctx.scored_candidates = scored
     ctx.strategy_weights = weights
+    LAST_CHOICE.set(None)  # nada de um pedido anterior no mesmo contexto
     select_async = deps.get("select_model_async")
     if select_async is not None:
         return top2, await select_async(top2, ctx.query, ctx.modality)
@@ -279,13 +272,18 @@ def _decision_record(ctx: RouteContext, chosen: str, top2: List[str], uncertaint
     """The audit record of this decision, or ``{}`` when there was no comparison."""
     if not ctx.scored_candidates:
         return {}
-    return decision_record(
+    record = decision_record(
         ctx.scored_candidates,
         chosen=chosen,
         top2=top2,
         weights=ctx.strategy_weights,
         uncertainty=uncertainty,
     )
+    bandit = LAST_CHOICE.get()
+    if bandit:
+        # explorou = o escolhido (já depois da escalada adversarial) não é o de maior recompensa média.
+        record["bandit"] = {**bandit, "explored": chosen != bandit["greedy"]}
+    return record
 
 
 def _empty_bundle(ctx: RouteContext, reason: str, default_mode: str) -> Dict[str, Any]:

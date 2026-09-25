@@ -23,11 +23,11 @@ def patch_async_hot_path(select_return="ollama/phi4:latest", weights=None):
     with patch("app.router_core.select_model_async", new_callable=AsyncMock) as mock_select_async, patch(
         "app.router_core.get_dynamic_strategy_weights_async", new_callable=AsyncMock
     ) as mock_weights_async, patch(
-        "app.router_core._is_error_budget_exceeded_async", new_callable=AsyncMock
+        "app.router_core.providers_over_budget", new_callable=AsyncMock
     ) as mock_budget_async:
         mock_select_async.return_value = select_return
         mock_weights_async.return_value = resolved_weights
-        mock_budget_async.return_value = False
+        mock_budget_async.return_value = set()
         yield mock_select_async, mock_weights_async, mock_budget_async
 
 

@@ -277,3 +277,18 @@ def test_the_insert_accepts_and_defaults_the_semantics_column():
     for name in ("quality_semantics", "q_tech", "q_calibrado", "p_entrega", "detected_complexity"):
         assert name in params, name
         assert params[name].default is None
+
+
+def test_a_study_period_gets_its_own_state_namespace(monkeypatch):
+    """Caso 1: each period learns from its own prior; the previous period's state stays readable."""
+    from app.services import quality_semantics as qs
+
+    values = {"BANDIT_POLICY_NAMESPACE": "2026s2 !"}
+    monkeypatch.setattr(qs.settings, "get", lambda k, d=None: values.get(k, d))
+    assert qs.state_namespace() == "2026s2" and qs.namespaced("m") == "2026s2:m"
+    values[qs.SETTING_KEY] = qs.SEMANTICS_FORMATIVE_V2
+    assert qs.namespaced("m") == "formative_v2:2026s2:m"
+    values.pop("BANDIT_POLICY_NAMESPACE")
+    assert qs.namespaced("m") == "formative_v2:m"
+    values.pop(qs.SETTING_KEY)
+    assert qs.namespaced("m") == "m"  # padrão: identidade

@@ -37,13 +37,13 @@ def _patch_hot_path_async_deps(monkeypatch, router_core, *, weights=None, chosen
             return select_fn(models, _query, _modality)
         return chosen if chosen in models else models[0]
 
-    async def _budget_false():
-        return False
+    async def _budget_false(_getter):
+        return set()
 
     monkeypatch.setattr(router_core, "get_dynamic_strategy_weights", lambda _modality: resolved_weights)
     monkeypatch.setattr(router_core, "get_dynamic_strategy_weights_async", _weights_async)
     monkeypatch.setattr(router_core, "select_model_async", _select_async)
-    monkeypatch.setattr(router_core, "_is_error_budget_exceeded_async", _budget_false)
+    monkeypatch.setattr(router_core, "providers_over_budget", _budget_false)
 
 
 @pytest.mark.asyncio

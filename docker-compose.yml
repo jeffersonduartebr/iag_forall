@@ -80,20 +80,18 @@ services:
     # `service_completed_successfully` de que a API depende ficava satisfeita
     # de qualquer maneira: a API arrancava contra um esquema meio migrado.
     # O entrypoint da imagem roda o bootstrap do db_manager ANTES deste comando, e o bootstrap
-    # cria o esquema completo. Numa base nova (sem alembic_version) a 0001 colidiria com essas
-    # tabelas; o bootstrap já é o esquema do head, então a base é apenas carimbada. Numa base
-    # que já tem alembic_version, as migrações pendentes rodam normalmente.
+    # cria o esquema até a 0007. Numa base nova (sem alembic_version) a 0001 colidiria com essas
+    # tabelas: a base é carimbada na 0007 e as revisões seguintes (0008+: governança) rodam por
+    # cima. Numa base que já tem alembic_version, as migrações pendentes rodam normalmente.
     command: |
       bash -ec "
         echo '⏳ Executando Alembic migrations...' &&
         if alembic current 2>/dev/null | grep -Eq '^[0-9A-Za-z_]+'
         then alembic upgrade head
-        else alembic stamp head
+        else alembic stamp 0007_decision_audit && alembic upgrade head
         fi &&
         echo '⏳ Executando db_manager.py...' &&
         python -m app.db_manager &&
-        echo '⏳ Tabelas de governança (orçamento, política, RBAC)...' &&
-        python -m app.governance_ddl &&
         echo '✅ Banco pronto!'
       "
 

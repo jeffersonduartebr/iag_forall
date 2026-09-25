@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Dict, List, Tuple
+from contextvars import ContextVar
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -138,8 +139,13 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         else:
             chosen = ucb_choice
 
-    return chosen, {
-        "epsilon_greedy": eps_choice,
-        "ucb1": ucb_choice,
-        "thompson": ts_choice,
-    }
+    votes_by_policy = {"epsilon_greedy": eps_choice, "ucb1": ucb_choice, "thompson": ts_choice}
+    greedy = max(models, key=lambda m: ctx_stats.get(m, {}).get("mean", 0.0))
+    LAST_CHOICE.set({"greedy": greedy, "votes": votes_by_policy, "strategy": preferred_strategy})
+    return chosen, votes_by_policy
+
+
+#: The last bandit pick in this request's context: what exploiting would have chosen (highest mean reward)
+#: and each policy's vote. With it the decision record tells an exploratory pick from an exploiting one,
+#: which is what a per-model comparison needs to separate from the bandit's own learning.
+LAST_CHOICE: ContextVar[Optional[Dict[str, Any]]] = ContextVar("bandit_last_choice", default=None)
