@@ -239,3 +239,25 @@ def test_preview_answer_runs_router_without_cache(api, monkeypatch, extra, hints
     assert seen[0].use_cache is False and seen[0].query == "Q?"
     got = seen[0].workload_hints
     assert (got is None and hints is None) or {"theme": got.theme, "benchmark_id": got.benchmark_id} == hints
+
+
+def test_preview_answer_honours_frozen_policy(api, monkeypatch, fake_redis):
+    from app.services import frozen_policy as fp
+
+    client, _, _ = api
+    monkeypatch.setattr(fp, "build_frozen_snapshot", lambda: {"BANDIT_EPSILON": 0.1})
+    active = []
+
+    async def fake_process(req):
+        active.append(fp.is_frozen_policy_active())
+        return {"result": {"answer": "a", "metadata": {}}}
+
+    monkeypatch.setattr("app.services.query_runtime.process_query_request", fake_process)
+    for flag in (True, False):
+        body = client.post(
+            "/admin/experts/preview-answer",
+            json={"query": "Q?", "frozen_policy": flag},
+            headers=_h("expert_reviewer", jwt="ana"),
+        ).json()
+        assert body["frozen_policy"]["active"] is flag
+    assert active == [True, False] and fp.is_frozen_policy_active() is False

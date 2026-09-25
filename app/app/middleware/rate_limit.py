@@ -33,7 +33,7 @@ from app.observability import (
 from app.providers_async import get_ollama_admission_snapshot
 from app.settings_dynamic import settings
 from app.utils.client_ip import parse_trusted_proxies, resolve_client_ip
-from app.utils.redis_async_ops import redis_pipeline_execute
+from app.utils.redis_async_ops import redis_sliding_window_hit
 from app.utils.redis_client import get_redis_async
 
 logger = logging.getLogger(__name__)
@@ -146,22 +146,15 @@ class RateLimitStore:
     async def _is_rate_limited_redis(self, scope_key: str, max_requests: int, window_seconds: int) -> bool:
         """Use Redis sorted sets to enforce a distributed sliding window."""
         key = f"{self.REDIS_PREFIX}{scope_key}"
-        now = time.time()
-        cutoff = now - window_seconds
-
-        def _build(pipe):
-            pipe.zremrangebyscore(key, 0, cutoff)
-            pipe.zcard(key)
-            pipe.zadd(key, {str(now): now})
-            pipe.expire(key, self.REDIS_TTL)
-
         try:
-            results = await redis_pipeline_execute(_build)
-            if results is None:
+            # Membro único e só pedidos admitidos contam (como no backend em memória).
+            limited = await redis_sliding_window_hit(
+                key, now=time.time(), window_seconds=window_seconds, max_requests=max_requests, ttl_s=self.REDIS_TTL
+            )
+            if limited is None:
                 raise RuntimeError("redis pipeline unavailable")
-            count = int(results[1])
             self._publish_bucket_metrics()
-            return count >= max_requests
+            return limited
         except Exception as exc:
             logger.warning("[adaptive_limiter] Redis error, falling back to memory: %s", exc)
             self._use_redis = False

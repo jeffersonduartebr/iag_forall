@@ -10,7 +10,7 @@ import time
 from typing import Any, Optional
 
 from ..settings_dynamic import settings
-from .redis_async_ops import redis_get_raw, redis_pipeline_execute, redis_set_str
+from .redis_async_ops import redis_get_raw, redis_pipeline_execute, redis_set_str, redis_sliding_window_hit
 
 logger = logging.getLogger(__name__)
 
@@ -28,24 +28,16 @@ async def redis_sliding_window_limit(
     window_seconds: int,
 ) -> bool:
     """Return True when the key is over its sliding-window quota."""
-    now = time.time()
-    cutoff = now - window_seconds
     redis_key = f"tenant-rl:{key}"
-
-    def _build(pipe):
-        pipe.zremrangebyscore(redis_key, 0, cutoff)
-        pipe.zcard(redis_key)
-        pipe.zadd(redis_key, {str(now): now})
-        pipe.expire(redis_key, window_seconds + 5)
-
     try:
-        results = await redis_pipeline_execute(_build)
-        if results is None:
+        limited = await redis_sliding_window_hit(
+            redis_key, now=time.time(), window_seconds=window_seconds, max_requests=max_requests, ttl_s=window_seconds + 5
+        )
+        if limited is None:
             if _redis_required():
                 raise RuntimeError("Redis indisponível (obrigatório em produção).")
             return False
-        count = int(results[1] or 0)
-        return count >= max_requests
+        return limited
     except Exception as exc:
         logger.warning("[redis_distributed] rate limit error: %s", exc)
         if _redis_required():

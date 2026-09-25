@@ -255,6 +255,7 @@ async def preview_system_answer(
 ):
     """Execute one query through the router so experts can score the live answer."""
     from ..schemas import QueryRequest, WorkloadHints
+    from ..services.frozen_policy import optional_frozen_policy
     from ..services.query_runtime import process_query_request
 
     hints = None
@@ -265,7 +266,9 @@ async def preview_system_answer(
         workload_hints=hints,
         use_cache=False,
     )
-    wrapped = await process_query_request(req)
+    # frozen_policy era aceite e ignorado: a pré-visualização corria com exploração ligada.
+    with optional_frozen_policy(payload.frozen_policy) as frozen:
+        wrapped = await process_query_request(req)
     resp = wrapped.get("result", wrapped)
     meta = resp.get("metadata") or {}
     return {
@@ -275,4 +278,5 @@ async def preview_system_answer(
         "latency_s": resp.get("latency_s"),
         "metadata": meta,
         "reviewer": _expert_id(x_user_id, auth, authorization),
+        "frozen_policy": frozen or {"active": False},
     }

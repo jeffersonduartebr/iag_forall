@@ -113,6 +113,19 @@ async def test_redis_backend_counts_distributed_window(limiter, monkeypatch, fak
 
 
 @pytest.mark.asyncio
+async def test_redis_backend_same_timestamp_and_rejections_match_memory(limiter, monkeypatch, fake_aioredis):
+    async def _client():
+        return fake_aioredis
+
+    monkeypatch.setattr(rl, "get_redis_async", _client)
+    store = rl.rate_limit_store
+    # Relógio parado: com o membro str(now) os pedidos colapsavam num só e nunca havia 429.
+    results = [await store.is_rate_limited("t:s", max_requests=2, window_seconds=10) for _ in range(4)]
+    assert results == [False, False, True, True]
+    assert await fake_aioredis.zcard("adaptive-limit:t:s") == 2  # rejeitados não contam
+
+
+@pytest.mark.asyncio
 async def test_redis_pipeline_failure_falls_back_to_memory(limiter, monkeypatch):
     async def _client():
         return object()
@@ -121,7 +134,7 @@ async def test_redis_pipeline_failure_falls_back_to_memory(limiter, monkeypatch)
         return None
 
     monkeypatch.setattr(rl, "get_redis_async", _client)
-    monkeypatch.setattr(rl, "redis_pipeline_execute", _pipeline_down)
+    monkeypatch.setattr("app.utils.redis_async_ops.redis_pipeline_execute", _pipeline_down)
     store = rl.rate_limit_store
     assert await store.is_rate_limited("t:c", max_requests=1, window_seconds=10) is False
     assert store._use_redis is False

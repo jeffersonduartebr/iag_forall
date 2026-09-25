@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import redis
 from sqlalchemy import create_engine, text
@@ -213,6 +213,12 @@ This function applies the module-specific mutation logic for the target resource
 # 🧮 Calcular pesos por modalidade
 # ============================================================
 
+def _positive_floor(values: List[float]) -> float:
+    """Smallest strictly positive value; 1.0 when none is positive (the metric then doesn't discriminate)."""
+    positive = [v for v in values if v > 0.0]
+    return min(positive) if positive else 1.0
+
+
 def compute_model_weights(modality: str) -> Dict[str, float]:
     """Compute model weights.
 
@@ -228,15 +234,17 @@ The function derives the value needed by the surrounding workflow from the avail
             logger.warning(f"[update_nsga] Nenhum EMA disponível para modality={modality}.")
             return {}
 
-        # converter para score
+        # converter para score. Um modelo grátis (custo 0) era dividido por 1e-6 e
+        # levava praticamente todo o peso: o piso é agora o menor valor positivo
+        # entre os modelos pesados (o grátis conta como o pago mais barato).
+        metrics = [
+            (row["model"], float(row["ema_latency"]), float(row["ema_quality"]), float(row["ema_cost"])) for row in rows
+        ]
+        lat_floor = _positive_floor([m[1] for m in metrics])
+        cost_floor = _positive_floor([m[3] for m in metrics])
         scores = {}
-        for row in rows:
-            model = row["model"]
-            lat = float(row["ema_latency"])
-            qual = float(row["ema_quality"])
-            cost = float(row["ema_cost"])
-
-            score = (qual / 10.0) / (lat + 1e-6) / (cost + 1e-6)
+        for model, lat, qual, cost in metrics:
+            score = (qual / 10.0) / max(lat, lat_floor) / max(cost, cost_floor)
             scores[model] = max(0.0, score)
 
         total = sum(scores.values()) or 1.0

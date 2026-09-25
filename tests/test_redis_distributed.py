@@ -72,8 +72,16 @@ async def test_sliding_window_limit_counts_requests(fake_aioredis):
     over = [await rd.redis_sliding_window_limit("t1", max_requests=3, window_seconds=60) for _ in range(5)]
     # A contagem é lida antes de registrar a requisição atual.
     assert over == [False, False, False, True, True]
-    assert await fake_aioredis.zcard("tenant-rl:t1") == 5
+    # Rejeitadas não ocupam a janela (antes: 5, e o tenant nunca saía do 429 sob carga).
+    assert await fake_aioredis.zcard("tenant-rl:t1") == 3
     assert await rd.redis_sliding_window_limit("t2", max_requests=3, window_seconds=60) is False
+
+
+@pytest.mark.asyncio
+async def test_sliding_window_counts_requests_sharing_a_timestamp(fake_aioredis, monkeypatch):
+    monkeypatch.setattr(rd.time, "time", lambda: 1000.0)  # todas no mesmo instante
+    over = [await rd.redis_sliding_window_limit("t3", max_requests=2, window_seconds=60) for _ in range(3)]
+    assert over == [False, False, True]  # com membro str(now) as três eram uma só
 
 
 @pytest.mark.asyncio
@@ -91,7 +99,7 @@ async def test_sliding_window_limit_error_policy(monkeypatch):
     async def _boom(build):
         raise ConnectionError("down")
 
-    monkeypatch.setattr(rd, "redis_pipeline_execute", _boom)
+    monkeypatch.setattr("app.utils.redis_async_ops.redis_pipeline_execute", _boom)
     monkeypatch.setattr(rd, "settings", _settings("development"))
     assert await rd.redis_sliding_window_limit("t", max_requests=1, window_seconds=1) is False
 

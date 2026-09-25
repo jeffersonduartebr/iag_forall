@@ -25,6 +25,7 @@ from .observability import (
     QUERY_JOBS_SATURATED,
 )
 from .schemas import QueryJobStatus, QueryJobStatusResponse, QueryRequest, QueryResponse, QueuedQueryAcceptedResponse
+from .services.pending_slots import release_pending_slot, reserve_pending_slot
 from .settings_dynamic import settings
 from .utils.redis_client import get_redis_async_safe
 
@@ -155,6 +156,11 @@ def _get_job_store():
     return get_redis_async_safe()
 
 
+def _enqueue_failed_error() -> HTTPException:
+    detail = {"error": True, "message": "Falha ao enfileirar a query.", "category": "queue_enqueue_failed"}
+    return HTTPException(status_code=503, detail=detail)
+
+
 def enqueue_query_job(
     *,
     req: QueryRequest,
@@ -179,13 +185,13 @@ def enqueue_query_job(
 
     tenant_identity, identity_type = _resolve_pending_identity(req, identity_key)
     pending_key = _tenant_pending_key(tenant_identity)
-    pending_count = 0
-    try:
-        pending_count = int(redis_client.get(pending_key) or 0)
-    except Exception:
-        pending_count = 0
     pending_limit = _job_pending_limit_for(identity_type)
-    if pending_count >= pending_limit:
+    # INCR-then-check (atómico); o GET-then-INCR deixava pedidos concorrentes passar do limite.
+    try:
+        accepted, pending_count = reserve_pending_slot(redis_client, pending_key, pending_limit, _job_ttl_seconds())
+    except Exception as exc:
+        raise _enqueue_failed_error() from exc
+    if not accepted:
         try:
             QUERY_JOBS_SATURATED.labels(identity_type=identity_type).inc()
         except Exception:
@@ -230,8 +236,6 @@ def enqueue_query_job(
     try:
         pipe = redis_client.pipeline()
         pipe.setex(_job_key(job_id), _job_ttl_seconds(), _json_dumps(payload))
-        pipe.incr(pending_key)
-        pipe.expire(pending_key, _job_ttl_seconds())
         pipe.execute()
         try:
             QUERY_JOBS_QUEUED.labels(reason=reason).inc()
@@ -252,20 +256,10 @@ def enqueue_query_job(
         logger.error("[query_jobs] Failed to enqueue query job %s: %s", job_id, exc)
         try:
             redis_client.delete(_job_key(job_id))
-            if pending_count <= 0:
-                redis_client.delete(pending_key)
-            else:
-                redis_client.decr(pending_key)
         except Exception:
             pass
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": True,
-                "message": "Falha ao enfileirar a query.",
-                "category": "queue_enqueue_failed",
-            },
-        )
+        release_pending_slot(redis_client, pending_key)
+        raise _enqueue_failed_error() from exc
 
     poll_url, result_url = _build_urls(job_id)
     queue_depth = max(0, pending_count + 1)

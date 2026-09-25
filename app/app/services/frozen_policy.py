@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Optional
 
@@ -40,7 +41,8 @@ def build_frozen_snapshot() -> Dict[str, Any]:
 
 def activate_frozen_policy(run_id: str, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Store frozen policy state in Redis for the duration of one eval run."""
-    payload = dict(snapshot or build_frozen_snapshot())
+    # ``{}`` explícito é um snapshot (vazio), não a ausência dele.
+    payload = dict(snapshot if snapshot is not None else build_frozen_snapshot())
     payload["run_id"] = run_id
     payload["active"] = True
     rds = _redis_client()
@@ -130,3 +132,22 @@ def frozen_policy_context(run_id: str, snapshot: Optional[Dict[str, Any]] = None
         yield payload
     finally:
         deactivate_frozen_policy(run_id)
+
+
+@contextmanager
+def optional_frozen_policy(enabled: bool, prefix: str = "preview") -> Iterator[Optional[Dict[str, Any]]]:
+    """Freeze the policy around one ad-hoc call (e.g. the expert preview) when ``enabled``.
+
+    An already active freeze (an eval run) is reused rather than re-activated:
+    activating would overwrite its ``active`` marker and deactivating would then
+    delete it, unfreezing the eval run for the rest of its execution.
+    """
+    if not enabled:
+        yield None
+        return
+    current = get_frozen_policy()
+    if current:
+        yield current
+        return
+    with frozen_policy_context(f"{prefix}:{uuid.uuid4().hex[:12]}") as payload:
+        yield payload

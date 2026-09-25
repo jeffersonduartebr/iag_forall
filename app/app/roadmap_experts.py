@@ -227,11 +227,28 @@ def list_expert_assessments(
     eval_run_id: Optional[str] = None,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
-    """List expert assessments with optional filters."""
+    """List expert assessments with optional filters.
+
+    ``p_entrega`` (the usurpation judge's delivery estimate) lives in ``query_log``,
+    not here: an assessment keeps no id, correlation id or eval result id of the
+    answer it scored. What it does keep is that answer verbatim — ``query_text`` and
+    ``answer`` are copied from the eval run result (``_eval_review_pool``) or from
+    ``/admin/experts/preview-answer`` — and the feedback pipeline writes the same
+    pair into ``query_log``. The link is therefore that exact pair; the most recent
+    judged row wins. Assessments with no answer, or whose answer never reached
+    ``query_log`` (judge not sampled, usurpation judge off, answer typed by hand),
+    get ``p_entrega = None`` and are left out of the delivery kappa.
+    """
     sql = """
         SELECT id, expert_id, benchmark_id, theme, query_text, answer, reference,
                eval_run_id, judge_quality, quality_score, rubric_json, notes, status,
-               created_at, updated_at
+               created_at, updated_at,
+               (SELECT ql.p_entrega FROM query_log ql
+                 WHERE ql.query_text = expert_assessments.query_text
+                   AND ql.answer = expert_assessments.answer
+                   AND ql.p_entrega IS NOT NULL
+                   AND COALESCE(expert_assessments.answer, '') <> ''
+                 ORDER BY ql.id DESC LIMIT 1) AS p_entrega
         FROM expert_assessments
         WHERE 1=1
     """

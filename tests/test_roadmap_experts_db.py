@@ -18,6 +18,8 @@ _DDL = (
         query_text TEXT, answer TEXT, reference TEXT, eval_run_id TEXT, judge_quality REAL,
         quality_score REAL, rubric_json TEXT, notes TEXT, status TEXT,
         created_at TEXT, updated_at TEXT)""",
+    """CREATE TABLE query_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, query_text TEXT, answer TEXT, p_entrega REAL)""",
 )
 
 
@@ -67,3 +69,24 @@ def test_list_expert_assessments_filters_and_rubric(engine):
     assert [r["id"] for r in rx.list_expert_assessments(theme="saude")] == [2]
     assert [r["id"] for r in rx.list_expert_assessments(eval_run_id="r2")] == [3]
     assert len(rx.list_expert_assessments(limit=0)) == 1  # limite mínimo 1
+
+
+def test_list_expert_assessments_joins_p_entrega_from_query_log(engine):
+    """p_entrega vive em query_log; sem a junção o kappa de entrega nunca tinha pares."""
+    from app.services.expert_review import delivery_agreement_report
+
+    with engine.begin() as conn:
+        for q, a, p in [("q1", "r1", 0.1), ("q1", "r1", 0.9), ("q2", "r2", None), ("q3", "r3", 0.0), ("q4", "", 1.0)]:
+            conn.execute(text("INSERT INTO query_log (query_text, answer, p_entrega) VALUES (:q, :a, :p)"), {"q": q, "a": a, "p": p})
+        rubric = json.dumps({"scaffolding": 2})
+        _assessment(conn, benchmark_id="b1", query_text="q1", answer="r1", rubric_json=rubric)  # ligada
+        _assessment(conn, benchmark_id="b2", query_text="q2", answer="r2", rubric_json=rubric)  # juiz sem p_entrega
+        _assessment(conn, benchmark_id="b3", query_text="q3", answer="r3", rubric_json=rubric)  # ligada, p=0.0
+        _assessment(conn, benchmark_id="b4", query_text="q4", answer="", rubric_json=rubric)  # sem resposta
+        _assessment(conn, benchmark_id="b5", query_text="q9", answer="r9", rubric_json=rubric)  # não chegou ao log
+
+    by_id = {r["benchmark_id"]: r["p_entrega"] for r in rx.list_expert_assessments()}
+    assert by_id == {"b1": 0.9, "b2": None, "b3": 0.0, "b4": None, "b5": None}  # a linha julgada mais recente
+
+    report = delivery_agreement_report(rx.list_expert_assessments())
+    assert report["pairs"] == 2  # só os pares ligados contam

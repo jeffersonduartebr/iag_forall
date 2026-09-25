@@ -112,7 +112,7 @@ async def test_redis_down_fails_open_in_dev_and_closed_in_production(tenant, mon
     async def _down(_build):
         return None
 
-    monkeypatch.setattr(rd, "redis_pipeline_execute", _down)
+    monkeypatch.setattr("app.utils.redis_async_ops.redis_pipeline_execute", _down)
     assert (await tenant.mw.dispatch(_request(), _ok)).status_code == 200
     tenant.values["ENV"] = "production"
     with pytest.raises(RuntimeError, match="Redis"):
