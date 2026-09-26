@@ -144,6 +144,8 @@ Nos tenants de `REGIME_EXPLORACAO_TENANTS` (padrão `ifrn-caso1`), a rota vem de
 | `REGIME_EPSILON` | `0.15` | Probabilidade nominal de exploração. |
 | `REGIME_TETO` | `0.15` | Fração máxima de requisições exploradas por participante na janela. |
 | `REGIME_JANELA_EPISODIOS` | `20` | Tamanho da janela móvel: últimos episódios do participante, o atual incluído. |
+| `REGIME_AQUECIMENTO_ATE` | `2026-11-15` | Último dia (fuso America/Fortaleza) do aquecimento antes do campo. Vazio desliga. |
+| `REGIME_EPSILON_AQUECIMENTO` | `0.5` | Probabilidade de exploração durante o aquecimento. |
 
 - **Aproveitamento:** a candidata de maior recompensa média posterior no contexto do bandit. O empate se resolve pelo escore NSGA-II. Probabilidade `1 − ε`.
 - **Exploração:** sorteio uniforme entre as demais candidatas admissíveis e o conjunto do catálogo do OpenRouter em exploração (enquanto o explorador está ligado e dentro dos tetos diários). Probabilidade `ε/K` para cada braço.
@@ -151,6 +153,13 @@ Nos tenants de `REGIME_EXPLORACAO_TENANTS` (padrão `ifrn-caso1`), a rota vem de
 - **Requisição sem `episode_id`:** conta como episódio próprio.
 - **Regeneração:** se a resposta explorada falharia na verificação de incerteza, a configuração de aproveitamento é chamada e sua resposta é a entregue. O registro guarda o modelo explorado e o motivo.
 - **Reprodutibilidade:** o sorteio é determinístico pelo `correlation_id`.
+- **Aquecimento:** até `REGIME_AQUECIMENTO_ATE` (inclusive), antes da entrada dos estudantes, o bandit precisa de
+  histórico em todas as candidatas. Nesse período ε = `REGIME_EPSILON_AQUECIMENTO`, os braços são só as candidatas
+  configuradas (sem o catálogo do OpenRouter, que diluiria cada candidata a <1% do tráfego), não há teto por
+  participante nem exigência de `user_key` (a bateria noturna não o envia), e a janela do participante não é
+  gravada: o campo começa com janelas limpas. A política congelada continua zerando ε. A probabilidade segue exata,
+  e `decision_json.regime.fase` diz `aquecimento` ou `campo`. No dia seguinte à data, o regime do protocolo vale
+  sozinho, sem deploy.
 
 ## Execução em sombra (pesquisa, Caso 1)
 

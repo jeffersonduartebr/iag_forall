@@ -303,6 +303,11 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "REGIME_EPSILON": "0.15",
         "REGIME_TETO": "0.15",
         "REGIME_JANELA_EPISODIOS": "20",
+        # Aquecimento antes do campo (até esta data, inclusive, no fuso de Fortaleza): exploração maior entre as
+        # candidatas configuradas, sem teto por participante, para o bandit aprender a compará-las antes dos
+        # estudantes. Vazio = sem aquecimento. O campo do Caso 1 começa em 16/11/2026.
+        "REGIME_AQUECIMENTO_ATE": "2026-11-15",
+        "REGIME_EPSILON_AQUECIMENTO": "0.5",
     },
     "shadow": {
         "SHADOW_EXECUTION_ENABLED": "1",

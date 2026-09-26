@@ -79,6 +79,12 @@ def _epsilon(cfg: config.ConfigRegime, ctx: RouteContext, bracos: List[str], rds
     participante = ctx.hints.get("user_key")
     if not bracos:
         return 0.0, "sem_bracos", None
+    if cfg.em_aquecimento():  # antes do campo: sem teto por participante e sem exigir participante
+        return (
+            (0.0, "politica_congelada", None)
+            if rds is not None and _congelada(rds)
+            else (cfg.epsilon_aquecimento, None, None)
+        )
     if not participante:
         return 0.0, "sem_participante", None
     if rds is None:
@@ -103,26 +109,41 @@ async def rota_do_regime(ctx: RouteContext, modelos: List[str], incerteza: float
     ctx.scored_candidates, ctx.strategy_weights = pontuados, pesos
     medias, ordem = await _medias(ctx), {c.model: i for i, c in enumerate(pontuados)}
     guloso = max(modelos, key=lambda m: (medias.get(m, 0.0), -ordem.get(m, len(modelos))))
-    catalogo = await _pool_catalogo(ctx, modelos)
+    aquecimento = cfg.em_aquecimento()
+    # No aquecimento a exploração fica nas candidatas configuradas: com o catálogo (~80 modelos) cada uma
+    # receberia ~0,6% do tráfego e o bandit não aprenderia a compará-las. O catálogo segue no seu mecanismo.
+    catalogo = [] if aquecimento else await _pool_catalogo(ctx, modelos)
     bracos = [m for m in modelos if m != guloso] + catalogo
     rds, episodio = _redis(), janela.episodio_de(ctx.hints.get("episode_id"), request_id)
     eps, motivo, janela_antes = _epsilon(cfg, ctx, bracos, rds, episodio)
     explorou = uniforme(request_id, "explorar") < eps
     escolhido = bracos[int(uniforme(request_id, "braco") * len(bracos))] if explorou else guloso
-    if ctx.hints.get("user_key") and rds is not None:
+    if ctx.hints.get("user_key") and rds is not None and not aquecimento:  # o campo começa com janelas limpas
         janela.registrar(rds, str(ctx.hints["user_key"]), episodio, cfg.janela, explorou)
     info = {
-        "explorou": explorou, "p_atribuicao": (eps / len(bracos)) if explorou else 1.0 - eps,
-        "epsilon_nominal": cfg.epsilon, "epsilon_efetivo": eps, "motivo_sem_exploracao": motivo,
-        "aproveitamento": guloso, "k_bracos": len(bracos), "k_catalogo": len(catalogo), "episodio": episodio,
+        "explorou": explorou,
+        "p_atribuicao": (eps / len(bracos)) if explorou else 1.0 - eps,
+        "epsilon_nominal": cfg.epsilon,
+        "epsilon_efetivo": eps,
+        "motivo_sem_exploracao": motivo,
+        "aproveitamento": guloso,
+        "k_bracos": len(bracos),
+        "k_catalogo": len(catalogo),
+        "episodio": episodio,
         "janela_antes": {"n": janela_antes[0], "x": janela_antes[1]} if janela_antes else None,
-        "teto": cfg.teto, "janela_episodios": cfg.janela, "regenerado": False,
+        "teto": cfg.teto,
+        "janela_episodios": cfg.janela,
+        "regenerado": False,
+        "fase": "aquecimento" if aquecimento else "campo",
     }
     decisao = _decision_record(ctx, escolhido, top2, incerteza) or {}
     decisao["regime"] = info
     do_catalogo = escolhido in catalogo
     exploracao = {"openrouter_exploration": True, "regime": True, "exploration_pool_size": len(catalogo)}
     return RouteChoice(
-        chosen=escolhido, top2=[escolhido], decision=decisao, exploration_mode=do_catalogo,
+        chosen=escolhido,
+        top2=[escolhido],
+        decision=decisao,
+        exploration_mode=do_catalogo,
         exploration_info=exploracao if do_catalogo else {},
     )
