@@ -330,7 +330,8 @@ def build_result(
             "modality_selected": ctx.modality,
             "is_multimodal_route": bool(ctx.image_b64),
             "objectives": {"latency": latency_s, "cost": total_cost, "uncertainty": uncertainty},
-            "pareto_front": choice.decision.get("pareto_front", []),
+            # O contrato da resposta é uma lista de objetos (RouteDecision.pareto_front); decision_json guarda os nomes.
+            "pareto_front": [c for c in choice.decision.get("candidates", []) if c.get("on_pareto_front")],
             "strategy_weights": choice.decision.get("weights", {}),
             "explanation": (
                 f"OpenRouter exploration: {chosen}"
