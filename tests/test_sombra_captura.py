@@ -34,7 +34,22 @@ def fila(monkeypatch):
     enviados = []
     monkeypatch.setattr(tasks.task_shadow_evaluate, "delay", lambda job: enviados.append(job))
     monkeypatch.setattr("app.correlation.get_correlation_id", lambda: "req-xyz")
+    monkeypatch.setattr(captura, "em_aquecimento", lambda: False)  # estes testes são do campo
     return enviados
+
+
+def test_the_shadow_is_paused_during_the_warmup(monkeypatch, fila):
+    ligar(monkeypatch)
+    monkeypatch.setattr(captura, "em_aquecimento", lambda: True)
+    assert _chamar(_ctx()) is False and fila == []
+
+
+def test_the_warmup_flag_follows_the_regime(monkeypatch):
+    from app.services.regime import config as regime
+
+    for ativo in (True, False):
+        monkeypatch.setattr(regime, "carregar", lambda a=ativo: SimpleNamespace(em_aquecimento=lambda: a))
+        assert captura.em_aquecimento() is ativo
 
 
 def test_the_draw_is_deterministic_and_matches_the_rate():

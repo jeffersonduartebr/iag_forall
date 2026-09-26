@@ -114,3 +114,21 @@ async def test_switch_off_and_missing_redis_still_record_the_sampled_request(mon
     monkeypatch.setattr(executor, "_redis", lambda: None)
     sem = await executor.executar(job(), chamar=Modelos())
     assert {linha["status"] for linha in sem} == {"sem_redis"} and len(sem) == 3
+
+
+@pytest.mark.asyncio
+async def test_lean_shadow_runs_a_quarter_of_the_candidates_with_three_judges(monkeypatch, rds):
+    todas = [f"openrouter/v{i}/m{i}" for i in range(8)]
+    modelos = Modelos()
+    linhas, gravado = await _rodar(monkeypatch, rds, modelos, job(candidatas=todas),
+                                   juizes_por_resposta=3, fracao_candidatas=0.25)
+    sombra = [linha for linha in linhas if linha["papel"] == "sombra"]
+    rodadas = [linha for linha in sombra if linha["status"] == "ok"]
+    fora = [linha for linha in sombra if linha["status"] == "fora_da_amostra"]
+    assert (len(rodadas), len(fora)) == (2, 6)  # ceil(0,25 x 8) = 2; as outras 6 têm linha, sem chamada
+    assert {c["model"] for c in modelos.de_candidatas()} == {linha["modelo"] for linha in rodadas}
+    assert {linha["p_candidata"] for linha in sombra} == {0.25}
+    assert [linha["p_candidata"] for linha in linhas if linha["papel"] == "entregue"] == [1.0]
+    assert all(len(linha["painel"]) == 3 for linha in rodadas + [linhas[0]])
+    assert all(linha.get("escore_agregado") is None and linha["executada"] for linha in fora)
+    assert gravado["linhas"] == linhas

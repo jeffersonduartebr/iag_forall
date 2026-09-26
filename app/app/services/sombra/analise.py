@@ -4,6 +4,8 @@
 Probabilidade efetiva de inclusão por estrato x dia: ``pi_hat = p x executadas / sorteadas``; cada requisição
 executada pesa ``1 / pi_hat`` (Horvitz-Thompson). Por requisição executada com a entregue e ao menos outra candidata
 pontuadas: arrependimento = max escore - escore da entregue; concordância com o oráculo = a entregue atinge o máximo.
+Com a subamostra de candidatas (``p_candidata < 1``) o máximo é o das sorteadas: o arrependimento é um limite
+inferior e a concordância um limite superior; as médias por configuração seguem não enviesadas.
 """
 
 from __future__ import annotations

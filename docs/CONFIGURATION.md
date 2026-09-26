@@ -182,7 +182,9 @@ mesmo contexto recuperado da resposta entregue. Todas são pontuadas pelo mesmo 
 | `SHADOW_RATE_LIMIT_PER_TENANT_HOUR` | `30` | Requisições amostradas por tenant e por hora local. |
 | `SHADOW_TIMEOUT_S` | `300` | Tempo máximo por chamada em sombra. |
 | `SHADOW_BUDGET_TZ` | `America/Fortaleza` | Fuso em que o dia do orçamento (e a hora do teto) é apurado. |
-| `SHADOW_JUDGE_MODELS` | gemini-3.1-pro-preview (Vertex), claude-opus-5.5, grok-4.7, gpt-5.6-sol (OpenRouter) | Painel base. Cada candidata perde os juízes da própria empresa. |
+| `SHADOW_JUDGE_MODELS` | gemini-3.1-pro-preview (Vertex), kimi-k3, grok-4.7, gpt-5.6-sol (OpenRouter) | Painel base, um juiz por empresa. A ordem é sorteada por requisição. |
+| `SHADOW_JUDGES_PER_ANSWER` | `3` | Juízes por resposta: os primeiros da ordem sorteada que não sejam da empresa da resposta. `0` = painel inteiro. |
+| `SHADOW_CANDIDATE_FRACTION` | `0.25` | Fração das demais candidatas rodada por requisição (sorteio uniforme; `p_candidata` gravada por linha). `1` = todas. |
 
 Todas as chaves entram no manifesto do experimento (`experiment_manifest`).
 

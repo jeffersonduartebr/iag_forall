@@ -3,7 +3,9 @@
 
 The draw is deterministic, ``sha256("aristo-sombra:" + correlation_id) < SHADOW_SAMPLE_RATE``, so the sample is
 reproducible from the logged ids. Eligible requests: switch on, tenant in ``SHADOW_TENANT_ALLOWLIST``, a routed
-choice (not a pinned instrument call, not a cache hit, not a tool or multi-turn turn), at least one other candidate.
+choice (not a pinned instrument call, not a cache hit, not a tool or multi-turn turn), at least one other candidate,
+and outside the regime's warm-up (``REGIME_AQUECIMENTO_ATE``): the shadow only measures, so before the field it
+would spend without teaching the bandit anything.
 """
 
 from __future__ import annotations
@@ -73,6 +75,12 @@ def montar_job(ctx: Any, choice: Any, outcome: Any, final_prompt: str, bundle: D
     }
 
 
+def em_aquecimento() -> bool:
+    from app.services.regime import config as regime
+
+    return regime.carregar().em_aquecimento()
+
+
 def talvez_agendar(ctx: Any, choice: Any, outcome: Any, final_prompt: str, bundle: Dict[str, Any],
                    result: Dict[str, Any], incerteza: float) -> bool:
     """Sample and enqueue; ``True`` when the request was sent to the shadow queue. Swallows every error."""
@@ -81,6 +89,9 @@ def talvez_agendar(ctx: Any, choice: Any, outcome: Any, final_prompt: str, bundl
         if not cfg.ligada or (ctx.tenant_id or "") not in cfg.tenants:
             return False
         if ctx.hints.get("pinned_model") or ctx.tools or ctx.messages or not ctx.candidates:
+            return False
+        if em_aquecimento():  # a sombra só mede; no aquecimento ela não ensina nada ao bandit e só gastaria
+            SHADOW_SKIPPED.labels(motivo="aquecimento").inc()
             return False
         from app.correlation import get_correlation_id
 
