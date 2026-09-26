@@ -80,12 +80,17 @@ async def execute_query(
 
     main = _main()
     try:
-        processed = await main.process_query_request(req)
+        return await _servir(req, request, main, start)
     except Exception as exc:  # o cliente recebe o erro; a pesquisa recebe a linha
         rota = request.url.path if request is not None else None
         await asyncio.to_thread(registrar_falha, req, exc, correlation_id=get_correlation_id(), route_path=rota,
                                 inicio=start)
         raise
+
+
+async def _servir(req: QueryRequest, request: Request | None, main: Any, start: float) -> Any:
+    """Route, record and build the response of one synchronous query."""
+    processed = await main.process_query_request(req)
     result = processed["result"]
     image_input = processed["image_input"]
 

@@ -153,3 +153,37 @@ def test_failed_requests_get_a_row(monkeypatch):
 def test_recording_a_failure_never_raises(monkeypatch):
     monkeypatch.setattr("app.db.get_engine", lambda: (_ for _ in ()).throw(RuntimeError("db")))
     falhas_consulta.registrar(_req(), RuntimeError("x"), correlation_id=None, route_path=None, inicio=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("etapa", ["process_query_request", "build_query_response"])
+async def test_sync_query_failures_are_recorded_wherever_they_happen(monkeypatch, etapa):
+    """The 500s of 26/09 came from building the response, after routing: both stages must leave a row."""
+    from app.schemas import QueryRequest
+    from app.services import query_http as qh
+
+    registradas = []
+
+    async def _processar(req):
+        return {"result": {"model": "m", "latency_s": 1.0, "metadata": {}}, "image_input": None}
+
+    def _falha(*a, **k):
+        raise RuntimeError(etapa)
+
+    main = SimpleNamespace(
+        process_query_request=_processar,
+        record_query_side_effects=lambda *a, **k: None,
+        build_query_response=lambda *a, **k: {"ok": True},
+    )
+    setattr(main, etapa, _falha)
+    monkeypatch.setattr(qh, "_main", lambda: main)
+    monkeypatch.setattr(qh, "_should_proactively_defer_query", lambda req, request: (False, "", "", ""))
+    monkeypatch.setattr(qh, "registrar_falha", lambda req, exc, **kw: registradas.append((str(exc), kw["route_path"])))
+
+    async def _nada(*a, **k):
+        return None
+
+    monkeypatch.setattr(qh, "_resolve_idempotency", _nada)
+    with pytest.raises(RuntimeError):
+        await qh.execute_query(QueryRequest(query="q"), None)
+    assert registradas == [(etapa, None)]
