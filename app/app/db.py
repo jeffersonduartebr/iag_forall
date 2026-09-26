@@ -23,40 +23,13 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import QueuePool
 
+from .db_url import DIALETOS, _get_db_config, dialeto, get_db_url  # noqa: F401  (reexportados)
+
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
 # Database Configuration
 # ==============================================================================
-
-def _get_db_config() -> dict:
-    """Get database configuration from environment variables."""
-    return {
-        "host": os.getenv("DB_HOST", "mariadb"),
-        "port": int(os.getenv("DB_PORT", "3306")),
-        "user": os.getenv("DB_USER", "router_user"),
-        "password": os.getenv("DB_PASS", ""),
-        "database": os.getenv("DB_NAME", "routerdb"),
-    }
-
-
-def get_db_url(config: Optional[dict] = None) -> str:
-    """
-    Build the database URL from configuration.
-
-    Args:
-        config: Optional config dict. If None, uses environment variables.
-
-    Returns:
-        SQLAlchemy database URL string.
-    """
-    if config is None:
-        config = _get_db_config()
-
-    return (
-        f"mysql+pymysql://{config['user']}:{config['password']}"
-        f"@{config['host']}:{config['port']}/{config['database']}"
-    )
 
 
 # ==============================================================================
@@ -73,15 +46,25 @@ ENGINE_RETRY_BACKOFF_S: float = float(os.getenv("DB_ENGINE_RETRY_BACKOFF_S", "5"
 
 
 def _connect_args() -> dict:
-    """Socket timeouts for PyMySQL, which has none by default.
+    """Timeouts per driver: nothing may block a thread forever on a server that accepts and never answers.
 
-    ``read_timeout=None`` is the driver default: a MariaDB that accepts the
-    connection but never answers — a locked table, a saturated server — blocks
-    the calling thread indefinitely. The Redis client in this codebase sets a
-    2 s connect timeout; nobody had done it for the database.
+    PyMySQL: socket read/write timeouts (``read_timeout=None`` is its default). psycopg2: connect timeout, TCP
+    keepalives and TLS; the statement timeout lives on the database role (``ALTER ROLE ... SET``), because
+    PgBouncer in transaction mode does not forward per-connection ``options``.
     """
+    conectar = int(os.getenv("DB_CONNECT_TIMEOUT_S", "5"))
+    if dialeto() == "postgresql":
+        return {
+            "connect_timeout": conectar,
+            "sslmode": os.getenv("DB_SSLMODE", "prefer"),
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+            "application_name": os.getenv("DB_APPLICATION_NAME", "aristo"),
+        }
     return {
-        "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT_S", "5")),
+        "connect_timeout": conectar,
         "read_timeout": int(os.getenv("DB_READ_TIMEOUT_S", "30")),
         "write_timeout": int(os.getenv("DB_WRITE_TIMEOUT_S", "30")),
     }

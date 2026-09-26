@@ -23,9 +23,12 @@ DB_USER = os.getenv("DB_USER", "router_user")
 DB_PASS = os.getenv("DB_PASS", "router_pass")
 DB_HOST = os.getenv("DB_HOST", "mariadb") 
 DB_NAME = os.getenv("DB_NAME", "routerdb")
-DB_PORT = 3307 if DB_HOST == "localhost" else 3306
+if DB_HOST == "localhost" and not os.getenv("DB_PORT"):
+    os.environ["DB_PORT"] = "3307"  # MariaDB local do compose, publicado em 3307
 
-DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+from app.db_url import get_db_url  # noqa: E402
+
+DB_URL = get_db_url()
 
 def run_analysis():
     """Run analysis.

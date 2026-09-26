@@ -35,7 +35,7 @@ def _use_real_engine(monkeypatch):
 def test_get_db_url_with_config():
     """Testa get db url with config."""
     url = db.get_db_url(
-        {"host": "h", "port": 3306, "user": "u", "password": "p", "database": "d"}
+        {"dialect": "mysql", "host": "h", "port": 3306, "user": "u", "password": "p", "database": "d"}
     )
     assert url == "mysql+pymysql://u:p@h:3306/d"
 

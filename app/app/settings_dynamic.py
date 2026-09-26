@@ -43,7 +43,6 @@ from .config.settings_catalog import (
     known_setting_keys,
 )
 from .config.settings_encryption import decrypt, encrypt, is_secret  # noqa: F401  (singleton partilhado)
-from .config.settings_env import DB_HOST_ENV, DB_NAME_ENV, DB_PASS_ENV, DB_PORT_ENV, DB_USER_ENV
 from .config.settings_properties import TypedSettingsMixin
 from .config.settings_sources import decode_redis_value, resolve_setting_value, resolve_setting_value_async
 from .config.settings_types import as_bool, as_float, as_int, as_list
@@ -91,8 +90,9 @@ def _get_settings_engine():
         # Fallback: create a temporary engine for bootstrap
         from sqlalchemy import create_engine
 
-        db_url = f"mysql+pymysql://{DB_USER_ENV}:{DB_PASS_ENV}@{DB_HOST_ENV}:{DB_PORT_ENV}/{DB_NAME_ENV}"
-        return create_engine(db_url, pool_pre_ping=True, pool_recycle=300)
+        from app.db_url import get_db_url  # sem SQLAlchemy: funciona mesmo se app.db não importar
+
+        return create_engine(get_db_url(), pool_pre_ping=True, pool_recycle=300)
 
 
 # Legacy alias for backward compatibility
