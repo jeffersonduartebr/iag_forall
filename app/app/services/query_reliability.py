@@ -148,6 +148,7 @@ def enrich_result_reliability(result: Dict[str, Any]) -> Dict[str, Any]:
         score=score,
     )
     if reason is not None:
+        metadata["answer_before_abstention"] = result.get("answer")  # o que o modelo gerou e não foi servido
         result["answer"] = SAFE_ABSTAIN_ANSWER
     review = "needs_review" if reason is not None or verification == "unsupported" or band == "low" else "auto_approved"
 

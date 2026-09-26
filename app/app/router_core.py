@@ -70,7 +70,7 @@ from .reliability import (  # noqa: F401  (get_request_deduplicator re-export p/
     execute_with_fallback,
     get_request_deduplicator,
 )
-from .router_strategy import choose_top2_models
+from .router_strategy import choose_top2_models, score_candidates
 from .semantic_cache import check_cache, store_cache
 from .services.hedged_execution import execute_with_hedge
 from .services.provider_budget import providers_over_budget, record_provider_outcome
@@ -501,6 +501,8 @@ def _build_route_deps() -> Dict[str, Any]:
         "get_dynamic_strategy_weights": get_dynamic_strategy_weights,
         "get_dynamic_strategy_weights_async": get_dynamic_strategy_weights_async,
         "choose_top2_models": choose_top2_models,
+        # Mesmo ranking do choose_top2_models, com o detalhe que alimenta decision_json.
+        "score_candidates": score_candidates,
         "select_model": select_model,
         "select_model_async": select_model_async,
         "apply_ollama_performance_preferences": apply_ollama_performance_preferences,

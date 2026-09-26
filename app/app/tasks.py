@@ -241,6 +241,17 @@ def _count_eval_run(status: str) -> None:
         pass
 
 
+def _registrar_falha_job(request_payload: dict[str, Any], exc: BaseException, correlation_id: Optional[str],
+                         started_at: float) -> None:
+    """A failed queued job gets its request_failures row (the Redis status expires in an hour)."""
+    from types import SimpleNamespace
+
+    from .services.falhas_consulta import registrar
+
+    registrar(SimpleNamespace(**request_payload), exc, correlation_id=correlation_id, route_path="/query/jobs",
+              inicio=started_at)
+
+
 @celery_app.task(bind=True, queue="celery", max_retries=0)
 def task_execute_query_job(
     self,
@@ -266,7 +277,7 @@ def task_execute_query_job(
             image_input = processed["image_input"]
             metadata = result.setdefault("metadata", {})
             metadata["correlation_id"] = correlation_id
-            record_query_side_effects(req, result, image_input)
+            record_query_side_effects(req, result, image_input, "/query/jobs")
             response_model = build_query_response(result, correlation_id)
         finalize_query_job(
             job_id,
@@ -275,6 +286,7 @@ def task_execute_query_job(
         )
         return {"status": "completed", "job_id": job_id}
     except HTTPException as exc:
+        _registrar_falha_job(request_payload, exc, correlation_id, started_at)
         detail = exc.detail if isinstance(exc.detail, dict) else {"error": True, "message": str(exc.detail)}
         finalize_query_job(
             job_id,
@@ -285,6 +297,7 @@ def task_execute_query_job(
         return {"status": "failed", "job_id": job_id}
     except Exception as exc:
         logger.exception("[Celery] Queued query job failed %s: %s", job_id, exc)
+        _registrar_falha_job(request_payload, exc, correlation_id, started_at)
         finalize_query_job(
             job_id,
             status=QueryJobStatus.FAILED,

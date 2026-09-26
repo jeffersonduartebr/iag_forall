@@ -11,9 +11,11 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional
 
+from ..correlation import _correlation_id
 from .feedback_stages import (
-    FeedbackPersistError,
+    ErrorRisk,
     FeedbackRequest,
+    Quality,
     assess_error_risk,
     decide_judging,
     judge_quality,
@@ -58,23 +60,27 @@ async def process_background_feedback_impl(
         completion_tokens=completion_tokens,
     )
     observe_backlog_age(deps, fb, started)
+    # Valores que a linha leva se um estágio falhar: a linha é escrita sempre, com o que se apurou até ali.
+    risk = ErrorRisk(model_stats={}, predictor=None, query_embedding=None, predicted_error_prob=None)
+    quality: Optional[Quality] = None
+    judged, reward = False, None
+    token = _correlation_id.set(fb.payload.get("correlation_id"))  # as notas dos juízes levam o id da requisição
     try:
-        risk = await assess_error_risk(deps, fb)
-        decision = decide_judging(deps, fb, risk)
-        quality = await judge_quality(deps, fb, risk, decision) if decision.should_judge else proxy_quality(risk)
-        reward = update_bandit(deps, fb, quality)
-        await record_exploration(deps, fb, reward, quality)
-        update_ema(deps, state, fb, quality)
-        await maybe_store_cache(deps, fb, quality)
-        persist_log(deps, fb, quality, decision.should_judge, risk, reward)
-    except FeedbackPersistError:
-        # Já registada e contada em persist_log; propaga para a tarefa falhar.
-        raise
-    except Exception as exc:
-        # Um erro inesperado de estágio continua tolerado e registado: propagá-lo
-        # poria a tarefa em retry, e repetir o pipeline volta a pagar os juízes.
-        # Só a falha de escrita do log (acima) é que faz a tarefa falhar.
-        quietly(lambda: deps["FEEDBACK_TASK_FAILURES"].labels(stage="persist").inc())
-        deps["logger"].exception(f"[Background] Critical fail: {exc}")
+        try:
+            risk = await assess_error_risk(deps, fb)
+            decision = decide_judging(deps, fb, risk)
+            judged = decision.should_judge
+            quality = await judge_quality(deps, fb, risk, decision) if judged else proxy_quality(risk)
+            reward = update_bandit(deps, fb, quality)
+            await record_exploration(deps, fb, reward, quality)
+            update_ema(deps, state, fb, quality)
+            await maybe_store_cache(deps, fb, quality)
+        except Exception as exc:
+            # Um erro de estágio não é repetido (repetir volta a pagar os juízes), mas também não apaga a linha.
+            quietly(lambda: deps["FEEDBACK_TASK_FAILURES"].labels(stage="pipeline").inc())
+            deps["logger"].exception(f"[Background] Critical fail: {exc}")
+        # Falha de escrita propaga (FeedbackPersistError) e a tarefa fica em FAILURE.
+        persist_log(deps, fb, quality, judged, risk, reward)
     finally:
+        _correlation_id.reset(token)
         deps["FEEDBACK_PROCESSING_LATENCY"].observe(time.time() - started)

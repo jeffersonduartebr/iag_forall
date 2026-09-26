@@ -310,6 +310,7 @@ def build_result(
             "raw_payload": meta_safe.get("raw_payload"),
             "prompt_tokens": p_tok,
             "completion_tokens": c_tok,
+            "reasoning_tokens": int(meta_safe.get("reasoning_tokens") or 0),
             "cash_cost_usd": meta_safe.get("cash_cost_usd", total_cost),
             "imputed_cost_usd": meta_safe.get("imputed_cost_usd", 0.0),
             "load_time": load_time_s,

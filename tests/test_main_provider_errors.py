@@ -171,7 +171,7 @@ async def test_route_query_uses_main_wiring(monkeypatch):
         }
 
     monkeypatch.setattr(main, "process_query_request", _process)
-    monkeypatch.setattr(main, "record_query_side_effects", lambda req, result, image_input: None)
+    monkeypatch.setattr(main, "record_query_side_effects", lambda req, result, image_input, route_path=None: None)
     out = await main.route_query(_make_request())
     assert out.answer == "ok"
 

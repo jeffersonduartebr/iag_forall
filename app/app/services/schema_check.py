@@ -38,8 +38,16 @@ REQUIRED_COLUMNS = {
         "detected_complexity",
         "decision_json",
         "correlation_id",
+        "participant",
+        "episode_id",
+        "prompt_tokens",
+        "completion_tokens",
+        "reasoning_tokens",
+        "finish_reason",
+        "trace_json",
     ),
-    "judge_logs": ("delivery_level",),
+    "judge_logs": ("delivery_level", "correlation_id"),
+    "request_failures": ("correlation_id", "status_code", "category"),
 }
 
 

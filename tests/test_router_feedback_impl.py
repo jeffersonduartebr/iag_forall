@@ -333,9 +333,11 @@ async def test_router_feedback_covers_failure_branches():
     assert warnings
 
     deps["_get_ctx_stats"] = lambda _ctx: (_ for _ in ()).throw(RuntimeError("ctx fail"))
+    linhas = []
+    deps["insert_query_log"] = lambda **kwargs: linhas.append(kwargs)
     # Um erro inesperado num estágio inicial continua tolerado e registado:
     # propagá-lo poria a tarefa em retry, e repetir o pipeline volta a pagar
-    # os juízes. Só a escrita do log é que faz a tarefa falhar.
+    # os juízes. A linha é escrita mesmo assim, sem qualidade apurada.
     await process_background_feedback_impl(
         deps=deps,
         state={"EMA_HISTORY": _History()},
@@ -347,3 +349,4 @@ async def test_router_feedback_covers_failure_branches():
         cost_val=0.01,
     )
     assert exceptions
+    assert [(r["quality"], r["quality_source"], r["reward"]) for r in linhas] == [(None, "feedback_error", None)]

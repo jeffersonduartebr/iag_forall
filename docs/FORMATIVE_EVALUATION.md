@@ -255,3 +255,23 @@ Limites:
 - O painel não é uniforme quando as candidatas são de empresas diferentes, porque cada uma perde os juízes da própria empresa. A marca `painel_uniforme` e as notas por juiz permitem restringir a comparação aos juízes em comum.
 - A probabilidade de atribuição vem do regime de exploração (`decision_json.regime.p_atribuicao`; ver `docs/CONFIGURATION.md`) e é exata: `1 − ε` para o aproveitamento e `ε/K` para cada braço explorado, com ε = 0 quando o teto da janela do participante é atingido. Uma entrega regenerada fica marcada como `exploracao_regenerada`. As requisições com `regime.fase = aquecimento` (antes do campo, ε maior e sem teto por participante) ficam fora das análises do campo, e servem só para o bandit acumular histórico.
 
+
+## 7. O que fica registrado de cada requisição
+
+Toda requisição deixa registro no MariaDB, inclusive as que falham.
+
+| Onde | O quê |
+|---|---|
+| `query_log` | Uma linha por resposta servida. Além das colunas de sempre (pergunta, resposta, modelo, custo, latência, qualidade, confiança, abstenção), a migração 0010 acrescenta `participant` (o `user_key` pseudônimo), `episode_id`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `finish_reason` e `trace_json`. |
+| `query_log.trace_json` | Tempos por etapa (`stage_timings_ms`), cadeia de fallback (modelos tentados e erros), modo de recuperação e motivo de pulá-la, política e experimento, parâmetros da requisição (temperatura, `max_tokens`, SHA-256 do system prompt, nunca o texto, porque ele leva o gabarito), custo de caixa e imputado, e a resposta que uma abstenção deixou de servir (`answer_before_abstention`). |
+| `query_log.decision_json` | Candidatas com os três objetivos, frente de Pareto e pesos NSGA-II (antes saía vazio); no regime, `regime` com a fase, a probabilidade de atribuição, os braços sorteados e, quando houve regeneração, a resposta explorada com custo, latência e tokens (`regime.explorado`). |
+| `judge_logs.correlation_id` | Liga a nota de cada juiz à requisição julgada. |
+| `request_failures` | Requisições que terminaram em erro (timeout, fallbacks esgotados, guardrail, orçamento, job assíncrono que falhou), com status, categoria, participante, episódio e a pergunta. |
+
+Linhas sem ciclo de feedback são gravadas direto, com `quality` NULL e `quality_source` dizendo o motivo:
+`pinned_model` (chamada de instrumento), `tool_turn` e `enqueue_failed` (fila indisponível). Um estágio do
+feedback que falha grava a linha com `quality_source = feedback_error`. Uma falha de escrita no banco faz a
+tarefa terminar em FAILURE, visível, em vez de sumir.
+
+Fora do registro, por desenho: rejeições do middleware antes de a requisição ser lida (limite de taxa, contrapressão),
+e o caminho de streaming, que o Caso 1 não usa.

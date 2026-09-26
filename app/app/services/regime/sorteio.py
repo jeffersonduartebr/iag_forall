@@ -128,6 +128,7 @@ async def rota_do_regime(ctx: RouteContext, modelos: List[str], incerteza: float
         "motivo_sem_exploracao": motivo,
         "aproveitamento": guloso,
         "k_bracos": len(bracos),
+        "bracos": bracos,  # o conjunto sorteado: com o catálogo, muda de um dia para o outro
         "k_catalogo": len(catalogo),
         "episodio": episodio,
         "janela_antes": {"n": janela_antes[0], "x": janela_antes[1]} if janela_antes else None,

@@ -103,7 +103,7 @@ def _safe_json(obj: dict | list | str | None) -> str:
         return value
 
     try:
-        return json.dumps(_redact(obj), ensure_ascii=False)
+        return json.dumps(_redact(obj), ensure_ascii=False, default=str)
     except Exception:
         return "{}"
 
@@ -248,6 +248,8 @@ def ensure_query_log() -> None:
             # frente de Pareto e pesos; e o id que liga a linha ao rasto.
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS decision_json LONGTEXT NULL"))
             conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(64) NULL"))
+            for coluna in COLUNAS_PESQUISA:  # migração 0010
+                conn.execute(text(f"ALTER TABLE query_log ADD COLUMN IF NOT EXISTS {coluna}"))
         logger.info("[query_service] Tabela 'query_log' pronta (EXTENDIDA multimodal).")
     except SQLAlchemyError as exc:
         logger.warning("[query_service] Falha ao criar tabela query_log: %s", exc)
@@ -256,6 +258,18 @@ def ensure_query_log() -> None:
 # ============================================================
 # Inserção multimodal completa
 # ============================================================
+
+#: Pesquisa (migração 0010): participante, episódio, tokens e o rastro da execução.
+COLUNAS_PESQUISA = (
+    "participant VARCHAR(256) NULL",
+    "episode_id VARCHAR(128) NULL",
+    "prompt_tokens INT NULL",
+    "completion_tokens INT NULL",
+    "reasoning_tokens INT NULL",
+    "finish_reason VARCHAR(32) NULL",
+    "trace_json LONGTEXT NULL",
+)
+
 
 def insert_query_log(
     *,
@@ -267,8 +281,8 @@ def insert_query_log(
     image_output_b64: Optional[str],
     latency_s: float,
     estimated_cost_usd: float,
-    quality: float,
-    reward: float,
+    quality: Optional[float],
+    reward: Optional[float],
     quality_source: str = "unknown",
     judge_sampled: bool = False,
     quality_semantics: Optional[str] = None,
@@ -290,6 +304,13 @@ def insert_query_log(
     context_label: Optional[str] = None,
     tenant_id: Optional[str] = None,
     raw_payload: dict | list | str | None = None,
+    participant: Optional[str] = None,
+    episode_id: Optional[str] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    reasoning_tokens: Optional[int] = None,
+    finish_reason: Optional[str] = None,
+    trace: Optional[dict] = None,
 
     # embeddings
     query_embedding: Optional[List[float]] = None,
@@ -318,7 +339,9 @@ def insert_query_log(
                      latency_s, estimated_cost_usd, cost_per_1k, reward,
                      quality_semantics, q_tech, q_calibrado, p_entrega, detected_complexity,
                      decision_json, correlation_id,
-                     context_label, tenant_id, raw_payload)
+                     context_label, tenant_id, raw_payload,
+                     participant, episode_id, prompt_tokens, completion_tokens, reasoning_tokens,
+                     finish_reason, trace_json)
                     VALUES
                      (:q, :m, :mod, :ip,
                      :ans, :img,
@@ -329,7 +352,9 @@ def insert_query_log(
                      :lat, :estimated_cost_usd, :cost, :rew,
                      :quality_semantics, :q_tech, :q_calibrado, :p_entrega, :detected_complexity,
                      :decision_json, :correlation_id,
-                     :ctx, :tenant_id, :payload)
+                     :ctx, :tenant_id, :payload,
+                     :participant, :episode_id, :prompt_tokens, :completion_tokens, :reasoning_tokens,
+                     :finish_reason, :trace_json)
                 """),
                 {
                     "q": query_text,
@@ -366,13 +391,23 @@ def insert_query_log(
                     "ctx": context_label,
                     "tenant_id": tenant_id,
                     "payload": _safe_json(raw_payload),
+                    "participant": participant,
+                    "episode_id": episode_id,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "finish_reason": finish_reason,
+                    "trace_json": _safe_json(trace) if trace else None,
                 }
             )
 
         logger.info(
-            f"[query_service] log inserido: model={model}, modality={modality}, "
-            f"reward={reward:.2f}, quality={quality:.2f}, estimated_cost_usd={estimated_cost_usd:.4f}"
+            "[query_service] log inserido: model=%s, modality=%s, reward=%s, quality=%s, estimated_cost_usd=%.4f",
+            model, modality, reward, quality, estimated_cost_usd,
         )
 
     except SQLAlchemyError as exc:
-        logger.warning(f"[query_service] erro ao inserir query_log: {exc}")
+        # Propaga: quem chama decide (o worker de feedback falha a tarefa, que fica visível), em vez de a linha
+        # sumir com a tarefa em SUCCESS.
+        logger.error(f"[query_service] erro ao inserir query_log: {exc}")
+        raise

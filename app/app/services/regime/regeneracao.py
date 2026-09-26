@@ -49,5 +49,20 @@ async def talvez_regenerar(
         regime.update(regeneracao_falhou=type(exc).__name__)
         logger.warning("[regime] regeneração falhou: %s", type(exc).__name__)
         return choice, outcome, result
-    regime.update(regenerado=True, modelo_explorado=choice.chosen, motivo_regeneracao="verificacao_incerteza")
+    md = result.get("metadata") or {}
+    regime.update(
+        regenerado=True,
+        modelo_explorado=choice.chosen,
+        motivo_regeneracao="verificacao_incerteza",
+        # A resposta explorada nunca é servida, mas é resultado do experimento: fica registrada com seus números.
+        explorado={
+            "resposta": str(result.get("answer") or ""),
+            "custo_usd": float(result.get("estimated_cost_usd") or 0.0),
+            "latencia_s": float(result.get("latency_s") or 0.0),
+            "prompt_tokens": int(md.get("prompt_tokens") or 0),
+            "completion_tokens": int(md.get("completion_tokens") or 0),
+            "reasoning_tokens": int(md.get("reasoning_tokens") or 0),
+            "finish_reason": result.get("finish_reason"),
+        },
+    )
     return nova, novo_outcome, build_result(ctx, nova, novo_outcome, incerteza, bundle)

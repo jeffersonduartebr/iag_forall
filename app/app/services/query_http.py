@@ -28,6 +28,7 @@ from ..observability import (
 )
 from ..schemas import QueryRequest
 from ..services.tenant_context import bind_tenant_to_request
+from .falhas_consulta import registrar as registrar_falha
 from .idempotency import _resolve_idempotency, _store_idempotency
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,13 @@ async def execute_query(
         return JSONResponse(status_code=202, content=jsonable_encoder(queued))
 
     main = _main()
-    processed = await main.process_query_request(req)
+    try:
+        processed = await main.process_query_request(req)
+    except Exception as exc:  # o cliente recebe o erro; a pesquisa recebe a linha
+        rota = request.url.path if request is not None else None
+        await asyncio.to_thread(registrar_falha, req, exc, correlation_id=get_correlation_id(), route_path=rota,
+                                inicio=start)
+        raise
     result = processed["result"]
     image_input = processed["image_input"]
 
@@ -106,7 +113,7 @@ async def execute_query(
     metadata = result.get("metadata", {})
     metadata["correlation_id"] = correlation_id
 
-    main.record_query_side_effects(req, result, image_input)
+    main.record_query_side_effects(req, result, image_input, request.url.path if request is not None else None)
     response = main.build_query_response(result, correlation_id)
     body = response.model_dump() if hasattr(response, "model_dump") else dict(response)
     await _store_idempotency(req, request, body)
