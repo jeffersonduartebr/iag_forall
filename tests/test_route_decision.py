@@ -164,7 +164,7 @@ def test_the_response_payload_carries_the_decision():
     from app.services import router_provider_stage
 
     source = inspect.getsource(router_provider_stage)
-    assert '"pareto_front": choice.decision.get("pareto_front", [])' in source
+    assert 'c.get("on_pareto_front")' in source  # objetos da frente, como o contrato da resposta pede
     assert '"candidates": choice.decision.get("candidates", [])' in source
     assert '"pareto_front": []' not in source
 
