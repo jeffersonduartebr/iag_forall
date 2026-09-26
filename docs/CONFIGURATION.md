@@ -56,6 +56,9 @@ flowchart TD
 
 ## Banco e cache
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`
+- `DB_DIALECT`: `mysql` (MariaDB, padrão até a virada) ou `postgresql` (Cloud SQL, via PgBouncer). A porta padrão segue o dialeto (3306 ou 5432). A URL é montada só em `app/db_url.py`, com a senha codificada.
+- `DB_SSLMODE` (PostgreSQL): `prefer` por padrão; `require` para o Cloud SQL.
+- `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`: pool por processo (padrão 10/5). Com PostgreSQL, 2/1: são ~14 processos atrás de um PgBouncer com 15 conexões ao servidor.
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD`
 
 ## Providers

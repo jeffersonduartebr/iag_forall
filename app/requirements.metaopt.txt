@@ -3,6 +3,7 @@ fastapi>=0.111.0
 uvicorn>=0.30.0
 sqlalchemy>=2.0.30
 pymysql>=1.1.0
+psycopg2-binary==2.9.10  # PostgreSQL (Cloud SQL); o pymysql sai depois da virada
 redis>=5.0.1
 prometheus-client>=0.20.0
 numpy>=1.26.0

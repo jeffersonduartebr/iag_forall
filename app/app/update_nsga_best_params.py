@@ -30,6 +30,8 @@ import redis
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.db_url import get_db_url
+
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [update_nsga] %(message)s")
 logger = logging.getLogger("update_nsga")
 
@@ -37,13 +39,10 @@ logger = logging.getLogger("update_nsga")
 # 🔌 Conexões
 # ============================================================
 
-DB_HOST = os.getenv("DB_HOST", "mariadb")
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_NAME = os.getenv("DB_NAME", "routerdb")
-DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
+# URL, dialeto e porta vêm de app.db (a porta 3306 fixa impedia qualquer outro banco).
+DB_URL = get_db_url()
 
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600, pool_size=1, max_overflow=1)
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))

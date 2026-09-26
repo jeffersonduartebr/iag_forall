@@ -44,6 +44,7 @@ except ImportError:
     # Fallback de path se chamado de outro diretório
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     from app.settings_dynamic import settings
+from app.db_url import get_db_url  # noqa: E402  (depois do ajuste de path acima)
 
 # -----------------------------------------------------------------------------
 # 📝 Logging
@@ -70,7 +71,7 @@ REDIS_PASS = settings.get("REDIS_PASS", "SenhaForte")
 PROM_PORT = int(settings.get("CORR_PROM_PORT", 9105))
 UPDATE_INTERVAL = int(settings.get("CORR_INTERVAL", 60))
 
-DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
+DB_URL = get_db_url()  # dialeto e porta de app.db
 
 # -----------------------------------------------------------------------------
 # 🔌 Conexões
@@ -81,8 +82,8 @@ def _make_db_engine() -> Any:
         DB_URL,
         pool_pre_ping=True,
         pool_recycle=3600,
-        pool_size=5,
-        max_overflow=5,
+        pool_size=1,
+        max_overflow=1,
     )
 
 def _connect_redis() -> redis.Redis | None:
