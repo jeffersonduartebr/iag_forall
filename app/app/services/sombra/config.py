@@ -42,6 +42,8 @@ class ConfigSombra:
     timeout_s: float
     fuso: str
     juizes: Tuple[str, ...]
+    juizes_por_resposta: int = 0  # 0: o painel inteiro (menos a empresa do avaliado)
+    fracao_candidatas: float = 1.0
 
 
 def carregar() -> ConfigSombra:
@@ -60,4 +62,6 @@ def carregar() -> ConfigSombra:
         timeout_s=max(1.0, _num("SHADOW_TIMEOUT_S", 300.0)),
         fuso=str(settings.get("SHADOW_BUDGET_TZ", "America/Fortaleza") or "America/Fortaleza"),
         juizes=tuple(_lista(settings.get("SHADOW_JUDGE_MODELS", "[]"))),
+        juizes_por_resposta=max(0, int(_num("SHADOW_JUDGES_PER_ANSWER", 3))),
+        fracao_candidatas=min(1.0, max(0.0, _num("SHADOW_CANDIDATE_FRACTION", 0.25))),
     )

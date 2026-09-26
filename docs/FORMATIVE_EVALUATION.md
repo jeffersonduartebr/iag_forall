@@ -246,13 +246,15 @@ a entregue e as candidatas, todas com o mesmo prompt, o mesmo contexto e o mesmo
 `Q_calibrado` na semântica formativa, e `Q` na rubrica simples.
 
 - **Probabilidade efetiva de inclusão.** Cortes por orçamento, teto por tenant, região ou GPU fazem a inclusão depender do horário e da carga. Dentro de cada estrato × dia local, as sorteadas estimam `elegíveis × p`, então `π̂ = p · executadas / sorteadas`. Cada requisição executada pesa `1/π̂` (Horvitz–Thompson). Por isso toda requisição sorteada é registrada, inclusive as cortadas.
-- **Arrependimento por decisão:** `max_c escore(c) − escore(entregue)`. O acumulado é a soma ponderada ao longo do tempo.
+- **Subamostra de candidatas (sombra enxuta).** Cada requisição sorteada roda `⌈SHADOW_CANDIDATE_FRACTION · N⌉` das `N` outras candidatas (padrão 25%), sorteio uniforme sem reposição e determinístico pelo `request_id`. Toda candidata tem a mesma probabilidade de inclusão `k/N`, gravada em `p_candidata`, e as que ficaram de fora têm linha com `status = fora_da_amostra`. As médias por configuração e o ganho sobre a melhor fixa seguem não enviesados (a inclusão não depende do escore), com menos observações por configuração.
+- **Arrependimento por decisão:** `max_c escore(c) − escore(entregue)`, com o máximo tomado entre as candidatas **sorteadas**. Com a subamostra, é um limite inferior do arrependimento contra todas as candidatas, e a concordância com o oráculo é um limite superior. O acumulado é a soma ponderada ao longo do tempo.
 - **Ganho sobre a melhor configuração fixa a posteriori:** média ponderada da entregue menos a da configuração de maior média ponderada, nas requisições em que esta foi avaliada.
 - **Concordância com o oráculo:** fração ponderada de requisições em que a entregue atinge o máximo.
 - Tudo é calculado por estrato e no agregado, separando as entregas em aproveitamento e em exploração. A saída em CSV e JSON inclui a semente do sorteio, o manifesto e as contagens de sorteadas, executadas e cortadas por motivo.
 
 Limites:
-- O painel não é uniforme quando as candidatas são de empresas diferentes, porque cada uma perde os juízes da própria empresa. A marca `painel_uniforme` e as notas por juiz permitem restringir a comparação aos juízes em comum.
+- **Painel de 3 entre 4.** O painel base tem 4 juízes de 4 empresas. A ordem é sorteada por requisição, e cada resposta é julgada pelos 3 primeiros que não sejam da empresa dela: sempre 3 juízes, sempre 1 de fora. O painel não é uniforme quando as candidatas são de empresas diferentes; a marca `painel_uniforme` e as notas por juiz permitem restringir a comparação aos juízes em comum.
+- **Sem sombra no aquecimento.** Até `REGIME_AQUECIMENTO_ATE` nenhuma requisição é sorteada (`aristo_shadow_skipped_total{motivo="aquecimento"}`): a sombra só mede, e antes do campo gastaria sem ensinar nada ao bandit.
 - A probabilidade de atribuição vem do regime de exploração (`decision_json.regime.p_atribuicao`; ver `docs/CONFIGURATION.md`) e é exata: `1 − ε` para o aproveitamento e `ε/K` para cada braço explorado, com ε = 0 quando o teto da janela do participante é atingido. Uma entrega regenerada fica marcada como `exploracao_regenerada`. As requisições com `regime.fase = aquecimento` (antes do campo, ε maior e sem teto por participante) ficam fora das análises do campo, e servem só para o bandit acumular histórico.
 
 

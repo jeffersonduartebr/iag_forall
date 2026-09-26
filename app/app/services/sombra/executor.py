@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from app.settings_dynamic import settings
 
-from . import config, cotas, registro
+from . import config, cotas, registro, sorteios
 from .admissibilidade import motivo_recusa
 from .config import ConfigSombra
 from .contexto import modo_sombra
@@ -67,7 +67,7 @@ async def _vaga(rds: Any, cfg: ConfigSombra) -> bool:
 async def _julgar(job: Dict[str, Any], cfg: ConfigSombra, chamar, modelo: str, texto: str) -> Dict[str, Any]:
     from app.services.quality_semantics import is_formative
 
-    painel = painel_para(modelo, cfg, job.get("modalidade", "text"))
+    painel = painel_para(modelo, cfg, job.get("modalidade", "text"), str(job.get("request_id") or ""))
     notas = await julgar(
         chamar, painel, pergunta=job.get("pergunta", ""), resposta=texto, contexto=job.get("contexto", ""),
         pesos_brutos=settings.get("JUDGE_RUBRIC_WEIGHTS", None), formativa=is_formative(),
@@ -169,12 +169,18 @@ async def _executar(job: Dict[str, Any], cfg: ConfigSombra, chamar, rds: Optiona
         from app.providers_async import call_model
 
         chamar = call_model
+    sorteadas, fora, p = sorteios.candidatas(str(job.get("request_id") or ""), job.get("candidatas", []),
+                                             cfg.fracao_candidatas)
     try:
         linhas = [await _entregue(job, cfg, rds, chamar)]
-        linhas += await asyncio.gather(*[_avaliar(job, cfg, rds, chamar, c) for c in job.get("candidatas", [])])
+        linhas += await asyncio.gather(*[_avaliar(job, cfg, rds, chamar, c) for c in sorteadas])
     except Exception as exc:
         logger.warning("[sombra] requisição %s falhou: %s", job.get("request_id"), type(exc).__name__)
         return _cortada(job, "erro")
+    # As que ficaram fora do sorteio também têm linha: a análise conhece o conjunto inteiro e a probabilidade.
+    linhas += [base(job, c, "sombra", executada=True, status="fora_da_amostra") for c in fora]
+    for linha in linhas:
+        linha["p_candidata"] = 1.0 if linha["papel"] == "entregue" else p
     paineis = {tuple(linha["painel"]) for linha in linhas if linha.get("painel") is not None}
     for linha in linhas:
         linha["painel_uniforme"] = len(paineis) <= 1

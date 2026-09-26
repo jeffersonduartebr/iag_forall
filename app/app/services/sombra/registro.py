@@ -16,7 +16,7 @@ COLUNAS = (
     "motivo_corte", "modelo", "provedor", "regiao", "versao_modelo", "papel", "regime_entrega", "p_atribuicao",
     "escores_juizes", "escore_agregado", "painel", "painel_uniforme", "teria_abstido", "custo_usd",
     "latencia_s", "tokens_entrada", "tokens_saida", "sha256_texto", "status", "frozen_run_id",
-    "criado_em", "concluido_em",
+    "criado_em", "concluido_em", "p_candidata",
 )
 _JSON = ("estrato", "escores_juizes", "painel")
 

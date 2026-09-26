@@ -2,9 +2,9 @@
 """Same instruments as the delivered answer's judging (rubric + delivery level), none of its side effects.
 
 ``judges.judge_answer`` stores the answer text in ``judge_logs``, draws a random pair per call, re-retrieves an
-unscoped RAG context and caches by text. Here the panel is fixed per request (``SHADOW_JUDGE_MODELS``), each
-candidate loses only the judges of its own company (the rule of ``judge_vendors``), the context is the request's own
-retrieved context, and only numbers leave this module.
+unscoped RAG context and caches by text. Here the panel order is drawn once per request (``SHADOW_JUDGE_MODELS``),
+each answer takes the first ``SHADOW_JUDGES_PER_ANSWER`` judges not from its own company (the rule of
+``judge_vendors``), the context is the request's own retrieved context, and only numbers leave this module.
 """
 
 from __future__ import annotations
@@ -30,18 +30,21 @@ from app.services.judge_vendors import empresa
 
 from .admissibilidade import motivo_recusa
 from .config import ConfigSombra
+from .sorteios import ordem
 
 TEMPERATURA_JUIZ, TETO_JUIZ = 0.0, 512
 ChamarModelo = Callable[..., Awaitable[Tuple[str, Any]]]
 
 
-def painel_para(avaliado: str, cfg: ConfigSombra, modalidade: str = "text") -> List[str]:
-    """Admissible judges of the base panel that are not from the evaluated model's company."""
+def painel_para(avaliado: str, cfg: ConfigSombra, modalidade: str = "text", request_id: str = "") -> List[str]:
+    """The first ``juizes_por_resposta`` admissible judges, in the request's drawn order, not from the evaluated
+    model's company (``sorteios``: with 4 judges and k = 3, exactly one sits out)."""
     empresa_avaliado = empresa(avaliado)
-    return [
-        j for j in cfg.juizes
+    elegiveis = [
+        j for j in ordem("juiz", request_id, cfg.juizes)
         if motivo_recusa(j, cfg, "text") is None and (empresa_avaliado is None or empresa(j) != empresa_avaliado)
     ]
+    return elegiveis[: cfg.juizes_por_resposta] if cfg.juizes_por_resposta > 0 else elegiveis
 
 
 def _custo(meta: Dict[str, Any]) -> float:

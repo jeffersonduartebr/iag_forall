@@ -118,6 +118,8 @@ def _config_snapshot() -> Dict[str, Any]:
         "SHADOW_TIMEOUT_S",
         "SHADOW_BUDGET_TZ",
         "SHADOW_JUDGE_MODELS",
+        "SHADOW_JUDGES_PER_ANSWER",
+        "SHADOW_CANDIDATE_FRACTION",
     ]
     snapshot: Dict[str, Any] = {}
     for key in keys:

@@ -326,12 +326,15 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "SHADOW_JUDGE_MODELS": json.dumps(
             [
                 "gemini/gemini-3.1-pro-preview",
-                "openrouter/anthropic/claude-opus-5.5",
+                "openrouter/moonshotai/kimi-k3",
                 "openrouter/x-ai/grok-4.7",
                 "openrouter/openai/gpt-5.6-sol",
-                "openrouter/z-ai/glm-5.3-prime",
             ]
         ),
+        # Custo: cada resposta tem 3 juízes (a ordem do painel é sorteada por requisição; 1 dos 4 fica de fora)
+        # e cada requisição roda 25% das demais candidatas (sorteio uniforme, probabilidade gravada por linha).
+        "SHADOW_JUDGES_PER_ANSWER": "3",
+        "SHADOW_CANDIDATE_FRACTION": "0.25",
     },
     "adversarial_governance": {
         # Closed-loop adversarial governance (roadmap #17). Off by default so
