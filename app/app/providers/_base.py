@@ -58,6 +58,7 @@ class LLMResponse(BaseModel):
     cost_imputed: float = 0.0  # custo imputado da ocupação do equipamento local
     prompt_tokens: int
     completion_tokens: int
+    reasoning_tokens: int = 0  # parte de completion_tokens gasta em raciocínio, quando o provedor informa
     model_used: str
     raw_payload: Optional[str] = None
     reasoning: Optional[str] = None  # <--- NOVO CAMPO: Armazena o pensamento (CoT)

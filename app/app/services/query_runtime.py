@@ -31,7 +31,7 @@ from ..services.hot_path_runtime import check_input_guardrails_async
 from ..services.tool_governance import audit_tool_denial, evaluate_tool_policy
 from ..services.tool_observability import record_tool_turn
 from ..settings_dynamic import settings
-from ..tasks import task_process_feedback
+from ..tasks import task_process_feedback  # noqa: F401  (reexportado para testes)
 from .query_profile import (  # noqa: F401  (reexportados para tasks/tests)
     _effective_sync_timeout_seconds,
     _infer_retrieval_profile,
@@ -41,6 +41,7 @@ from .query_profile import (  # noqa: F401  (reexportados para tasks/tests)
     classify_query_workload,
 )
 from .query_reliability import _clamp, enrich_result_reliability  # noqa: F401  (reexportados)
+from .registro_consulta import despachar, parametros
 
 check_tenant_budget = check_runtime_budget_async
 get_active_policy = get_runtime_active_policy_async
@@ -315,7 +316,9 @@ async def process_query_request(req: Any) -> Dict[str, Any]:
     }
 
 
-def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str | None) -> None:
+def record_query_side_effects(
+    req: Any, result: Dict[str, Any], image_input: str | None, route_path: Optional[str] = None
+) -> None:
     """Persist asynchronous feedback, tenant usage, and experiment metrics."""
     chosen_model = result["model"]
     cost_usd = result.get("estimated_cost_usd", result.get("cost_per_1k", 0))
@@ -324,32 +327,20 @@ def record_query_side_effects(req: Any, result: Dict[str, Any], image_input: str
     completion_tokens = metadata.get("completion_tokens", 0)
     perf_mode_enabled = str(settings.get("ROUTER_PERF_MODE", "0")).strip() == "1"
     combined_payload = build_feedback_payload(
-        result, tenant_id=req.tenant_id, include_raw=not perf_mode_enabled
+        result,
+        tenant_id=req.tenant_id,
+        include_raw=not perf_mode_enabled,
+        participant=getattr(req, "user_key", None),
+        episode_id=getattr(req, "episode_id", None),
+        route_path=route_path,
+        request_params=parametros(req),
     )
 
-    # Turno de tool call não tem resposta em texto para julgar: pular juízes/reward
-    # (evita envenenar os juízes com um "answer" vazio). Uso/cobrança são mantidos abaixo.
+    # Turno de tool call não tem resposta em texto para julgar: pula juízes/reward. Chamada com modelo fixo é
+    # instrumento, não decisão da política. Os dois (e o despacho que falhar) gravam a linha direto.
     is_tool_turn = str(result.get("finish_reason")) == "tool_calls" or bool(result.get("tool_calls"))
-    if getattr(req, "pinned_model", None):
-        # Chamada de instrumento: não foi decisão da política, então nada volta para juízes/bandit/EMA.
-        logger.debug("[query] pinned_model=%s: feedback de aprendizado omitido", req.pinned_model)
-    elif not is_tool_turn:
-        try:
-            task_process_feedback.delay(
-                query=req.query,
-                answer=result["answer"],
-                chosen_model=chosen_model,
-                modality=result["modality"],
-                latency_s=result["latency_s"],
-                cost_val=result.get("estimated_cost_usd", result.get("cost_per_1k", 0.0)),
-                image_b64=image_input,
-                raw_payload=combined_payload,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
-        except Exception as exc:
-            logger.error(f"[main] Falha ao despachar tarefa Celery: {exc}")
-    else:
+    despachar(req, result, image_input, combined_payload, is_tool_turn)
+    if is_tool_turn and not getattr(req, "pinned_model", None):
         # Turno de tool: emite métricas e alimenta o bandit com um reward de
         # boa-formação (item #2), já que os juízes foram pulados acima.
         try:

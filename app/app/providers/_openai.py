@@ -102,6 +102,7 @@ class OpenAIProvider(BaseProvider):
             usage = resp.usage
             p_tok = usage.prompt_tokens if usage else 0
             c_tok = usage.completion_tokens if usage else 0
+            r_tok = getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None) or 0
 
             # O OpenRouter devolve o custo real (com desconto de cache e raciocínio cobrado); o catálogo é o fallback.
             cost_real = (getattr(usage, "model_extra", None) or {}).get("cost") if usage else None
@@ -122,6 +123,7 @@ class OpenAIProvider(BaseProvider):
                 cost=cost,
                 prompt_tokens=p_tok,
                 completion_tokens=c_tok,
+                reasoning_tokens=int(r_tok),
                 model_used=model,
                 raw_payload=raw_payload,
                 reasoning=reasoning if isinstance(reasoning, str) and reasoning else None,

@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 
+from .correlation import get_correlation_id
 from .db import get_engine
 from .providers_async import call_model
 from .services.judge_cache import VERDICT_CACHE_SIZE, VERDICT_CACHE_TTL_S, VerdictCache  # noqa: F401
@@ -336,20 +337,21 @@ def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=N
             "sc": score,
             "mod": modality,
             "ih": image_hash,
+            "cid": get_correlation_id(),  # o worker de feedback restaura o id da requisição julgada
         }
         if rubric is None:
             sql = """
                 INSERT INTO judge_logs
                 (query, answer, judge_model, score_before, score_after,
-                 event_type, modality, image_hash, created_at)
-                VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, NOW())
+                 event_type, modality, image_hash, correlation_id, created_at)
+                VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, :cid, NOW())
             """
         else:
             sql = """
                 INSERT INTO judge_logs
                 (query, answer, judge_model, score_before, score_after,
-                 event_type, modality, image_hash, rubric_json, created_at)
-                VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, :rubric, NOW())
+                 event_type, modality, image_hash, rubric_json, correlation_id, created_at)
+                VALUES (:q, :a, :jm, :sc, :sc, 'evaluation', :mod, :ih, :rubric, :cid, NOW())
             """
             params["rubric"] = json.dumps(rubric, ensure_ascii=False)
 

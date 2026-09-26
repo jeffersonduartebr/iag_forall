@@ -27,11 +27,41 @@ _PASSTHROUGH = (
 )
 
 
+#: O rastro da execução que não tem coluna própria: vai inteiro para `query_log.trace_json`.
+_TRACE_METADATA = (
+    "stage_timings_ms",
+    "retrieval_mode",
+    "retrieval_skipped_reason",
+    "policy_version",
+    "experiment_id",
+    "experiment_variant",
+    "guardrail_output_tags",
+    "answer_before_abstention",
+    "cash_cost_usd",
+    "imputed_cost_usd",
+    "load_time",
+)
+
+
+def _trace(result: Dict[str, Any], metadata: Dict[str, Any], route_path: Optional[str]) -> Dict[str, Any]:
+    """Everything needed to reconstruct how the answer was produced, beyond the dedicated columns."""
+    trace = {key: metadata.get(key) for key in _TRACE_METADATA if metadata.get(key) is not None}
+    trace["fallback"] = (result.get("route") or {}).get("fallback") or {}
+    trace["tool_calls"] = result.get("tool_calls") or None
+    trace["route_path"] = route_path
+    trace["cached"] = bool(metadata.get("cached"))
+    return trace
+
+
 def build_feedback_payload(
     result: Dict[str, Any],
     *,
     tenant_id: Optional[str],
     include_raw: bool,
+    participant: Optional[str] = None,
+    episode_id: Optional[str] = None,
+    route_path: Optional[str] = None,
+    request_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assemble what the feedback loop needs to persist this query."""
     metadata = result.get("metadata", {}) or {}
@@ -53,6 +83,14 @@ def build_feedback_payload(
         # ser gerado e nunca chegava à tabela, por isso não havia como juntar
         # uma linha ao rasto que a produziu.
         "correlation_id": metadata.get("correlation_id"),
+        # Pesquisa (Caso 1): quem perguntou (código pseudônimo), em que episódio, com quantos tokens.
+        "participant": participant,
+        "episode_id": episode_id,
+        "prompt_tokens": int(metadata.get("prompt_tokens") or 0),
+        "completion_tokens": int(metadata.get("completion_tokens") or 0),
+        "reasoning_tokens": int(metadata.get("reasoning_tokens") or 0),
+        "finish_reason": result.get("finish_reason"),
+        "trace": {**_trace(result, metadata, route_path), "request": request_params or {}},
     }
     payload.update({key: metadata.get(key) for key in _PASSTHROUGH})
     if include_raw and metadata.get("raw_payload"):

@@ -54,7 +54,7 @@ class ErrorRisk:
     model_stats: Dict[str, Any]
     predictor: Any
     query_embedding: Any
-    predicted_error_prob: float
+    predicted_error_prob: Optional[float]
 
 
 @dataclass
@@ -314,7 +314,7 @@ async def maybe_store_cache(deps: Dict[str, Any], fb: FeedbackRequest, quality: 
         quietly(lambda: deps["FEEDBACK_TASK_FAILURES"].labels(stage="cache_write").inc())
 
 
-from .log_fields import _formative_fields, _reliability_fields  # noqa: E402  (evita ciclo)
+from .log_fields import _formative_fields, _reliability_fields, _research_fields  # noqa: E402  (evita ciclo)
 
 
 class FeedbackPersistError(RuntimeError):
@@ -329,12 +329,19 @@ class FeedbackPersistError(RuntimeError):
 def persist_log(
     deps: Dict[str, Any],
     fb: FeedbackRequest,
-    quality: Quality,
+    quality: Optional[Quality],
     judged: bool,
     risk: ErrorRisk,
-    reward: float,
+    reward: Optional[float],
 ) -> None:
-    """Quality metrics and the query_log row (with the rubric breakdown when judged)."""
+    """Quality metrics and the query_log row (with the rubric breakdown when judged).
+
+    ``quality`` is None when a stage failed before any quality was known: the row is still written, with
+    ``quality`` NULL and ``quality_source = 'feedback_error'``.
+    """
+    if quality is None:
+        _gravar_linha(deps, fb, None, "feedback_error", None, judged, risk, reward)
+        return
     quietly(lambda: deps["ROUTER_QUALITY_AVG"].labels(model=fb.chosen_model).set(quality.value))
     if "ollama" in fb.chosen_model:
         quietly(lambda: deps["ROUTER_LOCAL_USAGE_RATIO"].set(1.0))
@@ -346,8 +353,12 @@ def persist_log(
             quality.source,
         )
     )
+    _gravar_linha(deps, fb, quality.value, quality.source, quality, judged, risk, reward)
+
+
+def _gravar_linha(deps, fb, valor, fonte, quality, judged, risk, reward) -> None:
     raw_payload = fb.raw_payload
-    if quality.judge_rubric is not None and isinstance(raw_payload, dict):
+    if quality is not None and quality.judge_rubric is not None and isinstance(raw_payload, dict):
         raw_payload = {**raw_payload, "judge_rubric": quality.judge_rubric}
     try:
         deps["insert_query_log"](
@@ -359,10 +370,10 @@ def persist_log(
             image_output_b64=None,
             latency_s=fb.latency_s,
             estimated_cost_usd=fb.cost_val,
-            quality=quality.value,
-            quality_source=quality.source,
+            quality=valor,
+            quality_source=fonte,
             judge_sampled=judged,
-            predicted_error_prob=float(risk.predicted_error_prob),
+            predicted_error_prob=None if risk.predicted_error_prob is None else float(risk.predicted_error_prob),
             reward=reward,
             **_formative_fields(quality, fb),
             context_label="async_processed",
@@ -371,6 +382,7 @@ def persist_log(
             query_embedding=risk.query_embedding,
             answer_embedding=None,
             **_reliability_fields(fb.payload),
+            **_research_fields(fb.payload),
         )
     except Exception as exc:
         # Não engolir: com o MariaDB em baixo, a tarefa Celery terminava em

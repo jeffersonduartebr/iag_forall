@@ -32,7 +32,20 @@ def _reliability_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _formative_fields(quality: Quality, fb: FeedbackRequest) -> Dict[str, Any]:
+def _research_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Participant, episode, tokens and the execution trace (migration 0010)."""
+    return {
+        "participant": _optional_str(payload.get("participant")),
+        "episode_id": _optional_str(payload.get("episode_id")),
+        "prompt_tokens": int(payload.get("prompt_tokens") or 0),
+        "completion_tokens": int(payload.get("completion_tokens") or 0),
+        "reasoning_tokens": int(payload.get("reasoning_tokens") or 0),
+        "finish_reason": _optional_str(payload.get("finish_reason")),
+        "trace": payload.get("trace") or None,
+    }
+
+
+def _formative_fields(quality: Optional[Quality], fb: FeedbackRequest) -> Dict[str, Any]:
     """The formative columns for one query_log row.
 
     ``quality_semantics`` records which meaning ``quality`` carries on this row,
@@ -41,7 +54,7 @@ def _formative_fields(quality: Quality, fb: FeedbackRequest) -> Dict[str, Any]:
     """
     from .quality_semantics import current_semantics
 
-    rubric = quality.judge_rubric or {}
+    rubric = (quality.judge_rubric if quality is not None else None) or {}
     return {
         # Auditoria da decisão: os candidatos e a frente de Pareto tal como
         # existiam no momento da escolha. `{}` só quando não houve comparação

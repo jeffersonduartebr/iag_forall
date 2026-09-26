@@ -130,7 +130,15 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             # Registo auditável da decisão de routing: candidatos com os três
             # objectivos, frente de Pareto e pesos NSGA-II em vigor.
             "decision_json": "LONGTEXT NULL",
-            "correlation_id": "VARCHAR(64) NULL"
+            "correlation_id": "VARCHAR(64) NULL",
+            # Pesquisa (migração 0010): participante, episódio, tokens e o rastro da execução.
+            "participant": "VARCHAR(256) NULL",
+            "episode_id": "VARCHAR(128) NULL",
+            "prompt_tokens": "INT NULL",
+            "completion_tokens": "INT NULL",
+            "reasoning_tokens": "INT NULL",
+            "finish_reason": "VARCHAR(32) NULL",
+            "trace_json": "LONGTEXT NULL"
         }
     },
 
@@ -228,7 +236,9 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "image_hash": "VARCHAR(128) NULL",
             # Notas por dimensão da rubrica (clareza, acurácia, alinhamento) em JSON.
             "rubric_json": "TEXT NULL",
-            "delivery_level": "FLOAT NULL"
+            "delivery_level": "FLOAT NULL",
+            # Liga cada nota de juiz à requisição julgada (migração 0010).
+            "correlation_id": "VARCHAR(64) NULL"
         }
     },
 

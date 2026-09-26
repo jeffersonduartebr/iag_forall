@@ -239,6 +239,7 @@ class GeminiProvider(BaseProvider):
                 cost=cost,
                 prompt_tokens=p_tok,
                 completion_tokens=c_tok,
+                reasoning_tokens=int(getattr(getattr(resp, "usage_metadata", None), "thoughts_token_count", None) or 0),
                 model_used=model_name,
                 raw_payload=str(resp),
                 reasoning=None,

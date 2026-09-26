@@ -123,6 +123,7 @@ def _build_response_meta(result: "LLMResponse") -> Dict[str, Any]:
         "image_output_b64": None,
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
+        "reasoning_tokens": result.reasoning_tokens,
         "reasoning": result.reasoning,
         "tool_calls": result.tool_calls,
         "finish_reason": result.finish_reason,
