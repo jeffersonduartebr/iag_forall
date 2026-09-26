@@ -253,5 +253,5 @@ a entregue e as candidatas, todas com o mesmo prompt, o mesmo contexto e o mesmo
 
 Limites:
 - O painel não é uniforme quando as candidatas são de empresas diferentes, porque cada uma perde os juízes da própria empresa. A marca `painel_uniforme` e as notas por juiz permitem restringir a comparação aos juízes em comum.
-- A probabilidade de atribuição vem do regime de exploração (`decision_json.regime.p_atribuicao`; ver `docs/CONFIGURATION.md`) e é exata: `1 − ε` para o aproveitamento e `ε/K` para cada braço explorado, com ε = 0 quando o teto da janela do participante é atingido. Uma entrega regenerada fica marcada como `exploracao_regenerada`.
+- A probabilidade de atribuição vem do regime de exploração (`decision_json.regime.p_atribuicao`; ver `docs/CONFIGURATION.md`) e é exata: `1 − ε` para o aproveitamento e `ε/K` para cada braço explorado, com ε = 0 quando o teto da janela do participante é atingido. Uma entrega regenerada fica marcada como `exploracao_regenerada`. As requisições com `regime.fase = aquecimento` (antes do campo, ε maior e sem teto por participante) ficam fora das análises do campo, e servem só para o bandit acumular histórico.
 

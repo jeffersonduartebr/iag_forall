@@ -102,6 +102,8 @@ def _config_snapshot() -> Dict[str, Any]:
         "REGIME_EPSILON",
         "REGIME_TETO",
         "REGIME_JANELA_EPISODIOS",
+        "REGIME_AQUECIMENTO_ATE",
+        "REGIME_EPSILON_AQUECIMENTO",
         # Execução em sombra: o estado de cada chave fica registrado a cada execução.
         "SHADOW_EXECUTION_ENABLED",
         "SHADOW_TENANT_ALLOWLIST",

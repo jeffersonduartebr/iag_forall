@@ -13,8 +13,13 @@ logger = logging.getLogger(__name__)
 
 
 async def talvez_regenerar(
-    ctx: RouteContext, choice: RouteChoice, outcome: ProviderOutcome, final_prompt: str,
-    bundle: Dict[str, Any], result: Dict[str, Any], incerteza: float,
+    ctx: RouteContext,
+    choice: RouteChoice,
+    outcome: ProviderOutcome,
+    final_prompt: str,
+    bundle: Dict[str, Any],
+    result: Dict[str, Any],
+    incerteza: float,
 ) -> Tuple[RouteChoice, ProviderOutcome, Dict[str, Any]]:
     """Protocol: an exploratory answer that fails the uncertainty check is replaced by the exploitation one.
 
@@ -27,9 +32,13 @@ async def talvez_regenerar(
     if outcome.chosen != choice.chosen:
         regime["servido_por_fallback"] = outcome.chosen
     falhou = reprovaria(
-        str(result.get("answer") or ""), incerteza=incerteza, grounded=bool(bundle.get("grounded")),
-        retrieval_mode=bundle.get("retrieval_mode"), workload_class=ctx.hints.get("workload_class"),
-        complexidade=ctx.hints.get("detected_complexity"), fallback_usado=bool(outcome.fallback_used),
+        str(result.get("answer") or ""),
+        incerteza=incerteza,
+        grounded=bool(bundle.get("grounded")),
+        retrieval_mode=bundle.get("retrieval_mode"),
+        workload_class=ctx.hints.get("workload_class"),
+        complexidade=ctx.hints.get("detected_complexity"),
+        fallback_usado=bool(outcome.fallback_used),
     )
     if not falhou:
         return choice, outcome, result
