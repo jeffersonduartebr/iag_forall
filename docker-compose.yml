@@ -572,7 +572,9 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    command: celery -A app.celery_app worker --loglevel=info --queues=feedback_queue --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
+    # 4 processos: com o formativo atendendo 16 submissões em paralelo, 2 deixavam os juízes acumularem atraso
+    # (e o bandit aprendendo com defasagem). Cada tarefa espera os juízes na rede, não usa CPU.
+    command: celery -A app.celery_app worker --loglevel=info --queues=feedback_queue --concurrency=4 --prefetch-multiplier=1 --max-tasks-per-child=1000 --time-limit=3600
 
     volumes:
       - ./state:/app/state
