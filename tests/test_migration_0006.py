@@ -119,7 +119,8 @@ def test_the_new_measurements_are_nullable(migration, column):
 def test_the_ema_uniqueness_moves_to_include_the_semantics():
     """Otherwise the calibrated EMAs would overwrite the rubric ones."""
     ddl = db_manager.SCHEMA_DEFINITIONS["ema_history"]["ddl"]
-    assert "uniq_model_modality_semantics (model, modality, semantics)" in ddl
+    # Desde a 0012 a chave inclui também o período do estudo (policy_namespace).
+    assert "uniq_ema_escopo (model, modality, semantics, policy_namespace)" in ddl
     assert "UNIQUE KEY uniq_model_modality (" not in ddl
 
 

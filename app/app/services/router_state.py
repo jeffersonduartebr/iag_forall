@@ -112,6 +112,8 @@ class EMABatchQueue:
             return 0
         items = list(self._queue.items())
         persisted = self._persist_batch(items)
+        if persisted == 0:  # banco fora: fica tudo para a próxima descarga
+            return 0
         self._queue.clear()
         self._on_queue_size_changed(0)
         self._last_flush = time.time()

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import random  # noqa: F401  (usado via patch em app.bandits.random.random nos testes)
 from typing import Any, Dict, List, Tuple
 
@@ -40,7 +39,9 @@ from app.services.bandit_stats_store import (
     parse_redis_stats,
     sanitize_model_stats,
     serialize_model_stats,
+    trava_contexto,
     upsert_stats_db,
+    welford_beta,
 )
 
 # Centróides semânticos (Redis, lock, aprendizado online): services.centroid_store.
@@ -201,12 +202,12 @@ def _get_ctx_stats_from_db(ctx: str) -> Dict[str, Dict[str, float]]:
     return load_stats_from_db(_get_db_engine, namespaced(ctx))
 
 
-def _ctx_stats_db_fallback(ctx: str) -> Dict[str, Dict[str, float]]:
+def _ctx_stats_db_fallback(ctx: str, estrito: bool = False) -> Dict[str, Dict[str, float]]:
     """DB read for a context missing from Redis (write-back + short negative cache)."""
-    return db_fallback(ctx, _get_ctx_stats_from_db, _set_ctx_stats)
+    return db_fallback(ctx, _get_ctx_stats_from_db, _set_ctx_stats, estrito=estrito)
 
 
-def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
+def _get_ctx_stats(ctx: str, estrito: bool = False) -> Dict[str, Dict[str, float]]:
     """
     Lê stats de um contexto:
     {
@@ -221,7 +222,7 @@ def _get_ctx_stats(ctx: str) -> Dict[str, Dict[str, float]]:
             stats = parse_redis_stats(rds.hgetall(_ctx_key(ctx)))
         except Exception as e:
             logger.warning(f"[bandit] Falha Redis ctx={ctx}: {e}")
-    return stats or _ctx_stats_db_fallback(ctx)
+    return stats or _ctx_stats_db_fallback(ctx, estrito)
 
 
 async def _get_ctx_stats_async(ctx: str) -> Dict[str, Dict[str, float]]:
@@ -524,52 +525,10 @@ def bandit_update(
     db_updates: list[tuple[str, str, Dict[str, float]]] = []
     for ctx in contexts:
         try:
-            stats = _get_ctx_stats(ctx)
-            cur = stats.get(
-                model,
-                {
-                    "mean": 0.0,
-                    "count": 0,
-                    "var": 0.0,
-                    "M2": 0.0,
-                    "alpha": 1.0,
-                    "beta": 1.0,
-                },
-            )
-            cur = _sanitize_model_stats(cur)
-
-            mean = float(cur.get("mean", 0.0))
-            count = int(cur.get("count", 0))
-            M2 = float(cur.get("M2", 0.0))
-
-            # ---- Welford para mean/var ----
-            count += 1
-            delta = r - mean
-            mean += delta / max(1, count)
-            delta2 = r - mean
-            M2 += delta * delta2
-            var = M2 / (count - 1) if count > 1 else 0.0
-
-            # ---- Beta para TS ----
-            alpha = float(cur.get("alpha", 1.0)) + r
-            beta = float(cur.get("beta", 1.0)) + (1.0 - r)
-            if alpha <= 0 or not math.isfinite(alpha):
-                alpha = 1.0
-            if beta <= 0 or not math.isfinite(beta):
-                beta = 1.0
-
-            stats[model] = {
-                "mean": mean,
-                "count": count,
-                "var": var,
-                "M2": M2,
-                "alpha": alpha,
-                "beta": beta,
-            }
-            stats[model] = _sanitize_model_stats(stats[model])
-
-            # Redis + DB (batched)
-            _set_ctx_stats(ctx, stats)
+            with trava_contexto(_get_rds(), _ctx_key(ctx)):  # 4 processos de feedback no mesmo hash
+                stats = _get_ctx_stats(ctx, estrito=True)  # banco ilegível: pula, nunca parte do prior
+                stats[model] = welford_beta(stats.get(model, {}), r)
+                _set_ctx_stats(ctx, stats)
             db_updates.append((ctx, model, stats[model]))
 
         except Exception as e:

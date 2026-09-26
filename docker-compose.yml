@@ -271,9 +271,12 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+      # Histórico de tentativas do Optuna fora da camada do container: antes era apagado a cada deploy.
+      - OPTUNA_STORAGE=sqlite:////app/state/metaopt.db
 
     volumes:
       - ./app/app:/app/app
+      - ./state:/app/state
       - prometheus_data:/tmp/prom
 
     networks:

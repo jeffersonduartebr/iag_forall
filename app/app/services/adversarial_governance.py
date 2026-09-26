@@ -199,10 +199,12 @@ def _close_online_loop(
             predictor = get_predictor(model)
             # Predict BEFORE learning to record the pre-update calibration point,
             # mirroring services.router_feedback.
-            predicted_error_prob = predictor.predict_error_probability(emb)
-            predictor.learn(emb, not is_failure)
-            predictor.record_outcome(predicted_error_prob, is_failure)
-            predictor.maybe_save()
+            from .preditor_compartilhado import aprendizado
+
+            with aprendizado(predictor):  # mesmo estado que o worker de feedback, sem sobrescrevê-lo
+                predicted_error_prob = predictor.predict_error_probability(emb)
+                predictor.learn(emb, not is_failure)
+                predictor.record_outcome(predicted_error_prob, is_failure)
     except Exception as exc:
         logger.debug("[advgov] predictor learn failed for %s: %s", model, exc)
 

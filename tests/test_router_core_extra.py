@@ -42,45 +42,23 @@ def test_ema_history_cache_and_batch_queue(monkeypatch):
     assert q.flush() == 0
 
 
-def test_ema_batch_persists_in_two_statements(monkeypatch):
-    """The batch is one executemany upsert plus one executemany for the sampled log."""
-    from contextlib import contextmanager
-
-    from sqlalchemy.exc import SQLAlchemyError
-
-    calls = []
-
-    class _Conn:
-        def execute(self, stmt, params):
-            calls.append((str(stmt).split("(")[0].strip(), params))
-
-    @contextmanager
-    def begin():
-        yield _Conn()
-
-    monkeypatch.setattr(rc, "_get_db_engine", lambda: SimpleNamespace(begin=begin))
+def test_ema_batch_persists_each_row_through_the_durable_store(monkeypatch):
+    """The periodic flush (retry path) writes each queued EMA through ``ema_persistencia``."""
+    gravados = []
+    monkeypatch.setattr(rc.ema_persistencia, "gravar", lambda mod, m, rec: gravados.append((mod, m)) or True)
     q = rc.EMABatchQueue(max_size=100, flush_interval=3600)
-    items = [
-        (("text", "m1"), {"ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.1, "updates": 3}),
-        (("text", "m2"), {"ema_latency": 2.0, "ema_quality": 6.0, "ema_cost": 0.2, "updates": 20, "ema_alignment": 0.5}),
-    ]
-    assert q._persist_batch(items) == 2
-    (upsert, upsert_rows), (log, log_rows) = calls
-    assert upsert == "INSERT INTO ema_history" and log == "INSERT INTO ema_history_log"
-    assert [r["m"] for r in upsert_rows] == ["m1", "m2"] and upsert_rows[0]["align"] == 1.0
-    assert [(r["m"], r["u"], r["align"]) for r in log_rows] == [("m2", 20, 0.5)]
-
-    calls.clear()
-    assert q._persist_batch(items[:1]) == 1 and len(calls) == 1  # nada amostrado: sem INSERT no log
-    assert q._persist_batch([]) == 0
-
-    @contextmanager
-    def broken():
-        raise SQLAlchemyError("db down")
-        yield
-
-    monkeypatch.setattr(rc, "_get_db_engine", lambda: SimpleNamespace(begin=broken))
+    items = [(("text", "m1"), {"updates": 3}), (("text", "m2"), {"updates": 20})]
+    assert q._persist_batch(items) == 2 and gravados == [("text", "m1"), ("text", "m2")]
+    monkeypatch.setattr(rc.ema_persistencia, "gravar", lambda mod, m, rec: False)
     assert q._persist_batch(items) == 0
+
+
+def test_a_failed_write_through_is_queued_for_retry(monkeypatch):
+    monkeypatch.setattr(rc.ema_persistencia, "gravar", lambda mod, m, rec: False)
+    fila = []
+    monkeypatch.setattr(rc.EMA_BATCH, "add", lambda mod, m, rec: fila.append(m))
+    rc._persist_ema("text", "m1", {"updates": 1})
+    assert fila == ["m1"]
 
 
 def test_load_ema_from_db_and_start_stop_services(monkeypatch):
@@ -133,7 +111,8 @@ The class groups the state and behavior required for Engine."""
 This helper encapsulates one focused step used by the surrounding workflow."""
             return _Conn()
 
-    monkeypatch.setattr(rc, "_get_db_engine", lambda: _Engine())
+    entrada = {"ema_latency": 1.0, "ema_quality": 2.0, "ema_cost": 3.0, "ema_alignment": 1.0, "updates": 7}
+    monkeypatch.setattr(rc.ema_persistencia, "carregar", lambda mod: {"m": dict(entrada)} if mod == "text" else {})
     rc.EMA_HISTORY = rc.EMAHistoryCache()
     rc._load_ema_from_db()
     assert rc.EMA_HISTORY.size() == 1

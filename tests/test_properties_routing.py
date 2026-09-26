@@ -65,7 +65,7 @@ def test_welford_update_matches_batch_statistics(rewards):
     with (
         patch.object(bandits, "centroids_online_update", lambda query: None),
         patch.object(bandits, "_auto_context_labels", lambda query, modality: ["ctx"]),
-        patch.object(bandits, "_get_ctx_stats", lambda ctx: dict(store.get(ctx, {}))),
+        patch.object(bandits, "_get_ctx_stats", lambda ctx, estrito=False: dict(store.get(ctx, {}))),
         patch.object(bandits, "_set_ctx_stats", lambda ctx, stats: store.__setitem__(ctx, stats)),
         patch.object(bandits, "_batch_upsert_ctx_db", lambda updates: None),
     ):

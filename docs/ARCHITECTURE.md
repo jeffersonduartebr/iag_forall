@@ -373,3 +373,29 @@ Limites:
 2. Seleção de modelo inesperada: `router_core.py`, `router_strategy.py`, `bandits.py`.
 3. Problemas de configuração: `settings_dynamic.py`, `/admin/settings`.
 4. Latência geral alta: `main.py`, `db.py`, `middleware/backpressure.py`.
+
+## Estado aprendido e durabilidade
+
+O Redis é a cópia de trabalho do que o roteador aprende. O MariaDB é a cópia durável, e um Redis limpo é
+reabastecido a partir dela. O disco da VM tem snapshot diário, e `backup.sh` (repositório da ferramenta) grava o
+MariaDB, o Redis (RDB) e os arquivos de estado no bucket a cada 6 h, no boot e no desligamento.
+
+| Estado | Cópia de trabalho | Cópia durável | Redis limpo |
+|---|---|---|---|
+| Posteriores do bandit | `meta:bandit:ctx:*` | `bandit_context_stats` (DOUBLE; o upsert nunca reduz `count`) | Relido por contexto; com o banco ilegível a atualização é pulada, nunca parte do prior |
+| EMA de latência, custo e qualidade | `ema:<modalidade>` | `ema_history` a cada atualização, por semântica e período (`policy_namespace`), com `updates` | Hash vazio refeito do banco; campo ausente continua a série |
+| Centróides semânticos | `meta:bandit:centroids` | `learned_state` (centróide novo na hora; movimentos a cada 60 s) | Restaurados; sem cópia, ids novos começam depois do maior `cluster:<id>` do bandit |
+| Estatísticas da exploração do OpenRouter | `openrouter:explore:model:*` | `openrouter_exploration_stats` (o upsert nunca reduz `count`) | Relidas por modelo |
+| Blocklist da exploração | `openrouter:explore:blocklist` | `learned_state` | Restaurada |
+| Janela de exploração por participante | `regime:episodios:*`, `regime:contagem:*` | `query_log.decision_json.regime` (fase campo) | Reconstruída uma vez por participante |
+| Preditor de erro | pickles em `STATE_DIR` | o próprio arquivo (volume) + backup | não depende do Redis; cada atualização trava o arquivo, relê o estado se outro processo gravou e grava na hora |
+| Histórico do Optuna | `STATE_DIR/metaopt.db` | volume + backup | não depende do Redis |
+| Configurações ajustadas, pesos NSGA, calibração dos juízes | Redis `settings:*` | tabelas próprias | relidos |
+
+Podem ser perdidos sem dano: caches (semântico, embeddings, preços), `tps:*`, orçamento de erros por provedor,
+circuit breakers, baseline de drift.
+
+**Restaurar depois de perder a VM:** recriar a VM, subir a pilha, restaurar `banco.sql.gz` no MariaDB, parar o
+Redis e copiar `redis.rdb.gz` (descompactado) para `/data/dump.rdb` do volume (com o AOF desligado no primeiro boot, ou
+apagando `appendonlydir`), e extrair `estado.tar.gz` em `/opt/app/aristo`. Sem o RDB, o Redis se refaz do banco pelas
+regras da tabela acima.

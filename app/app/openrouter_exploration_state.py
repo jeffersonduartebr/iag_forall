@@ -8,10 +8,13 @@ stay in the explorer so they resolve these names through its namespace.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from typing import Any, Dict, List, Set
+
+from app.services import estado_duravel
 
 logger = logging.getLogger("app.openrouter_explorer")
 
@@ -28,8 +31,11 @@ async def _get_blocklist(rds) -> Set[str]:
         return set()
     try:
         raw = await rds.get(REDIS_BLOCKLIST_KEY)
-        if not raw:
-            return set()
+        if not raw:  # Redis limpo: a cópia durável (learned_state) volta para o Redis
+            salva = await asyncio.to_thread(estado_duravel.ler, REDIS_BLOCKLIST_KEY)
+            if salva:
+                await rds.set(REDIS_BLOCKLIST_KEY, json.dumps(salva), nx=True)
+            return {str(x) for x in (salva or []) if x}
         text = raw.decode() if isinstance(raw, bytes) else str(raw)
         parsed = json.loads(text)
         if isinstance(parsed, list):
@@ -46,6 +52,7 @@ async def _save_blocklist(rds, models: Set[str]) -> None:
         await rds.set(REDIS_BLOCKLIST_KEY, json.dumps(sorted(models)))
     except Exception as exc:
         logger.warning("[openrouter_explore] blocklist save failed: %s", exc)
+    await asyncio.to_thread(estado_duravel.gravar, REDIS_BLOCKLIST_KEY, sorted(models))
 
 
 async def _track_model_key(rds, full_name: str) -> None:
@@ -116,22 +123,51 @@ def _decode_stats(raw: Any) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _stats_do_banco(nomes: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Durable stats (``openrouter_exploration_stats.stats_json``) of models Redis no longer has."""
+    if not nomes:
+        return {}
+    try:
+        from sqlalchemy import bindparam, text
+
+        from app.db import get_engine
+
+        sql = text("SELECT model, stats_json FROM openrouter_exploration_stats WHERE model IN :nomes")
+        with get_engine().connect() as conn:
+            rows = conn.execute(sql.bindparams(bindparam("nomes", expanding=True)), {"nomes": nomes}).all()
+        return {r[0]: s for r in rows if (s := _decode_stats(r[1]))}
+    except Exception as exc:
+        logger.warning("[openrouter_explore] estatísticas duráveis ilegíveis: %s", exc)
+        return {}
+
+
+async def _restaurar(rds, faltando: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Refill Redis from the table: a wiped Redis continues each model's history instead of overwriting it."""
+    salvas = await asyncio.to_thread(_stats_do_banco, faltando)
+    for nome, stats in salvas.items():
+        await rds.set(f"{REDIS_MODEL_STATS_PREFIX}{nome}", json.dumps(stats), nx=True)
+    return salvas
+
+
 async def _load_model_stats(rds, full_name: str) -> Dict[str, Any]:
     if not rds:
         return {}
     try:
-        return _decode_stats(await rds.get(f"{REDIS_MODEL_STATS_PREFIX}{full_name}"))
+        stats = _decode_stats(await rds.get(f"{REDIS_MODEL_STATS_PREFIX}{full_name}"))
+        return stats or (await _restaurar(rds, [full_name])).get(full_name, {})
     except Exception:
         return {}
 
 
 async def _load_many_model_stats(rds, full_names: List[str]) -> Dict[str, Dict[str, Any]]:
-    """Stats for many models in one MGET (falls back to one GET per model)."""
+    """Stats for many models in one MGET (falls back to one GET per model); gaps are refilled from the table."""
     if not rds or not full_names:
         return {}
     try:
         raws = await rds.mget([f"{REDIS_MODEL_STATS_PREFIX}{name}" for name in full_names])
-        return {name: _decode_stats(raw) for name, raw in zip(full_names, raws)}
+        stats = {name: _decode_stats(raw) for name, raw in zip(full_names, raws)}
+        stats.update(await _restaurar(rds, [n for n, s in stats.items() if not s]))
+        return stats
     except Exception:
         return {name: await _load_model_stats(rds, name) for name in full_names}
 

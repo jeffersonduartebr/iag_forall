@@ -42,13 +42,14 @@ _UPSERT_SQL = text(
       (context_label, model, avg_reward, count, var, M2)
     VALUES (:ctx, :model, :avg, :count, :var, :M2)
     ON DUPLICATE KEY UPDATE
-      avg_reward = VALUES(avg_reward),
-      count = VALUES(count),
-      var = VALUES(var),
-      M2 = VALUES(M2),
-      last_update = CURRENT_TIMESTAMP
+      avg_reward = IF(VALUES(count) >= count, VALUES(avg_reward), avg_reward),
+      var = IF(VALUES(count) >= count, VALUES(var), var),
+      M2 = IF(VALUES(count) >= count, VALUES(M2), M2),
+      last_update = CURRENT_TIMESTAMP,
+      count = GREATEST(count, VALUES(count))
     """
-)  # executemany: o PyMySQL não substitui parâmetros após VALUES (...); daí VALUES(coluna)
+)  # o posterior durável nunca regride: um Redis que recomeçou do prior não sobrescreve o histórico.
+#  `count` por último: o MySQL avalia as atribuições em ordem, e as de cima comparam com o valor antigo.  # executemany: o PyMySQL não substitui parâmetros após VALUES (...); daí VALUES(coluna)
 _SELECT_SQL = text(
     """
     SELECT model, avg_reward, count, var, M2
@@ -128,15 +129,19 @@ def _stats_from_row(row: Any) -> ModelStats:
     )
 
 
+class BancoIndisponivelError(RuntimeError):
+    """MariaDB could not be read: "no stats" and "unknown stats" must not look the same to a writer."""
+
+
 def load_stats_from_db(get_engine: Callable[[], Any], ctx: str) -> ContextStats:
-    """Load one context's statistics from MariaDB (empty on failure, including engine creation)."""
+    """Load one context's statistics from MariaDB; raises ``BancoIndisponivelError`` on failure."""
     try:
         with get_engine().connect() as conn:
             rows = conn.execute(_SELECT_SQL, {"ctx": ctx}).fetchall()
         return {row[0]: _stats_from_row(row) for row in rows}
     except Exception as e:
         logger.warning(f"[bandit] Falha DB ctx={ctx}: {e}")
-        return {}
+        raise BancoIndisponivelError(str(e)) from e
 
 
 def upsert_stats_db(get_engine: Callable[[], Any], updates: Iterable[Tuple[str, str, ModelStats]]) -> None:
@@ -164,6 +169,33 @@ def upsert_stats_db(get_engine: Callable[[], Any], updates: Iterable[Tuple[str, 
         # disco e o routing simplesmente piora, sem erro em lado nenhum.
         BANDIT_DB_PERSIST_FAILURES.inc(len(params))
         logger.error(f"[bandit] {len(params)} posteriores NÃO foram persistidos no DB: {e}")
+
+
+def welford_beta(cur: ModelStats, r: float) -> ModelStats:
+    """One reward folded into a model's stats: Welford mean/variance and the Beta posterior of Thompson."""
+    cur = sanitize_model_stats(cur)
+    mean, count, m2 = float(cur.get("mean", 0.0)), int(cur.get("count", 0)) + 1, float(cur.get("M2", 0.0))
+    delta = r - mean
+    mean += delta / count
+    m2 += delta * (r - mean)
+    alpha, beta = float(cur.get("alpha", 1.0)) + r, float(cur.get("beta", 1.0)) + (1.0 - r)
+    return sanitize_model_stats({
+        "mean": mean, "count": count, "var": m2 / (count - 1) if count > 1 else 0.0, "M2": m2,
+        "alpha": alpha if alpha > 0 and math.isfinite(alpha) else 1.0,
+        "beta": beta if beta > 0 and math.isfinite(beta) else 1.0,
+    })
+
+
+def trava_contexto(rds: Any, chave: str) -> Any:
+    """Redis lock around one context's read-modify-write (4 feedback processes update the same hash).
+
+    ``nullcontext`` without Redis: there is then no shared hash to race on.
+    """
+    from contextlib import nullcontext
+
+    if rds is None:
+        return nullcontext()
+    return rds.lock(f"{chave}:lock", timeout=10, blocking_timeout=5)
 
 
 class ColdContextCache:
@@ -209,11 +241,21 @@ def db_fallback(
     loader: Callable[[str], ContextStats],
     backfill: Callable[[str, ContextStats], None],
     cache: ColdContextCache = cold_contexts,
+    estrito: bool = False,
 ) -> ContextStats:
-    """DB read for a context missing from Redis, with write-back and negative caching."""
+    """DB read for a context missing from Redis, with write-back and negative caching.
+
+    With the database unreadable, readers get ``{}`` (route on the prior) but a writer (``estrito``) gets the
+    error: updating from the prior would write ``count = 1`` over the durable history.
+    """
     if cache.is_cold(ctx):
         return {}
-    stats = loader(ctx)
+    try:
+        stats = loader(ctx)
+    except BancoIndisponivelError:
+        if estrito:
+            raise
+        return {}
     if stats:
         backfill(ctx, stats)
     else:
