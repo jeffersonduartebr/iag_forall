@@ -18,9 +18,6 @@ import random
 import threading
 from typing import Any, Dict, Optional, Tuple
 
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
-
 from .adaptive_timeout import get_ema_latency
 from .bandits import _get_ctx_stats, bandit_update, compute_reward, select_model, select_model_async
 from .db import get_engine
@@ -72,6 +69,7 @@ from .reliability import (  # noqa: F401  (get_request_deduplicator re-export p/
 )
 from .router_strategy import choose_top2_models, score_candidates
 from .semantic_cache import check_cache, store_cache
+from .services import ema_persistencia
 from .services.hedged_execution import execute_with_hedge
 from .services.provider_budget import providers_over_budget, record_provider_outcome
 from .services.router_execution import route_and_answer_internal_impl
@@ -218,55 +216,11 @@ class EMABatchQueue(BaseEMABatchQueue):
         EMA_BATCH_QUEUE_SIZE.set(size)
 
     def _persist_batch(self, items: list) -> int:
-        """Upsert the batch into ``ema_history`` (and every 10th update into the log) in one transaction."""
-        if not items:
-            return 0
-        rows = [_ema_row(modality, model, record) for (modality, model), record in items]
-        sampled = [row for row in rows if row["u"] % 10 == 0]
-        try:
-            with _get_db_engine().begin() as conn:
-                conn.execute(_EMA_UPSERT_SQL, rows)
-                if sampled:
-                    conn.execute(_EMA_LOG_SQL, sampled)
-        except SQLAlchemyError as e:
-            logger.warning(f"[EMA Batch] Batch persist error: {e}")
-            return 0
-        EMA_BATCH_FLUSHES.inc()
-        logger.debug(f"[EMA Batch] Flushed {len(rows)} updates to DB")
-        return len(rows)
-
-
-# `semantics` entra na chave única (model, modality, semantics): sem ela, as EMAs
-# aprendidas com a nota calibrada sobrescreveriam as da rubrica na mesma linha, e
-# as duas nunca poderiam ser comparadas nem revertidas.
-_EMA_UPSERT_SQL = text("""
-    INSERT INTO ema_history (modality, model, semantics, ema_latency, ema_quality, ema_cost, ema_alignment)
-    VALUES (:mod, :m, :sem, :lat, :q, :c, :align)
-    ON DUPLICATE KEY UPDATE
-        ema_latency = VALUES(ema_latency), ema_quality = VALUES(ema_quality), ema_cost = VALUES(ema_cost),
-        ema_alignment = VALUES(ema_alignment), updated_at = CURRENT_TIMESTAMP
-""")  # executemany: o PyMySQL não substitui parâmetros após VALUES (...); daí VALUES(coluna)
-# Histórico amostrado (1 a cada 10 atualizações) para reduzir escritas.
-_EMA_LOG_SQL = text("""
-    INSERT INTO ema_history_log
-        (modality, model, semantics, ema_latency, ema_cost, ema_quality, ema_alignment, update_num)
-    VALUES (:mod, :m, :sem, :lat, :c, :q, :align, :u)
-""")
-
-
-def _ema_row(modality: str, model: str, record: dict) -> dict:
-    from app.services.quality_semantics import current_semantics
-
-    return {
-        "mod": modality,
-        "m": model,
-        "sem": current_semantics(),
-        "lat": record["ema_latency"],
-        "q": record["ema_quality"],
-        "c": record["ema_cost"],
-        "align": record.get("ema_alignment", 1.0),
-        "u": record.get("updates", 1),
-    }
+        """Upsert the batch into ``ema_history`` (``ema_persistencia``, one row at a time)."""
+        persisted = sum(ema_persistencia.gravar(modality, model, record) for (modality, model), record in items)
+        if persisted:
+            EMA_BATCH_FLUSHES.inc()
+        return persisted
 
 
 EMA_BATCH = EMABatchQueue()
@@ -340,29 +294,15 @@ def _update_db_pool_metrics() -> None:
 
 def _load_ema_from_db() -> None:
     """Carrega histórico EMA do banco para memória."""
-    global EMA_HISTORY
-    try:
-        with _get_db_engine().connect() as conn:
-            rows = conn.execute(
-                text("SELECT modality, model, ema_latency, ema_quality, ema_cost, ema_alignment FROM ema_history")
-            ).mappings().all()
-
-        for r in rows:
-            key = (r["modality"], r["model"])
-            EMA_HISTORY.set(key, {
-                "ema_latency": float(r["ema_latency"]),
-                "ema_quality": float(r["ema_quality"]),
-                "ema_cost": float(r["ema_cost"]),
-                "ema_alignment": float(r["ema_alignment"]),
-                "updates": 0,
-            })
-        logger.info(f"[EMA] Carregado: {EMA_HISTORY.size()} modelos.")
-    except Exception:
-        logger.warning("[EMA] Banco vazio ou erro ao carregar histórico (primeira execução?).")
+    for modality in ("text", "vision", "multimodal"):  # só a semântica e o período ativos, com as contagens
+        for model, entry in ema_persistencia.carregar(modality).items():
+            EMA_HISTORY.set((modality, model), entry)
+    logger.info(f"[EMA] Carregado: {EMA_HISTORY.size()} modelos.")
 
 def _persist_ema(modality: str, model: str, record: Dict[str, Any]) -> None:
-    """Queue EMA update for batch persistence (Quick Win #1)."""
-    EMA_BATCH.add(modality, model, record)
+    """Write the EMA through to ``ema_history`` now; a failed write is queued for the periodic flush."""
+    if not ema_persistencia.gravar(modality, model, record):
+        EMA_BATCH.add(modality, model, record)
 
 def _cleanup_old_query_logs() -> None:
     """Apaga linhas de query_log acima da retenção. ``0`` desliga a limpeza.

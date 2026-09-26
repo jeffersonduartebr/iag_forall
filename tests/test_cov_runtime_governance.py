@@ -129,8 +129,10 @@ def loop(monkeypatch):
 def test_online_loop_predicts_before_learning_a_failure(loop):
     ag._close_online_loop(model="m", score=3.0, is_failure=True, query="q", embedding=None, latency_s=None,
                           cost_per_1k=None)
+    # A gravação agora acontece dentro de preditor_compartilhado.aprendizado (trava + estado fresco), só para
+    # preditores com persistência; este stub não tem, então nada é gravado.
     assert loop == [("bandit", 0.3), ("embed", "q"), ("predict", [0.1, 0.2]), ("learn", False),
-                    ("outcome", 0.3, True), ("save",)]
+                    ("outcome", 0.3, True)]
 
 
 def test_online_loop_uses_given_embedding_and_survives_bandit_failure(loop, monkeypatch):

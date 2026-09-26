@@ -17,7 +17,7 @@ import pytest
 from app.services import bandit_stats_store
 from sqlalchemy.dialects import mysql
 
-from app import router_core, update_nsga_best_params
+from app import update_nsga_best_params
 
 
 def _pymysql_bulk_sql(stmt, rows):
@@ -45,15 +45,17 @@ def test_bandit_stats_batch_upsert_is_fully_bound():
     ]
     final = _pymysql_bulk_sql(bandit_stats_store._UPSERT_SQL, rows)
     _assert_fully_bound(final)
-    assert "avg_reward = VALUES(avg_reward)" in final
+    assert "avg_reward = IF(VALUES(count) >= count, VALUES(avg_reward), avg_reward)" in final
 
 
 def test_ema_batch_upsert_is_fully_bound():
+    from app.services import ema_persistencia
+
     rows = [
-        router_core._ema_row("text", "m1", {"ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.1, "updates": 3}),
-        router_core._ema_row("text", "m2", {"ema_latency": 2.0, "ema_quality": 6.0, "ema_cost": 0.2, "updates": 4}),
+        ema_persistencia.linha("text", "m1", {"ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.1, "updates": 3}),
+        ema_persistencia.linha("text", "m2", {"ema_latency": 2.0, "ema_quality": 6.0, "ema_cost": 0.2, "updates": 4}),
     ]
-    _assert_fully_bound(_pymysql_bulk_sql(router_core._EMA_UPSERT_SQL, rows))
+    _assert_fully_bound(_pymysql_bulk_sql(ema_persistencia._UPSERT, rows))
 
 
 def test_nsga_weights_batch_upsert_is_fully_bound(monkeypatch):

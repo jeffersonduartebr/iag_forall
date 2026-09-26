@@ -21,6 +21,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from app.embeddings import embed_text
+from app.services import centroides_duraveis
 from app.services.bandit_centroids import (
     load_centroid_matrix,
     nearest_centroid_from_array,
@@ -180,7 +181,7 @@ def _load_centroids(update_matrix_cache: bool = True) -> List[dict]:
     if not rds:
         return []
     try:
-        raw = rds.get(R_CENTROIDS)
+        raw = rds.get(R_CENTROIDS) or centroides_duraveis.restaurar(rds, R_CENTROIDS)
         if not raw:
             return []
         now_ts = int(time.time())
@@ -241,20 +242,16 @@ def _save_centroids(cents: List[dict]) -> None:
         pipe.hincrby(R_CENTROIDS_META, "rev", 1)
         pipe.execute()
 
-        # Update the pre-computed matrix cache
         _centroid_matrix_cache.update(normalized_cents)
+        centroides_duraveis.salvar(serial)  # cópia durável: os ids do bandit dependem destes centróides
 
     except Exception as e:
         logger.warning(f"[centroids] Falha ao salvar: {e}")
 
 
 def _new_centroid_id(cents: List[dict]) -> int:
-    """Return the first unused integer identifier for a new centroid."""
-    used = {c["id"] for c in cents}
-    cid = 0
-    while cid in used:
-        cid += 1
-    return cid
+    """The next identifier after every one in use (ids are never reused: the bandit keys stats by them)."""
+    return max((int(c["id"]) for c in cents), default=-1) + 1  # nunca reaproveita (centróides não são apagados)
 
 
 def _nearest_centroid_vec(
@@ -303,7 +300,7 @@ def centroids_online_update(query_text: str) -> Optional[int]:
     try:
         cents = _load_centroids()
         if not cents:
-            cid = 0
+            cid = centroides_duraveis.primeiro_id()  # nunca reaproveita um cluster:<id> que o bandit já tem
             cents = [{"id": cid, "vec": v, "count": 1, "last": int(time.time())}]
             _save_centroids(cents)
             return cid

@@ -153,7 +153,8 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
                 modality ENUM('text','vision','multimodal') NOT NULL DEFAULT 'text',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 semantics VARCHAR(16) NOT NULL DEFAULT 'rubric_v1',
-                UNIQUE KEY uniq_model_modality_semantics (model, modality, semantics)
+                policy_namespace VARCHAR(64) NOT NULL DEFAULT '',
+                UNIQUE KEY uniq_ema_escopo (model, modality, semantics, policy_namespace)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """,
         "columns": {
@@ -163,8 +164,22 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             "ema_alignment": "FLOAT NOT NULL DEFAULT 0",
             # Namespace das EMAs aprendidas: sem ela, as calibradas sobrescreviam
             # as da rubrica no mesmo (model, modality).
-            "semantics": "VARCHAR(16) NOT NULL DEFAULT 'rubric_v1'"
+            "semantics": "VARCHAR(16) NOT NULL DEFAULT 'rubric_v1'",
+            # Período do estudo (BANDIT_POLICY_NAMESPACE) e contagem de atualizações (migração 0012).
+            "policy_namespace": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "updates": "INT NOT NULL DEFAULT 0"
         }
+    },
+
+    # Cópia durável de documentos aprendidos que antes viviam só no Redis (migração 0012).
+    "learned_state": {
+        "ddl": """
+            CREATE TABLE IF NOT EXISTS learned_state (
+                chave VARCHAR(191) PRIMARY KEY,
+                atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """,
+        "columns": {"valor": "LONGTEXT NOT NULL"}
     },
 
     "ema_history_log": {
@@ -275,10 +290,10 @@ SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """,
         "columns": {
-            "avg_reward": "FLOAT DEFAULT 0",
+            "avg_reward": "DOUBLE DEFAULT 0",
             "count": "INT DEFAULT 0",
-            "var": "FLOAT DEFAULT 0",
-            "M2": "FLOAT DEFAULT 0"
+            "var": "DOUBLE DEFAULT 0",
+            "M2": "DOUBLE DEFAULT 0"
         }
     },
 

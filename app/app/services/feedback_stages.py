@@ -18,6 +18,7 @@ import numpy as np
 
 from .ema_store import next_ema, update_shared_ema
 from .formative_observability import record_routing_cell
+from .preditor_compartilhado import aprendizado
 from .reward import cost_per_1k_from_total
 from .router_services import spawn_via_deps
 from .router_stages import quietly
@@ -145,9 +146,9 @@ def _rubric_summary(judge_scores: List[Dict[str, Any]]) -> Optional[Dict[str, An
 
 def _learn_from_judgment(risk: ErrorRisk, quality: float) -> None:
     is_correct = quality >= 7.0
-    risk.predictor.learn(risk.query_embedding, is_correct)
-    risk.predictor.record_outcome(risk.predicted_error_prob, not is_correct)
-    risk.predictor.maybe_save()
+    with aprendizado(risk.predictor):  # vários processos: trava, estado fresco, grava na hora
+        risk.predictor.learn(risk.query_embedding, is_correct)
+        risk.predictor.record_outcome(risk.predicted_error_prob, not is_correct)
 
 
 async def judge_quality(deps: Dict[str, Any], fb: FeedbackRequest, risk: ErrorRisk, decision: JudgeDecision) -> Quality:

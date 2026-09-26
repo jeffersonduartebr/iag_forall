@@ -173,17 +173,18 @@ def _persist_stats_to_db(model: str, stats: Dict[str, Any], *, auto_promoted: bo
                         0, :stats_json
                     )
                     ON DUPLICATE KEY UPDATE
-                        count = VALUES(count),
-                        failure_count = VALUES(failure_count),
-                        mean_reward = VALUES(mean_reward),
-                        mean_latency_s = VALUES(mean_latency_s),
-                        mean_cost_usd = VALUES(mean_cost_usd),
-                        mean_observed_usd_per_1k = VALUES(mean_observed_usd_per_1k),
+                        failure_count = IF(VALUES(count) >= count, VALUES(failure_count), failure_count),
+                        mean_reward = IF(VALUES(count) >= count, VALUES(mean_reward), mean_reward),
+                        mean_latency_s = IF(VALUES(count) >= count, VALUES(mean_latency_s), mean_latency_s),
+                        mean_cost_usd = IF(VALUES(count) >= count, VALUES(mean_cost_usd), mean_cost_usd),
+                        mean_observed_usd_per_1k = IF(VALUES(count) >= count, VALUES(mean_observed_usd_per_1k),
+                                                      mean_observed_usd_per_1k),
                         catalog_prompt_usd_per_1k = VALUES(catalog_prompt_usd_per_1k),
                         catalog_completion_usd_per_1k = VALUES(catalog_completion_usd_per_1k),
                         auto_promoted_at = COALESCE(VALUES(auto_promoted_at), auto_promoted_at),
-                        stats_json = VALUES(stats_json),
-                        updated_at = CURRENT_TIMESTAMP
+                        stats_json = IF(VALUES(count) >= count, VALUES(stats_json), stats_json),
+                        updated_at = CURRENT_TIMESTAMP,
+                        count = GREATEST(count, VALUES(count))
                     """
                 ),
                 {

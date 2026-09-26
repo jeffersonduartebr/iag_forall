@@ -78,7 +78,8 @@ def test_engine_creation_failure_is_contained():
         raise RuntimeError("sem banco")
 
     store.upsert_stats_db(broken, [("c", "m", {"mean": 0.5})])  # não propaga
-    assert store.load_stats_from_db(broken, "c") == {}
+    with pytest.raises(store.BancoIndisponivelError):  # "sem estatística" e "banco fora" não se confundem
+        store.load_stats_from_db(broken, "c")
 
 
 def test_bandits_cold_context_hits_db_once(monkeypatch):

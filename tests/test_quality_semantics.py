@@ -149,21 +149,19 @@ def test_the_bandit_database_context_is_namespaced_on_write(semantics, monkeypat
 
 
 def test_the_ema_row_carries_the_semantics():
-    from app import router_core
+    from app.services import ema_persistencia
 
-    row = router_core._ema_row(
-        "text", "m", {"ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.1, "updates": 3}
-    )
-    assert row["sem"] in qs.VALID_SEMANTICS
+    row = ema_persistencia.linha("text", "m", {"ema_latency": 1.0, "ema_quality": 8.0, "ema_cost": 0.1, "updates": 3})
+    assert row["sem"] in qs.VALID_SEMANTICS and "ns" in row
 
 
 def test_the_ema_upsert_keys_on_the_semantics():
     """Without it the calibrated EMAs would overwrite the rubric ones."""
-    from app import router_core
+    from app.services import ema_persistencia
 
-    sql = str(router_core._EMA_UPSERT_SQL)
-    assert "semantics" in sql
-    assert ":sem" in sql
+    sql = str(ema_persistencia._UPSERT)
+    assert "semantics" in sql and ":sem" in sql
+    assert "policy_namespace" in sql and ":ns" in sql  # e no período do estudo
 
 
 # ---------------------------------------------------------------------------

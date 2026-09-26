@@ -71,6 +71,25 @@ def _decode(raw: Any) -> Optional[Dict[str, Any]]:
     return entry if isinstance(entry, dict) and "ema_latency" in entry else None
 
 
+def _do_banco(modality: str, model: str) -> Optional[Dict[str, Any]]:
+    """The durable EMA when Redis has none: a wiped Redis continues the history instead of restarting it."""
+    from .ema_persistencia import carregar
+
+    return carregar(modality, model).get(model)
+
+
+def _hidratar(rds: Any, modality: str) -> Dict[str, Dict[str, Any]]:
+    """Refill an empty Redis EMA hash from ``ema_history`` (HSETNX: never over a concurrent live update)."""
+    from .ema_persistencia import carregar
+
+    linhas = carregar(modality)
+    for model, entry in linhas.items():
+        rds.hsetnx(_ema_key(modality), model, json.dumps(entry))
+    if linhas:
+        logger.warning("[ema] Redis sem EMA de %s: %d modelo(s) restaurado(s) do banco", modality, len(linhas))
+    return linhas
+
+
 def update_shared_ema(
     modality: str, model: str, latency_s: float, quality: float, cost: float, rds: Any = None, retries: int = 5
 ) -> Optional[Dict[str, Any]]:
@@ -83,7 +102,8 @@ def update_shared_ema(
         try:
             with rds.pipeline() as pipe:
                 pipe.watch(key)
-                entry = next_ema(_decode(pipe.hget(key, model)), latency_s, quality, cost)
+                prev = _decode(pipe.hget(key, model)) or _do_banco(modality, model)
+                entry = next_ema(prev, latency_s, quality, cost)
                 pipe.multi()
                 pipe.hset(key, model, json.dumps(entry))
                 pipe.execute()
@@ -110,6 +130,8 @@ def load_ema_snapshot(modality: str, rds: Any = None) -> Dict[str, Dict[str, Any
             entry = _decode(raw)
             if entry is not None:
                 snapshot[field.decode() if isinstance(field, bytes) else str(field)] = entry
+        if rds and not snapshot:
+            snapshot = _hidratar(rds, modality)
     except Exception as exc:
         logger.debug("[ema] snapshot read failed for %s: %s", modality, exc)
     with _snapshot_lock:

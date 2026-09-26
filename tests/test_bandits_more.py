@@ -90,7 +90,7 @@ def test_new_centroid_id_and_nearest(monkeypatch):
     """Testa new centroid id and nearest."""
     from app import bandits
 
-    assert bandits._new_centroid_id([{"id": 0}, {"id": 2}]) == 1
+    assert bandits._new_centroid_id([{"id": 0}, {"id": 2}]) == 3  # nunca reaproveita: o bandit guarda por id
 
     cents = [
         {"id": 1, "vec": np.array([1.0, 0.0], dtype=np.float32)},
@@ -205,7 +205,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         captured[ctx] = stats
 
     monkeypatch.setattr(bandits, "_set_ctx_stats", _set_ctx)
-    monkeypatch.setattr(bandits, "_get_ctx_stats", lambda ctx: {})
+    monkeypatch.setattr(bandits, "_get_ctx_stats", lambda ctx, estrito=False: {})
     bandits.bandit_update("m1", "q", reward=2.0, modality="text")
     assert "global" in captured
     assert captured["global"]["m1"]["mean"] == pytest.approx(1.0)
