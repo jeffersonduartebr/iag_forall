@@ -32,170 +32,6 @@ _HOTPATH_TENANT_BUDGET_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_TENANT_BU
 _HOTPATH_TENANT_USAGE_CACHE = TTLCache(ttl_s=float(os.getenv("HOTPATH_TENANT_USAGE_CACHE_TTL_S", "5")))
 
 
-DDL_STATEMENTS = [
-    """
-    CREATE TABLE IF NOT EXISTS tenant_budgets (
-        tenant_id VARCHAR(128) PRIMARY KEY,
-        daily_usd_limit FLOAT NOT NULL DEFAULT 0,
-        monthly_usd_limit FLOAT NOT NULL DEFAULT 0,
-        enabled TINYINT NOT NULL DEFAULT 1,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS tenant_usage (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        tenant_id VARCHAR(128) NOT NULL,
-        day_key DATE NOT NULL,
-        month_key VARCHAR(7) NOT NULL,
-        requests INT NOT NULL DEFAULT 0,
-        tokens_in BIGINT NOT NULL DEFAULT 0,
-        tokens_out BIGINT NOT NULL DEFAULT 0,
-        cost_usd FLOAT NOT NULL DEFAULT 0,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_tenant_day (tenant_id, day_key),
-        INDEX idx_tenant_month (tenant_id, month_key)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS audit_log (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        actor VARCHAR(128) NOT NULL,
-        action VARCHAR(128) NOT NULL,
-        resource VARCHAR(128) NOT NULL,
-        tenant_id VARCHAR(128) NULL,
-        metadata LONGTEXT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_action_created (action, created_at),
-        INDEX idx_tenant_created (tenant_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS policy_versions (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        version VARCHAR(128) NOT NULL UNIQUE,
-        description TEXT,
-        config_json LONGTEXT,
-        is_active TINYINT NOT NULL DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_active (is_active)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS eval_runs (
-        id VARCHAR(64) PRIMARY KEY,
-        status VARCHAR(32) NOT NULL,
-        policy_version VARCHAR(128) NULL,
-        tenant_id VARCHAR(128) NULL,
-        notes TEXT,
-        prompts_json LONGTEXT,
-        summary_json LONGTEXT,
-        metadata_json LONGTEXT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_status_created (status, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS eval_run_results (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        run_id VARCHAR(64) NOT NULL,
-        prompt_text TEXT,
-        model VARCHAR(255),
-        quality FLOAT,
-        latency_s FLOAT,
-        cost_usd FLOAT,
-        metadata_json LONGTEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_run_created (run_id, created_at),
-        INDEX idx_run_model (run_id, model)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS rbac_user_roles (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        user_id VARCHAR(128) NOT NULL,
-        role_name VARCHAR(64) NOT NULL,
-        tenant_id VARCHAR(128) NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_user_role_tenant (user_id, role_name, tenant_id),
-        INDEX idx_user (user_id),
-        INDEX idx_role (role_name)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS response_reviews (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        correlation_id VARCHAR(128) NULL,
-        tenant_id VARCHAR(128) NULL,
-        query_text TEXT,
-        answer LONGTEXT,
-        chosen_model VARCHAR(255),
-        confidence_score FLOAT NULL,
-        confidence_band VARCHAR(16) NULL,
-        grounded TINYINT DEFAULT 0,
-        verification_status VARCHAR(32) NULL,
-        review_status VARCHAR(32) NOT NULL DEFAULT 'needs_review',
-        review_reason VARCHAR(64) NULL,
-        reviewer_id VARCHAR(128) NULL,
-        reviewer_notes LONGTEXT NULL,
-        corrected_answer LONGTEXT NULL,
-        metadata_json LONGTEXT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_review_status_created (review_status, created_at),
-        INDEX idx_tenant_review_created (tenant_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS expert_profiles (
-        user_id VARCHAR(128) PRIMARY KEY,
-        display_name VARCHAR(255) NULL,
-        theme_ids LONGTEXT NULL,
-        credentials_note TEXT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS expert_accounts (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        email VARCHAR(255) NOT NULL UNIQUE,
-        password_hash VARCHAR(255) NOT NULL,
-        display_name VARCHAR(255) NOT NULL,
-        phone VARCHAR(32) NULL,
-        enabled TINYINT NOT NULL DEFAULT 1,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_expert_enabled (enabled, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS expert_assessments (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        expert_id VARCHAR(128) NOT NULL,
-        benchmark_id VARCHAR(128) NOT NULL,
-        theme VARCHAR(128) NOT NULL,
-        query_text TEXT,
-        answer LONGTEXT,
-        reference LONGTEXT NULL,
-        eval_run_id VARCHAR(64) NULL,
-        judge_quality FLOAT NULL,
-        quality_score FLOAT NOT NULL,
-        rubric_json LONGTEXT NULL,
-        notes LONGTEXT NULL,
-        status VARCHAR(32) NOT NULL DEFAULT 'submitted',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_expert_benchmark_run (expert_id, benchmark_id, eval_run_id),
-        INDEX idx_theme_created (theme, created_at),
-        INDEX idx_eval_run (eval_run_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """,
-]
-
-
 @dataclass
 class BudgetCheck:
     """Represent `BudgetCheck` within this module.
@@ -219,17 +55,6 @@ The class groups the state and behavior required for AccessDecision."""
     roles: List[str]
 
 
-def ensure_roadmap_tables() -> None:
-    """Ensure all governance/policy/eval/rbac tables exist."""
-    try:
-        with get_engine().begin() as conn:
-            for ddl in DDL_STATEMENTS:
-                conn.execute(text(ddl))
-            conn.execute(text("ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS metadata_json LONGTEXT NULL"))
-    except Exception as e:
-        logger.warning("[roadmap_features] failed to ensure tables: %s", e)
-
-
 def set_tenant_budget(tenant_id: str, daily_usd_limit: float, monthly_usd_limit: float, enabled: bool = True) -> None:
     """Create/update budget limits for a tenant."""
     _HOTPATH_TENANT_BUDGET_CACHE.invalidate(tenant_id)
@@ -239,10 +64,10 @@ def set_tenant_budget(tenant_id: str, daily_usd_limit: float, monthly_usd_limit:
                 """
                 INSERT INTO tenant_budgets (tenant_id, daily_usd_limit, monthly_usd_limit, enabled)
                 VALUES (:t, :d, :m, :e)
-                ON DUPLICATE KEY UPDATE
-                    daily_usd_limit=:d,
-                    monthly_usd_limit=:m,
-                    enabled=:e
+                ON CONFLICT (tenant_id) DO UPDATE SET
+                    daily_usd_limit=EXCLUDED.daily_usd_limit,
+                    monthly_usd_limit=EXCLUDED.monthly_usd_limit,
+                    enabled=EXCLUDED.enabled
                 """
             ),
             {"t": tenant_id, "d": float(daily_usd_limit), "m": float(monthly_usd_limit), "e": 1 if enabled else 0},
@@ -346,12 +171,12 @@ def record_tenant_usage(
                 """
                 INSERT INTO tenant_usage (tenant_id, day_key, month_key, requests, tokens_in, tokens_out, cost_usd)
                 VALUES (:t, :d, :m, :r, :ti, :to, :c)
-                ON DUPLICATE KEY UPDATE
-                    requests=requests + VALUES(requests),
-                    tokens_in=tokens_in + VALUES(tokens_in),
-                    tokens_out=tokens_out + VALUES(tokens_out),
-                    cost_usd=cost_usd + VALUES(cost_usd),
-                    month_key=VALUES(month_key)
+                ON CONFLICT (tenant_id, day_key) DO UPDATE SET
+                    requests=tenant_usage.requests + EXCLUDED.requests,
+                    tokens_in=tenant_usage.tokens_in + EXCLUDED.tokens_in,
+                    tokens_out=tenant_usage.tokens_out + EXCLUDED.tokens_out,
+                    cost_usd=tenant_usage.cost_usd + EXCLUDED.cost_usd,
+                    month_key=EXCLUDED.month_key
                 """
             ),
             {
@@ -446,7 +271,7 @@ def create_policy_version(version: str, config: Dict[str, Any], description: str
                 """
                 INSERT INTO policy_versions (version, description, config_json, is_active)
                 VALUES (:v, :d, :c, 0)
-                ON DUPLICATE KEY UPDATE description=:d, config_json=:c
+                ON CONFLICT (version) DO UPDATE SET description=EXCLUDED.description, config_json=EXCLUDED.config_json
                 """
             ),
             {"v": version, "d": description, "c": json.dumps(config, ensure_ascii=False)},
@@ -676,6 +501,7 @@ def create_response_review(
                     :confidence_score, :confidence_band, :grounded, :verification_status,
                     'needs_review', :review_reason, :metadata_json
                 )
+                RETURNING id
                 """
             ),
             {
@@ -692,7 +518,7 @@ def create_response_review(
                 "metadata_json": json.dumps(metadata or {}, ensure_ascii=False),
             },
         )
-        return int(result.lastrowid or 0)
+        return int(result.scalar_one())
 
 
 def list_response_reviews(status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
@@ -762,7 +588,7 @@ def grant_role(user_id: str, role_name: str, tenant_id: Optional[str] = None) ->
                 """
                 INSERT INTO rbac_user_roles (user_id, role_name, tenant_id)
                 VALUES (:u, :r, :t)
-                ON DUPLICATE KEY UPDATE role_name=:r
+                ON CONFLICT (user_id, role_name, tenant_id) DO NOTHING
                 """
             ),
             {"u": user_id[:128], "r": role_name[:64], "t": tenant_id},
@@ -777,7 +603,7 @@ def revoke_role(user_id: str, role_name: str, tenant_id: Optional[str] = None) -
                 """
                 DELETE FROM rbac_user_roles
                 WHERE user_id=:u AND role_name=:r
-                AND ((tenant_id IS NULL AND :t IS NULL) OR tenant_id=:t)
+                AND tenant_id IS NOT DISTINCT FROM :t
                 """
             ),
             {"u": user_id, "r": role_name, "t": tenant_id},

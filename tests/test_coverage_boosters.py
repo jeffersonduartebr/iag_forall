@@ -107,8 +107,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     conn = _Conn()
     monkeypatch.setattr(qs, "engine", SimpleNamespace(begin=lambda: _Ctx(conn)))
 
-    qs.ensure_query_log()
-    assert conn.executed
+    assert not hasattr(qs, "ensure_query_log")  # a tabela é do alembic_pg: nenhum DDL por insert
 
     qs.insert_query_log(
         query_text="q",
@@ -126,7 +125,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         query_embedding=[0.1, 0.2],
         answer_embedding=[0.3, 0.4],
     )
-    assert len(conn.executed) >= 2
+    assert len(conn.executed) == 1 and conn.executed[0][0].lstrip().startswith("INSERT INTO query_log")
 
 
 def test_sparse_index_core(monkeypatch):

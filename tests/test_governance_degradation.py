@@ -76,18 +76,21 @@ def test_degraded_budget_pass_serves_the_request_instead_of_crashing():
     _raise_if_budget_exceeded(SimpleNamespace(modality="text"), SimpleNamespace(allowed=True))
 
 
-def test_migration_0008_creates_every_governance_table_the_runtime_knows():
-    """The governance tables have one owner (Alembic 0008): a fresh production database used to lack them."""
+def test_the_postgresql_baseline_creates_every_governance_table_the_runtime_uses():
+    """The governance tables have one owner (alembic_pg baseline): nothing creates them at runtime any more."""
     import importlib.util
+    import inspect
     import re
     from pathlib import Path
 
-    from app.roadmap_features import DDL_STATEMENTS
+    from app import roadmap_experts, roadmap_features
 
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0008_governance_tables.py"
-    spec = importlib.util.spec_from_file_location("m0008", path)
+    path = Path(__file__).resolve().parents[1] / "alembic_pg" / "versions" / "pg_0001_baseline.py"
+    spec = importlib.util.spec_from_file_location("pg0001", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    runtime = {re.search(r"CREATE TABLE IF NOT EXISTS (\w+)", ddl).group(1) for ddl in DDL_STATEMENTS}
-    assert runtime <= set(mod.TABLES) and all("IF NOT EXISTS" in ddl for ddl in mod.DDL)
-    assert mod.down_revision == "0007_decision_audit"
+    baseline = {m for ddl in mod.DDL for m in re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", ddl)}
+    fonte = inspect.getsource(roadmap_features) + inspect.getsource(roadmap_experts)
+    usadas = set(re.findall(r"\b(?:INSERT INTO|UPDATE|DELETE FROM|FROM)\s+([a-z_]+)", fonte))
+    assert usadas and usadas <= baseline, usadas - baseline
+    assert "CREATE TABLE" not in fonte

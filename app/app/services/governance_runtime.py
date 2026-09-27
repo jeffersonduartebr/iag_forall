@@ -5,30 +5,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from ..roadmap_features import check_tenant_budget, ensure_roadmap_tables, get_active_policy, record_tenant_usage
+from ..roadmap_features import check_tenant_budget, get_active_policy, record_tenant_usage
 from .hot_path_runtime import (
     check_tenant_budget_async,
     get_active_policy_async,
     invalidate_active_policy_cache_async,
     schedule_tenant_usage,
 )
-
-
-def _auto_ddl_enabled() -> bool:
-    from ..settings_dynamic import settings
-
-    env = str(settings.get("ENV", "development") or "development").lower()
-    flag = settings.get("ROADMAP_AUTO_DDL")
-    if flag is None or str(flag).strip() == "":
-        return env not in {"production", "prod"}
-    return str(flag).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def ensure_runtime_support_tables() -> None:
-    """Ensure optional governance tables used by runtime hooks exist."""
-    if not _auto_ddl_enabled():
-        return None
-    return ensure_roadmap_tables()
 
 
 def get_runtime_active_policy() -> Optional[Dict[str, Any]]:

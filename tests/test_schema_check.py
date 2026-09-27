@@ -16,8 +16,11 @@ from app.services.schema_check import REQUIRED_COLUMNS, missing_columns, verify_
 
 
 class FakeConn:
-    def __init__(self, tables, columns):
-        self.tables, self.columns = tables, columns
+    """``information_schema.columns`` of the current schema, from ``{table: {columns}}``."""
+
+    def __init__(self, columns):
+        self.columns = columns
+        self.statements = []
 
     def __enter__(self):
         return self
@@ -26,57 +29,57 @@ class FakeConn:
         return False
 
     def execute(self, statement, params=None):
-        sql, params = str(statement), params or {}
-        if "information_schema.tables" in sql:
-            return FakeResult([(1 if params["t"] in self.tables else 0,)])
-        return FakeResult([(c,) for c in self.columns.get(params["t"], ())])
-
-
-class FakeResult:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def scalar(self):
-        return self._rows[0][0]
-
-    def __iter__(self):
-        return iter(self._rows)
+        self.statements.append(str(statement))
+        return iter([(t, c) for t, cols in self.columns.items() for c in cols])
 
 
 class FakeEngine:
-    def __init__(self, tables, columns):
-        self._conn = FakeConn(tables, columns)
+    def __init__(self, columns):
+        self._conn = FakeConn(columns)
 
     def connect(self):
         return self._conn
 
 
+def _complete():
+    return {t: set(c) for t, c in REQUIRED_COLUMNS.items()}
+
+
 def test_a_fully_migrated_database_reports_nothing():
-    engine = FakeEngine(set(REQUIRED_COLUMNS), {t: set(c) for t, c in REQUIRED_COLUMNS.items()})
-    assert missing_columns(engine) == []
+    assert missing_columns(FakeEngine(_complete())) == []
+
+
+def test_the_lookup_is_scoped_to_the_current_postgresql_schema():
+    engine = FakeEngine(_complete())
+    missing_columns(engine)
+    assert len(engine._conn.statements) == 1
+    assert "current_schema()" in engine._conn.statements[0]
+    assert "DATABASE()" not in engine._conn.statements[0]
 
 
 def test_a_stale_database_names_every_missing_column():
-    columns = {t: set(c) for t, c in REQUIRED_COLUMNS.items()}
+    columns = _complete()
     columns["query_log"].discard("decision_json")
     columns["query_log"].discard("correlation_id")
-    engine = FakeEngine(set(REQUIRED_COLUMNS), columns)
 
-    missing = missing_columns(engine)
+    missing = missing_columns(FakeEngine(columns))
     assert set(missing) == {"query_log.decision_json", "query_log.correlation_id"}
 
 
-def test_a_table_that_does_not_exist_yet_is_not_a_failure():
-    """A fresh install would otherwise be indistinguishable from a stale one;
-    db_manager creates the tables on first boot."""
-    engine = FakeEngine(set(), {})
-    assert missing_columns(engine) == []
+def test_a_table_that_does_not_exist_is_a_failure_too():
+    """Nothing creates tables at runtime any more (alembic_pg owns the schema): a missing table is a missing
+    migration, reported column by column."""
+    columns = _complete()
+    del columns["request_failures"]
+    missing = missing_columns(FakeEngine(columns))
+    assert missing and all(m.startswith("request_failures.") for m in missing)
+    assert "request_failures.status_code" in missing
 
 
 def test_strict_mode_refuses_to_start(monkeypatch):
-    columns = {t: set(c) for t, c in REQUIRED_COLUMNS.items()}
+    columns = _complete()
     columns["query_log"].discard("decision_json")
-    monkeypatch.setattr("app.db.get_engine", lambda: FakeEngine(set(REQUIRED_COLUMNS), columns))
+    monkeypatch.setattr("app.db.get_engine", lambda: FakeEngine(columns))
 
     with pytest.raises(RuntimeError, match="Esquema desatualizado"):
         verify_schema(strict=True)
@@ -84,9 +87,9 @@ def test_strict_mode_refuses_to_start(monkeypatch):
 
 def test_non_strict_mode_logs_and_continues(monkeypatch):
     """A developer mid-migration should not be locked out of their own stack."""
-    columns = {t: set(c) for t, c in REQUIRED_COLUMNS.items()}
+    columns = _complete()
     columns["query_log"].discard("decision_json")
-    monkeypatch.setattr("app.db.get_engine", lambda: FakeEngine(set(REQUIRED_COLUMNS), columns))
+    monkeypatch.setattr("app.db.get_engine", lambda: FakeEngine(columns))
 
     assert list(verify_schema(strict=False)) == ["query_log.decision_json"]
 
@@ -103,7 +106,8 @@ def test_an_unreachable_database_is_not_this_checks_problem(monkeypatch):
 
 
 def test_the_required_columns_are_the_ones_the_insert_writes():
-    """A column added to the INSERT and forgotten here is a silent NULL."""
+    """Every column the INSERT writes is checked at startup (a column the INSERT writes and the schema lacks is a
+    failed insert on the first real request)."""
     import inspect
     import re
 
@@ -112,4 +116,4 @@ def test_the_required_columns_are_the_ones_the_insert_writes():
     source = inspect.getsource(insert_query_log)
     match = re.search(r"INSERT INTO query_log\s*\((.*?)\)\s*VALUES", source, re.S)
     written = {c.strip() for c in match.group(1).replace("\n", " ").split(",") if c.strip()}
-    assert set(REQUIRED_COLUMNS["query_log"]) <= written
+    assert written <= set(REQUIRED_COLUMNS["query_log"])

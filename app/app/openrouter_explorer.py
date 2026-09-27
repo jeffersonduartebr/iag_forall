@@ -162,7 +162,7 @@ def _persist_stats_to_db(model: str, stats: Dict[str, Any], *, auto_promoted: bo
             conn.execute(
                 text(
                     """
-                    INSERT INTO openrouter_exploration_stats (
+                    INSERT INTO openrouter_exploration_stats AS s (
                         model, count, failure_count, mean_reward, mean_latency_s, mean_cost_usd,
                         mean_observed_usd_per_1k, catalog_prompt_usd_per_1k, catalog_completion_usd_per_1k,
                         auto_promoted_at, blocklisted, stats_json
@@ -172,19 +172,18 @@ def _persist_stats_to_db(model: str, stats: Dict[str, Any], *, auto_promoted: bo
                         CASE WHEN :auto_promoted = 1 THEN CURRENT_TIMESTAMP ELSE NULL END,
                         0, :stats_json
                     )
-                    ON DUPLICATE KEY UPDATE
-                        failure_count = IF(VALUES(count) >= count, VALUES(failure_count), failure_count),
-                        mean_reward = IF(VALUES(count) >= count, VALUES(mean_reward), mean_reward),
-                        mean_latency_s = IF(VALUES(count) >= count, VALUES(mean_latency_s), mean_latency_s),
-                        mean_cost_usd = IF(VALUES(count) >= count, VALUES(mean_cost_usd), mean_cost_usd),
-                        mean_observed_usd_per_1k = IF(VALUES(count) >= count, VALUES(mean_observed_usd_per_1k),
-                                                      mean_observed_usd_per_1k),
-                        catalog_prompt_usd_per_1k = VALUES(catalog_prompt_usd_per_1k),
-                        catalog_completion_usd_per_1k = VALUES(catalog_completion_usd_per_1k),
-                        auto_promoted_at = COALESCE(VALUES(auto_promoted_at), auto_promoted_at),
-                        stats_json = IF(VALUES(count) >= count, VALUES(stats_json), stats_json),
+                    ON CONFLICT (model) DO UPDATE SET
+                        failure_count = CASE WHEN EXCLUDED.count >= s.count THEN EXCLUDED.failure_count ELSE s.failure_count END,
+                        mean_reward = CASE WHEN EXCLUDED.count >= s.count THEN EXCLUDED.mean_reward ELSE s.mean_reward END,
+                        mean_latency_s = CASE WHEN EXCLUDED.count >= s.count THEN EXCLUDED.mean_latency_s ELSE s.mean_latency_s END,
+                        mean_cost_usd = CASE WHEN EXCLUDED.count >= s.count THEN EXCLUDED.mean_cost_usd ELSE s.mean_cost_usd END,
+                        mean_observed_usd_per_1k = CASE WHEN EXCLUDED.count >= s.count THEN EXCLUDED.mean_observed_usd_per_1k ELSE s.mean_observed_usd_per_1k END,
+                        catalog_prompt_usd_per_1k = EXCLUDED.catalog_prompt_usd_per_1k,
+                        catalog_completion_usd_per_1k = EXCLUDED.catalog_completion_usd_per_1k,
+                        auto_promoted_at = COALESCE(EXCLUDED.auto_promoted_at, s.auto_promoted_at),
+                        stats_json = CASE WHEN EXCLUDED.count >= s.count THEN EXCLUDED.stats_json ELSE s.stats_json END,
                         updated_at = CURRENT_TIMESTAMP,
-                        count = GREATEST(count, VALUES(count))
+                        count = GREATEST(s.count, EXCLUDED.count)
                     """
                 ),
                 {

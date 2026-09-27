@@ -50,37 +50,6 @@ def _db_engine():
 
 
 # ============================================================
-# 🧱 Tabela multimodal nsga_meta_results
-# ============================================================
-
-DDL_META = """
-CREATE TABLE IF NOT EXISTS nsga_meta_results (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    modality VARCHAR(32) NOT NULL,
-    trial_id INT NOT NULL,
-    N_pop INT NOT NULL,
-    N_gen INT NOT NULL,
-    cxpb FLOAT NOT NULL,
-    mutpb FLOAT NOT NULL,
-    eta_c FLOAT NOT NULL,
-    eta_m FLOAT NOT NULL,
-    eff_mean FLOAT NOT NULL,
-    eff_std  FLOAT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-"""
-
-
-def _ensure_meta_table() -> None:
-    """Create nsga_meta_results table once."""
-    try:
-        with _db_engine().begin() as conn:
-            conn.execute(text(DDL_META))
-    except SQLAlchemyError as exc:
-        logger.warning("[metaopt] Failed to ensure nsga_meta_results table: %s", exc)
-
-
-# ============================================================
 # 🧩 Funções auxiliares
 # ============================================================
 
@@ -93,7 +62,7 @@ def save_result(modality: str, trial_id: int, params: Dict[str, Any],
                 text("""
                     INSERT INTO nsga_meta_results (
                         modality, trial_id,
-                        N_pop, N_gen, cxpb, mutpb, eta_c, eta_m,
+                        n_pop, n_gen, cxpb, mutpb, eta_c, eta_m,
                         eff_mean, eff_std
                     )
                     VALUES (
@@ -367,7 +336,6 @@ def run_manual_oneshot() -> None:
 
 def main() -> int:
     """Start the meta optimizer in scheduled or one-shot mode."""
-    _ensure_meta_table()
     mode = os.getenv("META_OPT_MODE", "scheduler").strip().lower()
     if mode == "oneshot":
         run_manual_oneshot()

@@ -17,27 +17,6 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
-DDL = """
-CREATE TABLE IF NOT EXISTS request_failures (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    correlation_id VARCHAR(64) NULL,
-    tenant_id VARCHAR(128) NULL,
-    participant VARCHAR(256) NULL,
-    episode_id VARCHAR(128) NULL,
-    route_path VARCHAR(64) NULL,
-    status_code INT NOT NULL,
-    category VARCHAR(64) NULL,
-    model VARCHAR(255) NULL,
-    detail_json TEXT NULL,
-    query_text LONGTEXT NULL,
-    modality VARCHAR(16) NULL,
-    latency_s FLOAT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    KEY ix_request_failures_correlation (correlation_id),
-    KEY ix_request_failures_tenant (tenant_id, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-"""
-
 _INSERT = """
 INSERT INTO request_failures
  (correlation_id, tenant_id, participant, episode_id, route_path, status_code, category, model, detail_json,
@@ -78,8 +57,10 @@ def registrar(req: Any, exc: BaseException, *, correlation_id: Optional[str], ro
             "modality": getattr(req, "modality", None),
             "lat": round(time.time() - inicio, 3),
         }
+        # PostgreSQL TEXT rejeita NUL; a tabela é criada pelo alembic_pg (sem DDL aqui).
+        params = {chave: valor.replace("\x00", "") if isinstance(valor, str) else valor
+                  for chave, valor in params.items()}
         with get_engine().begin() as conn:
-            conn.execute(text(DDL))
             conn.execute(text(_INSERT), params)
     except Exception as erro:
         logger.error("[falhas] request_failures NÃO foi escrito (%s): %s", correlation_id, erro)

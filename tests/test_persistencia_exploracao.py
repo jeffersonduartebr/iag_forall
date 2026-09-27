@@ -45,9 +45,9 @@ async def test_the_blocklist_is_durable(monkeypatch, rds):
 
 def test_the_durable_row_never_regresses():
     fonte = inspect.getsource(openrouter_explorer._persist_stats_to_db)
-    assert "count = GREATEST(count, VALUES(count))" in fonte
-    assert "stats_json = IF(VALUES(count) >= count, VALUES(stats_json), stats_json)" in fonte
-    assert fonte.index("count = GREATEST") > fonte.index("stats_json = IF")
+    assert "ON CONFLICT (model) DO UPDATE" in fonte
+    assert "count = GREATEST(s.count, EXCLUDED.count)" in fonte
+    assert "stats_json = CASE WHEN EXCLUDED.count >= s.count THEN EXCLUDED.stats_json ELSE s.stats_json END" in fonte
 
 
 def test_unreadable_table_restores_nothing(monkeypatch):

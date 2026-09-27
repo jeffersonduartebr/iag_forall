@@ -16,10 +16,10 @@ def test_postgres_url_uses_psycopg2_and_its_port(monkeypatch):
     assert db.get_db_url() == "postgresql+psycopg2://aristo:s%40nha%3A%2Fx@pgbouncer:5432/aristo"
 
 
-def test_mysql_stays_the_default(monkeypatch):
+def test_postgresql_is_the_default(monkeypatch):
     monkeypatch.delenv("DB_DIALECT", raising=False)
     monkeypatch.delenv("DB_PORT", raising=False)
-    assert db.get_db_url().startswith("mysql+pymysql://") and ":3306/" in db.get_db_url()
+    assert db.get_db_url().startswith("postgresql+psycopg2://") and ":5432/" in db.get_db_url()
 
 
 def test_an_unknown_dialect_is_an_error(monkeypatch):

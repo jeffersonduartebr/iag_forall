@@ -3,38 +3,28 @@
 services:
 
   # =========================================================
-  # 🗄️ Banco de dados MariaDB
+  # 🗄️ Banco de dados: PostgreSQL
   # =========================================================
-  mariadb:
-    image: mariadb:11
-    container_name: mariadb_router
-    restart: always
-
+  # Produção usa o Cloud SQL (banco `aristo` na instância formativo-pg) através do PgBouncer do overlay de
+  # produção (DB_HOST=pgbouncer). Este serviço é só para desenvolvimento local: `--profile postgres-local`.
+  postgres:
+    profiles: [postgres-local]
+    image: postgres:16-alpine
+    container_name: postgres_router
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD required}
-      MYSQL_DATABASE: ${DB_NAME:-routerdb}
-      MYSQL_USER: ${DB_USER:-router_user}
-      MYSQL_PASSWORD: ${DB_PASS:?DB_PASS required}
-
+      POSTGRES_DB: ${DB_NAME:-aristo}
+      POSTGRES_USER: ${DB_USER:-aristo}
+      POSTGRES_PASSWORD: ${DB_PASS:?DB_PASS required}
     volumes:
-      - mariadb_data:/var/lib/mysql
-
+      - postgres_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:3307:3306"
-
-    command: >
-      --max_connections=300
-      --innodb_buffer_pool_size=8G
-      --innodb_log_file_size=512M
-      --innodb_flush_log_at_trx_commit=2
-
+      - "127.0.0.1:5433:5432"
     healthcheck:
-      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "--silent"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
-      timeout: 10s
-      retries: 50
-      start_period: 60s
-
+      timeout: 5s
+      retries: 30
     networks:
       - ai_net
 
@@ -50,14 +40,16 @@ services:
     restart: "no"
 
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
 
     env_file:
       - .env
     environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
+      - DB_DIALECT=postgresql
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER:-router_user}
       - DB_PASS=${DB_PASS:?DB_PASS required}
       - DB_NAME=${DB_NAME:-routerdb}
@@ -72,6 +64,8 @@ services:
     volumes:
       - ./alembic.ini:/app/alembic.ini:ro
       - ./alembic:/app/alembic:ro
+      - ./alembic_pg.ini:/app/alembic_pg.ini:ro
+      - ./alembic_pg:/app/alembic_pg:ro
 
     # `set -e` e `&&`, e o último comando é o trabalho e não um `echo`.
     # Com `;` entre os passos, o código de saída do `bash -c` era o do último
@@ -79,18 +73,14 @@ services:
     # container imprimia "Banco pronto" e saía 0, e a condição
     # `service_completed_successfully` de que a API depende ficava satisfeita
     # de qualquer maneira: a API arrancava contra um esquema meio migrado.
-    # O entrypoint da imagem roda o bootstrap do db_manager ANTES deste comando, e o bootstrap
-    # cria o esquema até a 0007. Numa base nova (sem alembic_version) a 0001 colidiria com essas
-    # tabelas: a base é carimbada na 0007 e as revisões seguintes (0008+: governança) rodam por
-    # cima. Numa base que já tem alembic_version, as migrações pendentes rodam normalmente.
+    # O esquema tem um único dono: a cadeia PostgreSQL alembic_pg (baseline pg_0001 + revisões seguintes);
+    # nenhum código cria tabelas em runtime. O db_manager só semeia model_pricing (idempotente, ON CONFLICT).
+    # A cadeia MySQL (alembic/) fica montada apenas como histórico.
     command: |
       bash -ec "
-        echo '⏳ Executando Alembic migrations...' &&
-        if alembic current 2>/dev/null | grep -Eq '^[0-9A-Za-z_]+'
-        then alembic upgrade head
-        else alembic stamp 0007_decision_audit && alembic upgrade head
-        fi &&
-        echo '⏳ Executando db_manager.py...' &&
+        echo '⏳ Executando Alembic (alembic_pg)...' &&
+        alembic -c alembic_pg.ini upgrade head &&
+        echo '⏳ Semeando model_pricing (db_manager)...' &&
         python -m app.db_manager &&
         echo '✅ Banco pronto!'
       "
@@ -121,8 +111,9 @@ services:
 
 
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
       redis:
         condition: service_healthy
       db_init:
@@ -131,8 +122,9 @@ services:
     env_file:
       - .env
     environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
+      - DB_DIALECT=postgresql
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER:-router_user}
       - DB_PASS=${DB_PASS:?DB_PASS required}
       - DB_NAME=${DB_NAME:-routerdb}
@@ -206,8 +198,9 @@ services:
     restart: unless-stopped
 
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
       redis:
         condition: service_healthy
       db_init:
@@ -216,8 +209,9 @@ services:
     env_file:
       - .env
     environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
+      - DB_DIALECT=postgresql
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER:-router_user}
       - DB_PASS=${DB_PASS:?DB_PASS required}
       - DB_NAME=${DB_NAME:-routerdb}
@@ -252,8 +246,9 @@ services:
     restart: unless-stopped
 
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
       redis:
         condition: service_healthy
       db_init:
@@ -262,8 +257,9 @@ services:
     env_file:
       - .env
     environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
+      - DB_DIALECT=postgresql
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER:-router_user}
       - DB_PASS=${DB_PASS:?DB_PASS required}
       - DB_NAME=${DB_NAME:-routerdb}
@@ -312,8 +308,9 @@ services:
       - ./ollama_data:/root/.ollama
 
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
 
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -497,8 +494,9 @@ services:
         hard: 65536
     
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
       redis:
         condition: service_healthy
       api:
@@ -507,8 +505,9 @@ services:
     env_file:
       - .env
     environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
+      - DB_DIALECT=postgresql
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER:-router_user}
       - DB_PASS=${DB_PASS:?DB_PASS required}
       - DB_NAME=${DB_NAME:-routerdb}
@@ -552,8 +551,9 @@ services:
         hard: 65536
 
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
       redis:
         condition: service_healthy
       api:
@@ -562,8 +562,9 @@ services:
     env_file:
       - .env
     environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
+      - DB_DIALECT=postgresql
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER:-router_user}
       - DB_PASS=${DB_PASS:?DB_PASS required}
       - DB_NAME=${DB_NAME:-routerdb}
@@ -608,15 +609,17 @@ services:
       retries: 3
       start_period: 45s
     depends_on:
-      mariadb:
+      postgres:
         condition: service_healthy
+        required: false  # produção: Cloud SQL (o serviço postgres é do perfil postgres-local)
       redis:
         condition: service_healthy
     env_file:
       - .env
     environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
+      - DB_DIALECT=postgresql
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER:-router_user}
       - DB_PASS=${DB_PASS:?DB_PASS required}
       - DB_NAME=${DB_NAME:-routerdb}
@@ -645,7 +648,7 @@ volumes:
   chromadb_data:
   bandit_state:
   redis-data:
-  mariadb_data:
+  postgres_data:
 
 
 # =========================================================

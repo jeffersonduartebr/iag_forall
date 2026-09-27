@@ -21,7 +21,7 @@ import logging
 import random
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
@@ -31,8 +31,6 @@ from .db import get_engine
 from .providers_async import call_model
 from .services.judge_cache import VERDICT_CACHE_SIZE, VERDICT_CACHE_TTL_S, VerdictCache  # noqa: F401
 from .services.judge_calibration import (  # noqa: F401  (API pública reexportada)
-    JUDGE_CALIBRATION_DDL,
-    _ensure_judge_calibration_table,
     calibrate_judges,
     get_judge_calibration_metrics,
     record_judge_calibration,
@@ -225,7 +223,7 @@ def _load_judge_stats_cached(window_minutes: int) -> Dict[str, JudgeStats]:
 
 def _load_judge_stats(window_minutes: int) -> Dict[str, JudgeStats]:
     """Load recent judge-performance aggregates used for adaptive selection."""
-    since = datetime.utcnow() - timedelta(minutes=window_minutes)
+    since = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
     stats: Dict[str, JudgeStats] = {}
 
     try:
@@ -311,7 +309,7 @@ def _persist_judge_metrics(judge_model, score, latency, cost, consistency, fitne
                     (judge_model, avg_score, avg_latency, avg_cost,
                      consistency, fitness, window_start, window_end)
                     VALUES (:jm, :ascore, :alat, :acost, :cons, :fit,
-                            NOW() - INTERVAL 10 MINUTE, NOW())
+                            NOW() - INTERVAL '10 minutes', NOW())
                     """
                 ),
                 {
@@ -328,8 +326,8 @@ def _persist_judge_log(query, answer, judge_model, score, modality, image_hash=N
     ``rubric`` (per-dimension scores) is stored in ``judge_logs.rubric_json``.
     """
     try:
-        q_short = query[:2000] if query else ""
-        a_short = answer[:4000] if answer else ""
+        q_short = query[:2000].replace("\x00", "") if query else ""  # PostgreSQL TEXT rejeita NUL
+        a_short = answer[:4000].replace("\x00", "") if answer else ""
         params = {
             "q": q_short,
             "a": a_short,

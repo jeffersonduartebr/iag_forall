@@ -9,7 +9,7 @@ com o Baseline de Mercado (GPT-5 Standard).
 
 import os
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import text
 from tabulate import tabulate
 
 # --- Configuração do Baseline (GPT-5 Standard) ---
@@ -18,40 +18,37 @@ BASELINE_NAME = "OpenAI GPT-5"
 PRICE_IN_1M = 1.25
 PRICE_OUT_1M = 10.00
 
-# Conexão
-DB_USER = os.getenv("DB_USER", "router_user")
-DB_PASS = os.getenv("DB_PASS", "router_pass")
-DB_HOST = os.getenv("DB_HOST", "mariadb") 
+# Conexão: a mesma URL e o mesmo engine da aplicação (app.db).
+DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_NAME = os.getenv("DB_NAME", "routerdb")
-if DB_HOST == "localhost" and not os.getenv("DB_PORT"):
-    os.environ["DB_PORT"] = "3307"  # MariaDB local do compose, publicado em 3307
 
-from app.db_url import get_db_url  # noqa: E402
+#: Janela de 30 dias; LENGTH/4.0 para a estimativa não truncar (divisão inteira no PostgreSQL).
+QUERY = """
+    SELECT
+        id, chosen_model, modality,
+        LENGTH(query_text) / 4.0 AS tokens_in_est,
+        LENGTH(answer) / 4.0 AS tokens_out_est,
+        cost_per_1k AS actual_cost,
+        quality, created_at
+    FROM query_log
+    WHERE created_at > NOW() - INTERVAL '30 days'
+"""
 
-DB_URL = get_db_url()
+
+def load_query_log(engine) -> pd.DataFrame:
+    """The last 30 days of query_log (``cost_per_1k`` holds the transaction's total cost, not a rate)."""
+    return pd.read_sql(text(QUERY), engine)
+
 
 def run_analysis():
     """Run analysis.
 
 This function coordinates the main execution path for that step."""
-    print(f"🔌 Conectando ao banco {DB_NAME} em {DB_HOST}...")
-    engine = create_engine(DB_URL)
+    from app.db import get_engine
 
-    # 1. Carregar dados brutos
-    # Nota: No router_core novo, 'cost_per_1k' guarda o custo TOTAL da transação ($), não rate.
-    query = """
-    SELECT 
-        id, chosen_model, modality,
-        LENGTH(query_text) / 4 as tokens_in_est, -- Estimativa caso não tenha logado token
-        LENGTH(answer) / 4 as tokens_out_est,
-        cost_per_1k as actual_cost,
-        quality, created_at
-    FROM query_log
-    WHERE created_at > NOW() - INTERVAL 30 DAY
-    """
-    
+    print(f"🔌 Conectando ao banco {DB_NAME} em {DB_HOST}...")
     try:
-        df = pd.read_sql(query, engine)
+        df = load_query_log(get_engine())
     except Exception as e:
         print(f"❌ Erro ao ler banco: {e}")
         return

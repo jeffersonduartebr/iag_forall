@@ -54,8 +54,8 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         return False
 
 
-def test_ensure_table_and_persist_sample_success(monkeypatch):
-    """Testa ensure table and persist sample success."""
+def test_persist_sample_is_one_insert_without_ddl(monkeypatch):
+    """model_metrics vem do alembic_pg: o único statement é o INSERT."""
     conn = _Conn()
     monkeypatch.setattr(mc, "_engine", lambda: SimpleNamespace(begin=lambda: _Ctx(conn)))
 
@@ -73,8 +73,9 @@ def test_ensure_table_and_persist_sample_success(monkeypatch):
         generation=3,
     )
 
-    assert len(conn.calls) == 2
-    _, params = conn.calls[1]
+    assert len(conn.calls) == 1
+    sql, params = conn.calls[0]
+    assert "INSERT INTO model_metrics" in str(sql)
     assert params["model"] == "gpt-4o"
     assert params["modality"] == "vision"
     assert params["latms"] == 1500.0
@@ -91,7 +92,7 @@ def test_persist_sample_swallows_exceptions(monkeypatch):
 This helper encapsulates one focused step used by the surrounding workflow."""
         raise RuntimeError("db down")
 
-    monkeypatch.setattr(mc, "_ensure_model_metrics_table", _boom)
+    monkeypatch.setattr(mc, "_engine", _boom)
     mc._persist_sample("m", "text", 0.1, 5.0, 0.0)
 
 

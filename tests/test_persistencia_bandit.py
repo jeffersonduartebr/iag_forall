@@ -45,9 +45,10 @@ def test_bandit_update_skips_a_context_it_cannot_read(monkeypatch):
 
 
 def test_the_upsert_keeps_the_larger_history():
+    """No PostgreSQL o SET lê sempre a linha antiga; count NULL conta como 0 (a verificação real está em tests/pg)."""
     sql = str(store._UPSERT_SQL)
-    assert "count = GREATEST(count, VALUES(count))" in sql
-    assert sql.index("count = GREATEST") > sql.index("M2 = IF")  # count por último: as outras comparam com o antigo
+    assert "count = GREATEST(COALESCE(bandit_context_stats.count, 0), EXCLUDED.count)" in sql
+    assert "CASE WHEN EXCLUDED.count >= COALESCE(bandit_context_stats.count, 0)" in sql
 
 
 def test_the_context_lock_is_a_redis_lock_and_a_noop_without_redis():

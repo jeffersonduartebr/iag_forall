@@ -103,7 +103,6 @@ def test_budget_usage_policy_rbac_and_significance(monkeypatch):
         ],
     )
 
-    rf.ensure_roadmap_tables()
     rf.set_tenant_budget("t1", 5, 20, True)
     assert rf.get_tenant_budget("t1")["tenant_id"] == "t1"
     assert rf.check_tenant_budget("t1", 0.5).allowed is True

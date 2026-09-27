@@ -1,17 +1,13 @@
-# Objective: Migration 0007 must match the bootstrap schema and be safe to re-run.
-"""A migration and the bootstrap DDL that disagree produce two databases.
-
-``app.db_manager`` creates the schema on a fresh install; alembic upgrades an
-existing one. If they drift, a column exists on new deployments and not on old
-ones, and the code that writes it fails only in production.
+# Objective: Migration 0007 (MySQL history) survives in the PostgreSQL baseline and was safe to re-run.
+"""The MySQL chain is history; the columns it added must exist in the ``alembic_pg`` baseline, or the copy from
+MariaDB would lose them.
 """
 
 import importlib.util
 from pathlib import Path
 
+import baseline_pg
 import pytest
-
-from app import db_manager
 
 MIGRATION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0007_decision_audit.py"
 
@@ -25,13 +21,8 @@ def migration():
 
 
 def bootstrap_columns(table: str) -> dict:
-    schema = db_manager.SCHEMA_DEFINITIONS[table]
-    columns = dict(schema.get("columns", {}))
-    for line in schema["ddl"].splitlines():
-        stripped = line.strip().rstrip(",")
-        if stripped and not stripped.upper().startswith(("CREATE", "UNIQUE", "INDEX", "PRIMARY", ")", "--")):
-            columns.setdefault(stripped.split()[0], stripped)
-    return columns
+    """Columns of ``table`` in the PostgreSQL baseline (name -> definition)."""
+    return baseline_pg.colunas(table)
 
 
 def test_the_migration_follows_the_previous_one(migration):
@@ -64,15 +55,13 @@ def test_both_columns_are_nullable(migration):
         assert "NULL" in definition and "NOT NULL" not in definition, column
 
 
-def test_the_self_healing_ddl_adds_the_same_columns():
-    """The application adds columns on its own when alembic has not run."""
-    import inspect
-
+def test_nothing_adds_the_columns_at_runtime_any_more():
+    """The self-healing ``ensure_query_log`` is gone: the baseline owns the columns, nullable as here."""
     from app import query_service
 
-    source = inspect.getsource(query_service.ensure_query_log)
-    assert "decision_json LONGTEXT NULL" in source
-    assert "correlation_id VARCHAR(64) NULL" in source
+    assert not hasattr(query_service, "ensure_query_log")
+    for column in ("decision_json", "correlation_id"):
+        assert "NOT NULL" not in bootstrap_columns("query_log")[column]
 
 
 class FakeConn:

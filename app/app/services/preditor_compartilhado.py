@@ -16,9 +16,12 @@ from typing import Any, Iterator, Optional
 logger = logging.getLogger(__name__)
 
 
-def _mtime(caminho: str) -> Optional[float]:
+def _mtime(caminho: str) -> Optional[tuple]:
+    """Identity of the saved file: the mtime alone is coarse (a few ms), and two saves in the same tick looked like
+    no change; every save is an atomic replace, so the inode changes too."""
     try:
-        return os.stat(caminho).st_mtime_ns
+        st = os.stat(caminho)
+        return st.st_ino, st.st_mtime_ns, st.st_size
     except OSError:
         return None
 

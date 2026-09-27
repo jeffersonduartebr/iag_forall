@@ -99,7 +99,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         return health.ComponentHealth(name=name, healthy=healthy)
 
     monkeypatch.setattr(health, "check_redis_health", lambda: _ok("redis", True))
-    monkeypatch.setattr(health, "check_database_health", lambda: _ok("mariadb", True))
+    monkeypatch.setattr(health, "check_database_health", lambda: _ok("database", True))
     monkeypatch.setattr(health, "check_vectorstore_health", lambda: _ok("chromadb", True))
     monkeypatch.setattr(health, "check_ollama_health", lambda: _ok("ollama", True))
     monkeypatch.setattr(health, "check_circuit_breakers_health", lambda: _ok("circuit_breakers", True))
@@ -132,7 +132,7 @@ async def test_full_health_handles_exception_results_and_degraded_readiness(monk
         return health.ComponentHealth(name="redis", healthy=False)
 
     async def _db():
-        return health.ComponentHealth(name="mariadb", healthy=True)
+        return health.ComponentHealth(name="database", healthy=True)
 
     async def _vector_fail():
         raise RuntimeError("vector fail")

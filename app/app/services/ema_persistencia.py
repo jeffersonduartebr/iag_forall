@@ -23,9 +23,9 @@ _UPSERT = text("""
     INSERT INTO ema_history
         (modality, model, semantics, policy_namespace, ema_latency, ema_quality, ema_cost, ema_alignment, updates)
     VALUES (:mod, :m, :sem, :ns, :lat, :q, :c, :align, :u)
-    ON DUPLICATE KEY UPDATE
-        ema_latency = VALUES(ema_latency), ema_quality = VALUES(ema_quality), ema_cost = VALUES(ema_cost),
-        ema_alignment = VALUES(ema_alignment), updates = VALUES(updates), updated_at = CURRENT_TIMESTAMP
+    ON CONFLICT (model, modality, semantics, policy_namespace) DO UPDATE SET
+        ema_latency = EXCLUDED.ema_latency, ema_quality = EXCLUDED.ema_quality, ema_cost = EXCLUDED.ema_cost,
+        ema_alignment = EXCLUDED.ema_alignment, updates = EXCLUDED.updates, updated_at = CURRENT_TIMESTAMP
 """)
 _LOG = text("""
     INSERT INTO ema_history_log

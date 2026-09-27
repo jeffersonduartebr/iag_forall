@@ -60,7 +60,6 @@ from .correlation import (
     set_correlation_id,
 )
 from .db import close_engine
-from .metrics_collector import _ensure_model_metrics_table
 from .middleware.backpressure import BackpressureMiddleware
 from .middleware.cors import DynamicCORSMiddleware, parse_origins
 from .middleware.rate_limit import (
@@ -100,7 +99,6 @@ from .schemas import (
     QueuedQueryAcceptedResponse,
 )
 from .services.app_wiring import install_middleware
-from .services.governance_runtime import ensure_runtime_support_tables
 from .services.ollama_preload import preload_ollama_models
 from .services.query_http import execute_query, execute_query_stream
 from .services.query_response_builder import build_query_response  # noqa: F401  (re-export p/ query_http/tests)
@@ -337,11 +335,6 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"[startup] OpenTelemetry setup skipped: {e}")
 
-    try:
-        ensure_runtime_support_tables()
-    except Exception as e:
-        logger.warning(f"[startup] Failed to ensure roadmap tables: {e}")
-
     # Configure ThreadPoolExecutor for better CPU-bound task handling
     # Optimized for high-capacity environment (8+ CPU cores, 64GB RAM)
     cpu_count = os.cpu_count() or 4
@@ -372,11 +365,6 @@ async def startup_event():
             logger.info("[warmup] Iniciando serviços...")
             r = get_redis()
             if r is None: logger.warning("[warmup] Redis indisponível.")
-
-            try:
-                _ensure_model_metrics_table()
-            except Exception as e:
-                logger.warning(f"[warmup] Failed to ensure model metrics table: {e}")
 
             try:
                 init_vectorstore()

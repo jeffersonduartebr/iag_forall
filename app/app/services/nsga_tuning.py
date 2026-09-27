@@ -175,21 +175,28 @@ def _bucket_metrics(buckets: Dict[str, List[float]]) -> Dict[str, Any]:
     return metrics
 
 
+#: ``raw_payload`` é TEXT: só um objeto JSON válido (e sem ``\\u0000``, que o jsonb rejeita) é lido; qualquer outro
+#: conteúdo vira NULL e a linha fica de fora, em vez de derrubar a consulta inteira.
+_UQ_SCORE = (
+    "CASE WHEN raw_payload IS JSON OBJECT AND strpos(raw_payload, '\\u0000') = 0 "
+    "THEN raw_payload::jsonb ->> 'uncertainty_score' END"
+)
+
+
 def _recent_quality_rows() -> List[Any]:
     with _db_engine().connect() as conn:
         return conn.execute(
-            text("""
-                SELECT
-                    chosen_model,
-                    quality,
-                    JSON_EXTRACT(raw_payload, '$.uncertainty_score') as uq_score
-                FROM query_log
-                WHERE created_at > NOW() - INTERVAL 24 HOUR
-                AND quality IS NOT NULL
-                AND raw_payload IS NOT NULL
-                AND JSON_EXTRACT(raw_payload, '$.uncertainty_score') IS NOT NULL
+            text(f"""
+                SELECT chosen_model, quality, uq_score FROM (
+                    SELECT chosen_model, quality, {_UQ_SCORE} AS uq_score
+                    FROM query_log
+                    WHERE created_at > NOW() - INTERVAL '24 hours'
+                    AND quality IS NOT NULL
+                    AND raw_payload IS NOT NULL
+                ) recentes
+                WHERE uq_score IS NOT NULL
                 LIMIT 5000
-            """)
+            """)  # noqa: S608  (fragmento constante, sem entrada do usuário)
         ).fetchall()
 
 

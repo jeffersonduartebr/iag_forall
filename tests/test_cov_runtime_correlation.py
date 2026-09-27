@@ -85,22 +85,25 @@ def test_wait_for_db_gives_up_after_deadline(monkeypatch):
     assert clock.now > 40 and max(clock.sleeps) == 8.0  # backoff capped at 8 s
 
 
-def test_ensure_history_table_runs_idempotent_ddl(monkeypatch):
-    engine = _Engine()
-    monkeypatch.setattr(cm, "db_engine", engine)
-    cm.ensure_history_table()
-    assert "CREATE TABLE IF NOT EXISTS correlation_history" in engine.executed[0]
+def test_the_history_table_is_not_created_at_runtime():
+    """correlation_history vem do alembic_pg; o serviço não roda DDL."""
+    import inspect
+
+    assert not hasattr(cm, "ensure_history_table")
+    assert "CREATE TABLE" not in inspect.getsource(cm)
 
 
 def test_fetch_recent_metrics_uses_window_and_degrades_to_empty(monkeypatch):
     seen = []
-    monkeypatch.setattr(cm.pd, "read_sql", lambda q, eng: seen.append(q) or pd.DataFrame({"model": ["a"]}))
-    assert len(cm.fetch_recent_metrics("2 HOUR")) == 1
-    assert "INTERVAL 2 HOUR" in seen[0]
-    monkeypatch.setattr(cm.pd, "read_sql", lambda q, eng: pd.DataFrame())
+    monkeypatch.setattr(cm.pd, "read_sql",
+                        lambda q, eng, params: seen.append((str(q), params)) or pd.DataFrame({"model": ["a"]}))
+    assert len(cm.fetch_recent_metrics("2 hours")) == 1
+    assert "NOW() - CAST(:janela AS interval)" in seen[0][0] and seen[0][1] == {"janela": "2 hours"}
+    assert cm.fetch_recent_metrics() is not None and seen[1][1] == {"janela": "1 day"}  # a janela é parâmetro
+    monkeypatch.setattr(cm.pd, "read_sql", lambda q, eng, params: pd.DataFrame())
     assert cm.fetch_recent_metrics().empty
 
-    def _missing_table(q, eng):
+    def _missing_table(q, eng, params):
         raise RuntimeError("Table 'model_metrics' doesn't exist")
 
     monkeypatch.setattr(cm.pd, "read_sql", _missing_table)
@@ -137,7 +140,6 @@ def _run_main(monkeypatch, frames, stop_after):
     monkeypatch.setattr(cm, "time", clock)
     monkeypatch.setattr(cm, "start_http_server", lambda port: calls["http"].append(port))
     monkeypatch.setattr(cm, "wait_for_db", lambda: None)
-    monkeypatch.setattr(cm, "ensure_history_table", lambda: None)
     monkeypatch.setattr(cm, "fetch_recent_metrics", lambda window_sql: frames.pop(0))
     monkeypatch.setattr(cm, "publish_metrics", lambda c: calls["published"].append(sorted(c)))
     monkeypatch.setattr(cm, "persist_correlations", lambda c: calls["persisted"].append(sorted(c)))
@@ -163,7 +165,7 @@ def test_main_loop_survives_iteration_errors(monkeypatch):
     frames = []
     clock = _Clock(stop_after=2)
     monkeypatch.setattr(cm, "fetch_recent_metrics", _boom)
-    for name in ("start_http_server", "wait_for_db", "ensure_history_table"):
+    for name in ("start_http_server", "wait_for_db"):
         monkeypatch.setattr(cm, name, lambda *a: None)
     monkeypatch.setattr(cm, "time", clock)
     with pytest.raises(_Stop):

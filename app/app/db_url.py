@@ -11,13 +11,13 @@ import os
 from typing import Optional
 from urllib.parse import quote_plus
 
-#: Dialetos suportados: MariaDB (histórico, padrão até a virada) e PostgreSQL (Cloud SQL).
+#: Dialetos: PostgreSQL (Cloud SQL; o SQL da aplicação é PostgreSQL) e MariaDB (só histórico e ferramentas de cópia).
 DIALETOS = {"mysql": ("mysql+pymysql", 3306), "postgresql": ("postgresql+psycopg2", 5432)}
 
 
 def dialeto() -> str:
-    """``DB_DIALECT`` (``mysql`` | ``postgresql``); anything else is a configuration error, not a silent default."""
-    valor = os.getenv("DB_DIALECT", "mysql").strip().lower()
+    """``DB_DIALECT`` (``postgresql`` default | ``mysql``); anything else is a configuration error."""
+    valor = os.getenv("DB_DIALECT", "postgresql").strip().lower()
     if valor not in DIALETOS:
         raise ValueError(f"DB_DIALECT inválido: {valor!r} (use {', '.join(DIALETOS)})")
     return valor
@@ -27,7 +27,7 @@ def _get_db_config() -> dict:
     """Get database configuration from environment variables."""
     return {
         "dialect": dialeto(),
-        "host": os.getenv("DB_HOST", "mariadb"),
+        "host": os.getenv("DB_HOST", "postgres"),
         "port": int(os.getenv("DB_PORT") or DIALETOS[dialeto()][1]),
         "user": os.getenv("DB_USER", "router_user"),
         "password": os.getenv("DB_PASS", ""),
@@ -47,6 +47,6 @@ def get_db_url(config: Optional[dict] = None) -> str:
     """
     if config is None:
         config = _get_db_config()
-    driver = DIALETOS[config.get("dialect", "mysql")][0]
+    driver = DIALETOS[config.get("dialect", "postgresql")][0]
     senha = quote_plus(str(config["password"]))  # senha com @ : / não quebra a URL
     return f"{driver}://{config['user']}:{senha}@{config['host']}:{config['port']}/{config['database']}"

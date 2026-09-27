@@ -34,18 +34,17 @@ def test_db_engine_comes_from_the_shared_pool(monkeypatch):
     assert metaopt._db_engine() is sentinel
 
 
-def test_ensure_table_and_save_result(monkeypatch):
+def test_save_result_runs_no_ddl(monkeypatch):
+    """A tabela é do alembic_pg: o único statement é o INSERT (com n_pop/n_gen em minúsculas)."""
     calls = []
     monkeypatch.setattr(metaopt, "_db_engine", lambda: _engine(calls))
-    metaopt._ensure_meta_table()
+    assert not hasattr(metaopt, "_ensure_meta_table")
     metaopt.save_result("text", 3, PARAMS, 1.5, 0.25)
-    assert calls[0] is None
-    assert calls[1] == dict(mod="text", trial=3, np=8, ng=5, cx=0.7, mu=0.1, ec=10.0, em=20.0, mean=1.5, std=0.25)
+    assert calls == [dict(mod="text", trial=3, np=8, ng=5, cx=0.7, mu=0.1, ec=10.0, em=20.0, mean=1.5, std=0.25)]
 
     monkeypatch.setattr(metaopt, "_db_engine", lambda: _engine(calls, fail=True))
-    metaopt._ensure_meta_table()
     metaopt.save_result("text", 4, PARAMS, 1.0, 0.0)  # falhas só são registradas
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 def test_evaluate_once_posts_to_modality_endpoint(monkeypatch):
@@ -242,10 +241,9 @@ def test_start_scheduled_optimizer_uses_daemon_thread(monkeypatch):
 
 def test_main_modes(monkeypatch):
     calls = []
-    monkeypatch.setattr(metaopt, "_ensure_meta_table", lambda: calls.append("ddl"))
     monkeypatch.setattr(metaopt, "run_manual_oneshot", lambda: calls.append("oneshot"))
     monkeypatch.setenv("META_OPT_MODE", " OneShot ")
-    assert metaopt.main() == 0 and calls == ["ddl", "oneshot"]
+    assert metaopt.main() == 0 and calls == ["oneshot"]
 
     monkeypatch.setenv("META_OPT_MODE", "scheduler")
     monkeypatch.setattr(metaopt, "start_scheduled_optimizer", lambda: calls.append("thread"))

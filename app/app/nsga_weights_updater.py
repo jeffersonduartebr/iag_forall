@@ -97,34 +97,6 @@ redis_client = get_redis_client()
 
 
 # ============================================================
-# Inicialização de Tabelas
-# ============================================================
-def init_db_tables():
-    """Execute the init db tables routine.
-
-    This helper encapsulates one focused step used by the surrounding workflow."""
-    DDL = """
-    CREATE TABLE IF NOT EXISTS nsga_weights (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        modality VARCHAR(32) NOT NULL,
-        model VARCHAR(255) NOT NULL,
-        weight FLOAT NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_mod_model (modality, model)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    """
-    try:
-        with _db_engine().begin() as conn:
-            conn.execute(text(DDL))
-        logger.info("[NSGA] Tabela 'nsga_weights' verificada.")
-    except Exception as e:
-        logger.error(f"[NSGA] Erro ao criar tabelas: {e}")
-
-
-init_db_tables()
-
-
-# ============================================================
 # 1. Carregamento de Modelos
 # ============================================================
 _SETTINGS_CANDIDATES = {
@@ -305,7 +277,7 @@ def persist_results(modality: str, weights: Dict[str, float]):
                 conn.execute(
                     text("""
                         INSERT INTO nsga_weights (modality, model, weight) VALUES (:mod, :m, :w)
-                        ON DUPLICATE KEY UPDATE weight = :w
+                        ON CONFLICT (modality, model) DO UPDATE SET weight = EXCLUDED.weight
                     """),
                     {"mod": modality, "m": m, "w": w},
                 )
@@ -374,7 +346,7 @@ def tune_weights_from_judge_feedback() -> None:
                         COUNT(*) as total,
                         SUM(CASE WHEN quality < :threshold THEN 1 ELSE 0 END) as errors
                     FROM query_log
-                    WHERE created_at > NOW() - INTERVAL 1 HOUR
+                    WHERE created_at > NOW() - INTERVAL '1 hour'
                     AND quality IS NOT NULL
                     AND quality_source = 'judge'
                 """),
@@ -385,7 +357,7 @@ def tune_weights_from_judge_feedback() -> None:
                     """
                     SELECT COUNT(*)
                     FROM query_log
-                    WHERE created_at > NOW() - INTERVAL 1 HOUR
+                    WHERE created_at > NOW() - INTERVAL '1 hour'
                     AND quality IS NOT NULL
                     AND quality_source <> 'judge'
                     """
