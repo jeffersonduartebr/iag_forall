@@ -4,7 +4,6 @@ chromadb
 numpy
 redis
 sqlalchemy
-pymysql
-psycopg2-binary==2.9.10  # PostgreSQL (Cloud SQL); o pymysql sai depois da virada
+psycopg2-binary==2.9.10  # PostgreSQL (Cloud SQL)
 # Instalado ad-hoc no Dockerfile.db-init até aqui.
 python-dotenv==1.0.1

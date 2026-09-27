@@ -35,9 +35,9 @@ def _use_real_engine(monkeypatch):
 def test_get_db_url_with_config():
     """Testa get db url with config."""
     url = db.get_db_url(
-        {"dialect": "mysql", "host": "h", "port": 3306, "user": "u", "password": "p", "database": "d"}
+        {"dialect": "postgresql", "host": "h", "port": 5432, "user": "u", "password": "p", "database": "d"}
     )
-    assert url == "mysql+pymysql://u:p@h:3306/d"
+    assert url == "postgresql+psycopg2://u:p@h:5432/d"
 
 
 def test_get_pool_config_env_override(monkeypatch):

@@ -36,7 +36,6 @@ flowchart TD
 ## Variáveis críticas (obrigatórias em produção)
 - `ADMIN_TOKEN` (quando `AUTH_JWT_ENABLED=0`)
 - `DB_PASS`
-- `MYSQL_ROOT_PASSWORD`
 - `REDIS_PASSWORD`
 
 ## Variáveis recomendadas para governança (novas)
@@ -56,7 +55,7 @@ flowchart TD
 
 ## Banco e cache
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`
-- `DB_DIALECT`: `mysql` (MariaDB, padrão até a virada) ou `postgresql` (Cloud SQL, via PgBouncer). A porta padrão segue o dialeto (3306 ou 5432). A URL é montada só em `app/db_url.py`, com a senha codificada.
+- `DB_DIALECT`: `postgresql` (único suportado; Cloud SQL via PgBouncer em produção, `--profile postgres-local` no desenvolvimento). Porta padrão 5432. A URL é montada só em `app/db_url.py`, com a senha codificada. O MariaDB foi removido em 27/09/2026; o histórico de migrações dele está em `alembic/` (só registro).
 - `DB_SSLMODE` (PostgreSQL): `prefer` por padrão; `require` para o Cloud SQL.
 - `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`: pool por processo (padrão 10/5). Com PostgreSQL, 2/1: são ~14 processos atrás de um PgBouncer com 15 conexões ao servidor.
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD`

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Backup MariaDB, Redis, and Chroma volumes for disaster recovery.
+# Backup PostgreSQL, Redis, and Chroma volumes for disaster recovery (local stack; production: deploy/gcp/backup.sh).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,20 +8,19 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 TARGET="$BACKUP_DIR/$STAMP"
 mkdir -p "$TARGET"
 
-: "${DB_HOST:=mariadb}"
-: "${DB_PORT:=3306}"
+: "${DB_HOST:=127.0.0.1}"
+: "${DB_PORT:=5433}"
 : "${DB_USER:=router_user}"
 : "${DB_NAME:=routerdb}"
 
 echo "[backup] writing to $TARGET"
 
-if command -v mysqldump >/dev/null 2>&1; then
-  mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"${DB_PASS:?DB_PASS required}" \
-    --single-transaction --routines --triggers "$DB_NAME" \
-    | gzip > "$TARGET/mariadb.sql.gz"
-  echo "[backup] MariaDB dump ok"
+if command -v pg_dump >/dev/null 2>&1; then
+  PGPASSWORD="${DB_PASS:?DB_PASS required}" pg_dump --no-owner -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" \
+    | gzip > "$TARGET/postgres.sql.gz"
+  echo "[backup] PostgreSQL dump ok"
 else
-  echo "[backup] mysqldump not found — skip DB dump"
+  echo "[backup] pg_dump not found — skip DB dump"
 fi
 
 if docker ps --format '{{.Names}}' | grep -q '^redis_router$'; then

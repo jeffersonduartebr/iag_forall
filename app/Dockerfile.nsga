@@ -11,11 +11,9 @@ LABEL description="NSGA-II Optimizer for LLM Router (Prometheus + Redis + MariaD
 # ---------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libmariadb-dev \
     pkg-config \
     curl \
     netcat-traditional \
-    mariadb-client \
     redis-tools \
     ca-certificates \
     && apt-get clean \
@@ -40,7 +38,7 @@ RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.nsg
 # ⚙️ Variáveis de ambiente padrão
 # ---------------------------------------------------------
 ENV PYTHONUNBUFFERED=1
-ENV DB_HOST=mariadb
+ENV DB_HOST=postgres
 ENV DB_USER=router_user
 ENV DB_PASS=router_pass
 ENV DB_NAME=routerdb

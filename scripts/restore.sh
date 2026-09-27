@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore MariaDB from a backup archive produced by scripts/backup.sh.
+# Restore PostgreSQL (and Chroma) from a backup archive produced by scripts/backup.sh.
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
@@ -17,17 +17,17 @@ if [ ! -d "$INPUT" ]; then
   exit 1
 fi
 
-: "${DB_HOST:=mariadb}"
-: "${DB_PORT:=3306}"
+: "${DB_HOST:=127.0.0.1}"
+: "${DB_PORT:=5433}"
 : "${DB_USER:=router_user}"
 : "${DB_NAME:=routerdb}"
 
-DUMP="$INPUT/mariadb.sql.gz"
+DUMP="$INPUT/postgres.sql.gz"
 if [ -f "$DUMP" ]; then
-  gunzip -c "$DUMP" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"${DB_PASS:?DB_PASS required}" "$DB_NAME"
-  echo "[restore] MariaDB restored from $DUMP"
+  gunzip -c "$DUMP" | PGPASSWORD="${DB_PASS:?DB_PASS required}" psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME"
+  echo "[restore] PostgreSQL restored from $DUMP"
 else
-  echo "[restore] no MariaDB dump in $INPUT"
+  echo "[restore] no PostgreSQL dump in $INPUT"
 fi
 
 CHROMA="$INPUT/chromadb-data.tar.gz"

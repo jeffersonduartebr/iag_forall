@@ -36,8 +36,7 @@ PyMuPDF==1.24.10
 
 # Database / Cache / Queue
 sqlalchemy==2.0.32
-pymysql==1.1.1
-psycopg2-binary==2.9.10  # PostgreSQL (Cloud SQL); o pymysql sai depois da virada
+psycopg2-binary==2.9.10  # PostgreSQL (Cloud SQL)
 redis==5.0.7
 celery[redis]==5.4.0
 alembic
