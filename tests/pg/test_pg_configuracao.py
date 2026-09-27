@@ -24,10 +24,8 @@ def test_settings_upsert_on_the_exact_key_and_reads(sql):
     sd.settings.set("NSGA_W_QUALITY", "1.5", actor="teste")
     sd.settings.set("NSGA_W_QUALITY", "2.5", actor="teste")
     sd.settings.set("nsga_w_quality", "9")  # chave distinta: o PostgreSQL diferencia maiúsculas
-    assert sql("SELECT setting_key, setting_value FROM settings_dynamic ORDER BY setting_key") == [
-        {"setting_key": "NSGA_W_QUALITY", "setting_value": "2.5"},
-        {"setting_key": "nsga_w_quality", "setting_value": "9"},
-    ]
+    linhas = sql("SELECT setting_key, setting_value FROM settings_dynamic")  # ordem depende da collation do servidor
+    assert sorted((r["setting_key"], r["setting_value"]) for r in linhas) == [("NSGA_W_QUALITY", "2.5"), ("nsga_w_quality", "9")]
     assert sd._get_from_db("NSGA_W_QUALITY") == "2.5" and sd._get_from_db("ausente") is None
     assert sd._all_from_db() == {"NSGA_W_QUALITY": "2.5", "nsga_w_quality": "9"}
     [auditoria] = sql("SELECT count(*) AS n FROM audit_log WHERE action = 'settings.set'")
@@ -55,7 +53,8 @@ def test_pricing_seed_is_idempotent_and_is_read_by_both_readers(sql):
     assert sql("SELECT count(*) AS n FROM model_pricing") == [{"n": total}]
     assert _refresh_pricing_from_db()["openai/gpt-4o"] == {"in": 0.0025, "out": 0.01}
     itens = models_pricing()["items"]
-    assert len(itens) == total and itens == sorted(itens, key=lambda i: i["model"])
+    # ORDER BY model segue a collation do servidor (glibc no Cloud SQL, C no alpine): só o conjunto é garantido.
+    assert len(itens) == total and len({i["model"] for i in itens}) == total
     assert next(i for i in itens if i["model"] == "gpt-4o")["cost_input_1k"] == 0.0025
 
 
