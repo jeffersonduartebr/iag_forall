@@ -123,6 +123,54 @@ jobs:
       - name: CRAP <= 30
         run: python3 scripts/crap_report.py --coverage-json coverage.json
 
+  # Cada statement SQL do código contra um PostgreSQL 16 real, com o esquema do alembic_pg (tests/pg/CATALOGO.md:
+  # uma linha por statement; tests/test_catalogo_sql.py, no tests_unit, barra SQL novo sem linha no catálogo).
+  tests_postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      STATE_DIR: ${{ github.workspace }}/.ci_state
+      PROMETHEUS_MULTIPROC_DIR: ${{ github.workspace }}/.ci_prom
+      CHROMA_PATH: ${{ github.workspace }}/.ci_chroma
+      ENABLE_SMOKE_TESTS: "0"
+      ARISTO_PG_TEST_URL: postgresql+psycopg2://postgres:pg@127.0.0.1:5432/postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.17"
+          enable-cache: true
+          cache-dependency-glob: "**/requirements*.lock"
+
+      - name: Install dependencies
+        run: uv pip sync --system --require-hashes requirements-dev.lock
+
+      - name: Prepare CI runtime dirs
+        run: mkdir -p .ci_state .ci_prom .ci_chroma
+
+      - name: Pytest (PostgreSQL suite)
+        run: PYTHONPATH=app pytest tests/pg -q
+
   tests_integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30

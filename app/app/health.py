@@ -109,20 +109,20 @@ async def check_redis_health() -> ComponentHealth:
 
 
 async def check_database_health() -> ComponentHealth:
-    """Check MariaDB connectivity."""
+    """Check database (PostgreSQL) connectivity."""
     try:
         from .db import check_db_health
 
         result = await asyncio.to_thread(check_db_health)
         return ComponentHealth(
-            name="mariadb",
+            name="database",
             healthy=result.get("healthy", False),
             latency_ms=result.get("latency_ms"),
             error=result.get("error"),
             details={"pool_status": (result.get("pool_stats") or {}).get("status")},
         )
     except Exception as e:
-        return ComponentHealth(name="mariadb", healthy=False, error=str(e))
+        return ComponentHealth(name="database", healthy=False, error=str(e))
 
 
 async def check_vectorstore_health() -> ComponentHealth:

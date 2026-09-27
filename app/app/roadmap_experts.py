@@ -32,10 +32,10 @@ def upsert_expert_profile(
                 """
                 INSERT INTO expert_profiles (user_id, display_name, theme_ids, credentials_note)
                 VALUES (:u, :d, :t, :c)
-                ON DUPLICATE KEY UPDATE
-                    display_name=COALESCE(:d, display_name),
-                    theme_ids=COALESCE(:t, theme_ids),
-                    credentials_note=COALESCE(:c, credentials_note)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    display_name=COALESCE(EXCLUDED.display_name, expert_profiles.display_name),
+                    theme_ids=COALESCE(EXCLUDED.theme_ids, expert_profiles.theme_ids),
+                    credentials_note=COALESCE(EXCLUDED.credentials_note, expert_profiles.credentials_note)
                 """
             ),
             {
@@ -78,6 +78,7 @@ def create_expert_account(
                 """
                 INSERT INTO expert_accounts (email, password_hash, display_name, phone, enabled)
                 VALUES (:email, :password_hash, :display_name, :phone, 1)
+                RETURNING id
                 """
             ),
             {
@@ -87,7 +88,7 @@ def create_expert_account(
                 "phone": phone[:32] if phone else None,
             },
         )
-        return int(result.lastrowid or 0)
+        return int(result.scalar_one())
 
 
 def get_expert_account_by_email(email: str) -> Optional[Dict[str, Any]]:
@@ -97,7 +98,7 @@ def get_expert_account_by_email(email: str) -> Optional[Dict[str, Any]]:
             text(
                 """
                 SELECT id, email, password_hash, display_name, phone, enabled, created_at, updated_at
-                FROM expert_accounts WHERE email=:email
+                FROM expert_accounts WHERE lower(email)=lower(:email)
                 """
             ),
             {"email": email},
@@ -195,13 +196,14 @@ def create_expert_assessment(
                     :expert_id, :benchmark_id, :theme, :query_text, :answer, :reference,
                     :eval_run_id, :judge_quality, :quality_score, :rubric_json, :notes
                 )
-                ON DUPLICATE KEY UPDATE
-                    quality_score=:quality_score,
-                    rubric_json=:rubric_json,
-                    notes=:notes,
-                    judge_quality=COALESCE(:judge_quality, judge_quality),
-                    answer=:answer,
-                    reference=:reference
+                ON CONFLICT (expert_id, benchmark_id, eval_run_id) DO UPDATE SET
+                    quality_score=EXCLUDED.quality_score,
+                    rubric_json=EXCLUDED.rubric_json,
+                    notes=EXCLUDED.notes,
+                    judge_quality=COALESCE(EXCLUDED.judge_quality, expert_assessments.judge_quality),
+                    answer=EXCLUDED.answer,
+                    reference=EXCLUDED.reference
+                RETURNING id
                 """
             ),
             {
@@ -218,7 +220,7 @@ def create_expert_assessment(
                 "notes": notes,
             },
         )
-        return int(result.lastrowid or 0)
+        return int(result.scalar_one())
 
 
 def list_expert_assessments(

@@ -356,7 +356,7 @@ class TestHealthCheckChaos:
             from app.health import ComponentHealth
 
             mock_redis.return_value = ComponentHealth(name="redis", healthy=True, latency_ms=1.0)
-            mock_db.return_value = ComponentHealth(name="mariadb", healthy=False, error="Connection refused")
+            mock_db.return_value = ComponentHealth(name="database", healthy=False, error="Connection refused")
             mock_vs.return_value = ComponentHealth(name="chromadb", healthy=True, latency_ms=5.0)
             mock_ollama.return_value = ComponentHealth(name="ollama", healthy=True, latency_ms=10.0)
             mock_cb.return_value = ComponentHealth(name="circuit_breakers", healthy=True)
@@ -383,7 +383,7 @@ class TestHealthCheckChaos:
 
             # All components fail
             mock_redis.return_value = ComponentHealth(name="redis", healthy=False, error="Connection refused")
-            mock_db.return_value = ComponentHealth(name="mariadb", healthy=False, error="Connection refused")
+            mock_db.return_value = ComponentHealth(name="database", healthy=False, error="Connection refused")
             mock_vs.return_value = ComponentHealth(name="chromadb", healthy=False, error="Connection refused")
             mock_ollama.return_value = ComponentHealth(name="ollama", healthy=False, error="Connection refused")
             mock_cb.return_value = ComponentHealth(name="circuit_breakers", healthy=False, error="Error")

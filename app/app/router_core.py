@@ -61,7 +61,7 @@ from .providers_async import (
     should_throttle_background_judge,
 )
 from .query_jobs import get_pending_query_jobs_count
-from .query_service import ensure_query_log, insert_query_log
+from .query_service import insert_query_log
 from .rag_local import build_augmented_prompt, build_retrieval_bundle
 from .reliability import (  # noqa: F401  (get_request_deduplicator re-export p/ testes)
     execute_with_fallback,
@@ -322,7 +322,6 @@ def _cleanup_old_query_logs() -> None:
         days=LOG_RETENTION_DAYS,
         engine_factory=_get_db_engine,
         logger=logger,
-        before=ensure_query_log,
     )
 
 

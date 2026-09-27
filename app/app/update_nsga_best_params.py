@@ -59,71 +59,6 @@ except Exception as e:
 
 
 # ============================================================
-# 🧱 Tabelas (MODIFICADAS PARA SUPORTE MULTIMODAL)
-# ============================================================
-
-DDL_PARAMS = """
-CREATE TABLE IF NOT EXISTS nsga_params (
-    id INT PRIMARY KEY,
-    modality VARCHAR(32) NOT NULL,
-    N_pop INT NOT NULL,
-    N_gen INT NOT NULL,
-    cxpb FLOAT NOT NULL,
-    mutpb FLOAT NOT NULL,
-    eta_c FLOAT NOT NULL,
-    eta_m FLOAT NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ON UPDATE CURRENT_TIMESTAMP
-);
-"""
-
-DDL_WEIGHTS = """
-CREATE TABLE IF NOT EXISTS nsga_weights (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    modality VARCHAR(32) NOT NULL,
-    model VARCHAR(255) NOT NULL,
-    weight FLOAT NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uniq_mod_model (modality, model)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-"""
-
-DDL_RESULTS = """
-CREATE TABLE IF NOT EXISTS nsga_meta_results (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    trial_id INT NOT NULL,
-    modality VARCHAR(32) NOT NULL,
-    N_pop INT NOT NULL,
-    N_gen INT NOT NULL,
-    cxpb FLOAT NOT NULL,
-    mutpb FLOAT NOT NULL,
-    eta_c FLOAT NOT NULL,
-    eta_m FLOAT NOT NULL,
-    eff_mean FLOAT NOT NULL,
-    eff_std  FLOAT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-"""
-
-
-def init_tables():
-    """Execute the init tables routine.
-
-This helper encapsulates one focused step used by the surrounding workflow."""
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(DDL_PARAMS))
-            conn.execute(text(DDL_WEIGHTS))
-            conn.execute(text(DDL_RESULTS))
-        logger.info("[update_nsga] Tabelas multimodais verificadas/criadas.")
-    except SQLAlchemyError as e:
-        logger.error(f"[update_nsga] Falha ao criar tabelas: {e}")
-
-
-init_tables()
-
-
-# ============================================================
 # 📥 Carregar melhor trial por modalidade
 # ============================================================
 
@@ -140,7 +75,7 @@ The function reads the current representation from its backing store or runtime 
                     FROM nsga_meta_results
                     WHERE modality = :m
                     ORDER BY eff_mean DESC, eff_std ASC
-                    LIMIT 1;
+                    LIMIT 1
                     """
                 ),
                 {"m": modality},
@@ -177,24 +112,24 @@ This function applies the module-specific mutation logic for the target resource
                 text(
                     """
                     INSERT INTO nsga_params
-                    (id, modality, N_pop, N_gen, cxpb, mutpb, eta_c, eta_m)
+                    (id, modality, n_pop, n_gen, cxpb, mutpb, eta_c, eta_m)
                     VALUES (:id, :mod, :np, :ng, :cx, :mu, :ec, :em)
-                    ON DUPLICATE KEY UPDATE
-                        modality = :mod,
-                        N_pop = :np,
-                        N_gen = :ng,
-                        cxpb = :cx,
-                        mutpb = :mu,
-                        eta_c = :ec,
-                        eta_m = :em,
-                        updated_at = CURRENT_TIMESTAMP;
+                    ON CONFLICT (id) DO UPDATE SET
+                        modality = EXCLUDED.modality,
+                        n_pop = EXCLUDED.n_pop,
+                        n_gen = EXCLUDED.n_gen,
+                        cxpb = EXCLUDED.cxpb,
+                        mutpb = EXCLUDED.mutpb,
+                        eta_c = EXCLUDED.eta_c,
+                        eta_m = EXCLUDED.eta_m,
+                        updated_at = CURRENT_TIMESTAMP
                     """
                 ),
                 dict(
                     id=modal_id,
                     mod=modality,
-                    np=row["N_pop"],
-                    ng=row["N_gen"],
+                    np=row["n_pop"],
+                    ng=row["n_gen"],
                     cx=row["cxpb"],
                     mu=row["mutpb"],
                     ec=row["eta_c"],
@@ -269,8 +204,7 @@ This helper encapsulates one focused step used by the surrounding workflow."""
         logger.warning(f"[update_nsga] Nenhum peso para persistir modality={modality}.")
         return
 
-    # DB (uma instrução com todos os modelos). Em executemany o PyMySQL não substitui parâmetros
-    # depois de VALUES (...), por isso o UPDATE usa VALUES(coluna).
+    # DB (uma instrução com todos os modelos, executemany); o UPDATE lê EXCLUDED, a linha proposta.
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -278,9 +212,9 @@ This helper encapsulates one focused step used by the surrounding workflow."""
                     """
                     INSERT INTO nsga_weights (modality, model, weight)
                     VALUES (:mod, :model, :w)
-                    ON DUPLICATE KEY UPDATE
-                        weight = VALUES(weight),
-                        updated_at = CURRENT_TIMESTAMP;
+                    ON CONFLICT (modality, model) DO UPDATE SET
+                        weight = EXCLUDED.weight,
+                        updated_at = CURRENT_TIMESTAMP
                     """
                 ),
                 [dict(mod=modality, model=model, w=float(weight)) for model, weight in weights.items()],

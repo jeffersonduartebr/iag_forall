@@ -180,7 +180,6 @@ def _clear_module_caches() -> None:
     for name, reset in (
         ("app.judges", lambda m: m._judge_stats_cache.clear()),
         ("app.services.ema_store", lambda m: m.reset_ema_snapshots()),
-        ("app.services.judge_calibration", lambda m: setattr(m, "_table_ready", False)),
     ):
         module = sys.modules.get(name)
         if module is not None:

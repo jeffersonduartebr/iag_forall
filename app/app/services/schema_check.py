@@ -4,7 +4,7 @@
 The API validated its ``ADMIN_TOKEN`` and its critical settings at startup — it
 failed fast on a bad configuration — and then happily served traffic against a
 half-migrated database. Nothing compared ``alembic current`` with ``head``, and
-``ensure_runtime_support_tables`` is a no-op in production.
+nothing creates tables at runtime (the schema belongs to ``alembic_pg``).
 
 That mattered because ``db_init`` cannot report a failed migration: its compose
 command joins the steps with ``;`` and ends with an ``echo``, so the container
@@ -24,71 +24,35 @@ from typing import Iterable, List
 
 from sqlalchemy import text
 
+from .schema_colunas import REQUIRED_COLUMNS as _COLUNAS_DO_BASELINE
+
 logger = logging.getLogger(__name__)
 
-#: Colunas que esta versão do código escreve e sem as quais o INSERT falha em
-#: runtime — na primeira requisição real, e em silêncio, porque `persist_log`
-#: apanha a excepção.
-REQUIRED_COLUMNS = {
-    "query_log": (
-        "quality_semantics",
-        "q_tech",
-        "q_calibrado",
-        "p_entrega",
-        "detected_complexity",
-        "decision_json",
-        "correlation_id",
-        "participant",
-        "episode_id",
-        "prompt_tokens",
-        "completion_tokens",
-        "reasoning_tokens",
-        "finish_reason",
-        "trace_json",
-    ),
-    "judge_logs": ("delivery_level", "correlation_id"),
-    "request_failures": ("correlation_id", "status_code", "category"),
-}
+#: Colunas que esta versão do código escreve (todas as do baseline ``alembic_pg`` de cada tabela gravada) e sem
+#: as quais o INSERT falha em runtime — na primeira requisição real, e em silêncio, porque `persist_log` apanha a
+#: excepção.
+REQUIRED_COLUMNS = _COLUNAS_DO_BASELINE
 
 
 def missing_columns(engine, required=None) -> List[str]:
     """``["table.column", ...]`` for everything this build needs and cannot find.
 
-    A table that does not exist yet is not reported: it is created by
-    ``db_manager`` on first boot, and a fresh install would otherwise be
-    indistinguishable from a stale one.
+    The schema has one owner, ``alembic -c alembic_pg.ini upgrade head``; nothing creates tables at runtime any
+    more. A table that does not exist is therefore reported too (all its columns are missing): a fresh install
+    that skipped the migration is exactly as broken as a stale one.
     """
     required = required or REQUIRED_COLUMNS
-    missing: List[str] = []
     with engine.connect() as conn:
-        for table, columns in required.items():
-            if not _table_exists(conn, table):
-                continue
-            present = _columns_of(conn, table)
-            missing.extend(f"{table}.{c}" for c in columns if c not in present)
-    return missing
+        present = _present_columns(conn)
+    return [f"{table}.{c}" for table, columns in required.items() for c in columns if (table, c) not in present]
 
 
-def _table_exists(conn, table: str) -> bool:
+def _present_columns(conn) -> set:
+    """Every ``(table, column)`` of the current schema, in one query."""
     result = conn.execute(
-        text(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_schema = DATABASE() AND table_name = :t"
-        ),
-        {"t": table},
+        text("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()")
     )
-    return bool(result.scalar())
-
-
-def _columns_of(conn, table: str) -> set:
-    result = conn.execute(
-        text(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema = DATABASE() AND table_name = :t"
-        ),
-        {"t": table},
-    )
-    return {row[0] for row in result}
+    return {(row[0], row[1]) for row in result}
 
 
 def verify_schema(*, strict: bool) -> Iterable[str]:
@@ -114,7 +78,7 @@ def verify_schema(*, strict: bool) -> Iterable[str]:
 
     message = (
         f"Esquema desatualizado: faltam {len(missing)} coluna(s) — {', '.join(sorted(missing))}. "
-        f"Corra `cd app && alembic upgrade head`."
+        f"Corra `alembic -c alembic_pg.ini upgrade head`."
     )
     if strict:
         raise RuntimeError(message)

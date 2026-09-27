@@ -295,7 +295,6 @@ def test_judge_stats_persistence_and_calibration_failures(monkeypatch):
     monkeypatch.setattr(judges, "_get_judge_engine", lambda: broken_engine)
     monkeypatch.setattr(judge_calibration, "_get_engine", lambda: broken_engine)
     assert judges._load_judge_stats(10) == {}
-    judges._ensure_judge_calibration_table()
     judges._persist_judge_metrics("j1", 0.8, 1.0, 0.01, 1.0, 0.9)
     judges._persist_judge_log("q", "a", "j1", 8.0, "text")
 

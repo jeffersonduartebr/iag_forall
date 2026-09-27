@@ -1,4 +1,4 @@
-# Objective: Durable copy (MariaDB ``learned_state``) of learned documents that live in Redis.
+# Objective: Durable copy (``learned_state``) of learned documents that live in Redis.
 """A key -> JSON table for learned state that has no table of its own (semantic centroids, the exploration
 blocklist). Redis stays the working copy; this is what a wiped or lost Redis is refilled from. Failures are logged
 loudly and never raised: the caller's hot path must not depend on the database being up.
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 _GRAVAR = text("""
     INSERT INTO learned_state (chave, valor) VALUES (:chave, :valor)
-    ON DUPLICATE KEY UPDATE valor = VALUES(valor), atualizado_em = CURRENT_TIMESTAMP
+    ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = CURRENT_TIMESTAMP
 """)
 _LER = text("SELECT valor FROM learned_state WHERE chave = :chave")
 

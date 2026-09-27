@@ -1,39 +1,27 @@
-# Objective: The bootstrap DDL and the migration chain must describe one database.
-"""Two sources of truth for the schema, and nothing checking they agree.
+# Objective: The PostgreSQL baseline, the MySQL history and the code must describe one database.
+"""One owner for the schema (``alembic_pg``), and checks that everything else agrees with it.
 
-``app.db_manager.SCHEMA_DEFINITIONS`` creates the schema on a fresh install;
-the alembic chain upgrades an existing one. When they drift, a column exists on
-new deployments and not on old ones, and the code that writes it fails only in
-production. The history shows this has happened twice already — ``085d07f``
-("esquema do db_init alinhado ao da API") and ``a372aa9`` ("a cadeia de
-migrações não era executável").
-
-``tests/test_migration_0006.py`` and ``test_migration_0007.py`` each check one
-migration against the bootstrap. This checks the property that has to hold for
-*all* of them at once, so a future migration cannot add a column to one side
-only.
+There used to be two sources of truth — ``db_manager.SCHEMA_DEFINITIONS`` on a fresh install and the MySQL alembic
+chain on an existing one — and they drifted twice (``085d07f``, ``a372aa9``). Now the runtime creates nothing: the
+columns every migration of the MySQL history added must exist in the PostgreSQL baseline (or the copy loses them),
+every column an ``INSERT`` of the code writes must exist there (or the insert fails on the first real request),
+and ``schema_check`` must verify exactly the baseline's columns of the tables the code writes.
 """
 
 import ast
 import re
 from pathlib import Path
 
+import baseline_pg
 import pytest
 
-from app import db_manager
-
-VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+RAIZ = Path(__file__).resolve().parents[1]
+VERSIONS = RAIZ / "alembic" / "versions"
 
 
 def bootstrap_columns(table: str) -> set:
-    """Every column the bootstrap DDL creates for one table."""
-    schema = db_manager.SCHEMA_DEFINITIONS[table]
-    columns = set(schema.get("columns", {}))
-    for line in schema["ddl"].splitlines():
-        stripped = line.strip().rstrip(",")
-        if stripped and not stripped.upper().startswith(("CREATE", "UNIQUE", "INDEX", "PRIMARY", ")", "--")):
-            columns.add(stripped.split()[0])
-    return columns
+    """Every column the PostgreSQL baseline creates for one table."""
+    return set(baseline_pg.colunas(table))
 
 
 def migration_files():
@@ -86,7 +74,7 @@ def test_the_revision_id_fits_the_version_column():
 
 
 # ---------------------------------------------------------------------------
-# Agreement with the bootstrap
+# Agreement with the PostgreSQL baseline
 # ---------------------------------------------------------------------------
 
 
@@ -107,12 +95,12 @@ def migration_added_columns():
 
 
 @pytest.mark.parametrize("table", ["query_log", "judge_logs"])
-def test_every_migrated_column_exists_in_the_bootstrap(table):
-    """Otherwise a fresh install lacks a column an upgraded one has."""
+def test_every_migrated_column_exists_in_the_baseline(table):
+    """Otherwise the copy from MariaDB (which has every migration applied) loses a column."""
     migrated = migration_added_columns().get(table, set())
     assert migrated, f"nenhuma coluna detectada para {table}; o parser ficou obsoleto"
-    missing = migrated - bootstrap_columns(table)
-    assert not missing, f"{table}: migração acrescenta {sorted(missing)}, bootstrap não tem"
+    missing = {c.lower() for c in migrated} - bootstrap_columns(table)
+    assert not missing, f"{table}: migração acrescenta {sorted(missing)}, o baseline PostgreSQL não tem"
 
 
 def test_the_insert_only_writes_columns_that_exist():
@@ -127,3 +115,53 @@ def test_the_insert_only_writes_columns_that_exist():
     columns = {c.strip() for c in match.group(1).replace("\n", " ").split(",") if c.strip()}
     missing = columns - bootstrap_columns("query_log")
     assert not missing, f"o INSERT escreve colunas inexistentes: {sorted(missing)}"
+
+
+def _inserts_do_codigo():
+    """``(file, table, columns)`` of every ``INSERT INTO t (cols)`` literal under app/app, scripts and app/*.py."""
+    padrao = re.compile(r"INSERT INTO (\w+)(?: AS \w+)?\s*\(([^)]*)\)", re.S)
+    arquivos = [*(RAIZ / "app" / "app").rglob("*.py"), *(RAIZ / "scripts").glob("*.py"), *(RAIZ / "app").glob("*.py")]
+    for caminho in arquivos:
+        texto = caminho.read_text(encoding="utf-8")
+        for tabela, colunas in padrao.findall(texto):
+            nomes = {c.strip() for c in colunas.replace("\n", " ").split(",") if c.strip()}
+            if all(re.fullmatch(r"[a-z_0-9]+", n) for n in nomes):
+                yield caminho.relative_to(RAIZ).as_posix(), tabela, nomes
+
+
+def test_every_insert_of_the_code_writes_columns_of_the_baseline():
+    inserts = list(_inserts_do_codigo())
+    assert len(inserts) > 20, "o parser deixou de ver os INSERTs"
+    faltando = {
+        (arquivo, tabela): sorted(colunas - bootstrap_columns(tabela))
+        for arquivo, tabela, colunas in inserts
+        if tabela not in baseline_pg.tabelas() or colunas - bootstrap_columns(tabela)
+    }
+    assert not faltando, f"INSERT com tabela/coluna fora do baseline alembic_pg: {faltando}"
+
+
+def test_the_shadow_insert_columns_exist_too():
+    """The shadow INSERT is built from ``COLUNAS``, not a literal column list."""
+    from app.services.sombra.registro import COLUNAS
+
+    assert set(COLUNAS) <= bootstrap_columns("shadow_evaluations")
+
+
+def test_schema_check_verifies_exactly_the_baseline_columns_of_the_written_tables():
+    from app.services.schema_check import REQUIRED_COLUMNS
+
+    escritas = {tabela for _, tabela, _ in _inserts_do_codigo()} | {"shadow_evaluations"}
+    assert escritas <= set(REQUIRED_COLUMNS), escritas - set(REQUIRED_COLUMNS)
+    for tabela, colunas in REQUIRED_COLUMNS.items():
+        assert list(colunas) == list(baseline_pg.colunas(tabela)), tabela
+
+
+def test_the_postgresql_chain_has_one_root():
+    revisoes = {}
+    for caminho in (RAIZ / "alembic_pg" / "versions").glob("*.py"):
+        texto = caminho.read_text(encoding="utf-8")
+        rev = re.search(r"^revision = [\"'](.+?)[\"']", texto, re.M)
+        down = re.search(r"^down_revision = (.+)$", texto, re.M)
+        if rev:
+            revisoes[rev.group(1)] = down.group(1).strip().strip("\"'") if down else None
+    assert [r for r, p in revisoes.items() if p in (None, "None")] == ["pg_0001_baseline"]

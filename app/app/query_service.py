@@ -67,7 +67,7 @@ engine = _EngineProxy()
 # ============================================================
 
 def _to_blob(vec) -> Optional[bytes]:
-    """Convert an embedding-like vector into the binary format stored in MySQL."""
+    """Convert an embedding-like vector into the float32 bytes stored in the BYTEA column."""
     if vec is None:
         return None
     try:
@@ -93,6 +93,7 @@ def _safe_json(obj: dict | list | str | None) -> str:
         if isinstance(value, dict):
             out = {}
             for k, v in value.items():
+                k = _sem_nul(k)
                 if str(k).lower() in sensitive_keys:
                     out[k] = "***REDACTED***"
                 else:
@@ -100,7 +101,7 @@ def _safe_json(obj: dict | list | str | None) -> str:
             return out
         if isinstance(value, list):
             return [_redact(v) for v in value]
-        return value
+        return _sem_nul(value)
 
     try:
         return json.dumps(_redact(obj), ensure_ascii=False, default=str)
@@ -109,7 +110,7 @@ def _safe_json(obj: dict | list | str | None) -> str:
 
 
 # ============================================================
-# DDL — tabela multimodal EXTENDIDA
+# Semântica de qualidade
 # ============================================================
 
 def _current_semantics() -> str:
@@ -127,148 +128,14 @@ def _current_semantics() -> str:
         return "rubric_v1"
 
 
-def ensure_query_log() -> None:
-    """Create the `query_log` table when it does not already exist.
-
-    The table definition supports text-only and multimodal requests, optional
-    image outputs, serialized payloads, and binary embeddings used by later
-    analytics or judging flows.
-    """
-    ddl = """
-    CREATE TABLE IF NOT EXISTS query_log (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-
-        -- texto original
-        query_text TEXT,
-
-        -- modelo escolhido
-        chosen_model VARCHAR(255) NOT NULL,
-
-        -- multimodalidade
-        modality VARCHAR(32) DEFAULT 'text',
-        image_provided TINYINT DEFAULT 0,
-
-        -- outputs
-        answer LONGTEXT,
-        image_output_b64 LONGTEXT,
-
-        -- embeddings
-        query_embedding LONGBLOB,
-        answer_embedding LONGBLOB,
-
-        -- metadados
-        quality FLOAT,
-        quality_source VARCHAR(32) DEFAULT 'unknown',
-        judge_sampled TINYINT DEFAULT 0,
-        predicted_error_prob FLOAT NULL,
-        confidence_score FLOAT NULL,
-        confidence_band VARCHAR(16) DEFAULT NULL,
-        abstained TINYINT DEFAULT 0,
-        abstain_reason VARCHAR(64) DEFAULT NULL,
-        grounded TINYINT DEFAULT 0,
-        verification_status VARCHAR(32) DEFAULT NULL,
-        knowledge_version VARCHAR(255) DEFAULT NULL,
-        review_status VARCHAR(32) DEFAULT NULL,
-        latency_s FLOAT,
-        estimated_cost_usd FLOAT NULL,
-        cost_per_1k FLOAT,
-        reward FLOAT,
-
-        -- contexto semântico opcional
-        context_label VARCHAR(64),
-        tenant_id VARCHAR(128) NULL,
-
-        -- payload multimodal COMPLETO
-        raw_payload LONGTEXT,
-
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-        INDEX idx_created_at (created_at),
-        INDEX idx_model (chosen_model),
-        INDEX idx_modality (modality),
-        INDEX idx_tenant_created (tenant_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """
-
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(ddl))
-            # Keep existing deployments compatible when the table predates the
-            # newer feedback attribution fields.
-            conn.execute(
-                text(
-                    """
-                    ALTER TABLE query_log
-                    ADD COLUMN IF NOT EXISTS quality_source VARCHAR(32) DEFAULT 'unknown'
-                    """
-                )
-            )
-            conn.execute(
-                text(
-                    """
-                    ALTER TABLE query_log
-                    ADD COLUMN IF NOT EXISTS judge_sampled TINYINT DEFAULT 0
-                    """
-                )
-            )
-            conn.execute(
-                text(
-                    """
-                    ALTER TABLE query_log
-                    ADD COLUMN IF NOT EXISTS predicted_error_prob FLOAT NULL
-                    """
-                )
-            )
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS confidence_score FLOAT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS confidence_band VARCHAR(16) DEFAULT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS abstained TINYINT DEFAULT 0"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS abstain_reason VARCHAR(64) DEFAULT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS grounded TINYINT DEFAULT 0"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS verification_status VARCHAR(32) DEFAULT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS knowledge_version VARCHAR(255) DEFAULT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS review_status VARCHAR(32) DEFAULT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS estimated_cost_usd FLOAT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(128) NULL"))
-            # Avaliação formativa (migração 0006). `quality` mantém o significado
-            # que o resto do sistema já interpreta; q_tech e q_calibrado ficam ao
-            # lado, e quality_semantics diz qual dos dois a linha representa.
-            conn.execute(
-                text(
-                    "ALTER TABLE query_log ADD COLUMN IF NOT EXISTS "
-                    "quality_semantics VARCHAR(16) NOT NULL DEFAULT 'rubric_v1'"
-                )
-            )
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS q_tech FLOAT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS q_calibrado FLOAT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS p_entrega FLOAT NULL"))
-            conn.execute(
-                text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS detected_complexity VARCHAR(16) NULL")
-            )
-            # Auditoria da decisão (migração 0007): candidatos, objectivos,
-            # frente de Pareto e pesos; e o id que liga a linha ao rasto.
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS decision_json LONGTEXT NULL"))
-            conn.execute(text("ALTER TABLE query_log ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(64) NULL"))
-            for coluna in COLUNAS_PESQUISA:  # migração 0010
-                conn.execute(text(f"ALTER TABLE query_log ADD COLUMN IF NOT EXISTS {coluna}"))
-        logger.info("[query_service] Tabela 'query_log' pronta (EXTENDIDA multimodal).")
-    except SQLAlchemyError as exc:
-        logger.warning("[query_service] Falha ao criar tabela query_log: %s", exc)
-
-
 # ============================================================
-# Inserção multimodal completa
+# Inserção multimodal completa (a tabela é criada pelo alembic_pg)
 # ============================================================
 
-#: Pesquisa (migração 0010): participante, episódio, tokens e o rastro da execução.
-COLUNAS_PESQUISA = (
-    "participant VARCHAR(256) NULL",
-    "episode_id VARCHAR(128) NULL",
-    "prompt_tokens INT NULL",
-    "completion_tokens INT NULL",
-    "reasoning_tokens INT NULL",
-    "finish_reason VARCHAR(32) NULL",
-    "trace_json LONGTEXT NULL",
-)
+
+def _sem_nul(valor: Any) -> Any:
+    """PostgreSQL TEXT rejects NUL bytes (MariaDB stored them): strip them from every string that is written."""
+    return valor.replace("\x00", "") if isinstance(valor, str) else valor
 
 
 def insert_query_log(
@@ -319,12 +186,10 @@ def insert_query_log(
     """Insert one fully-populated router execution record into `query_log`.
 
     Callers provide the normalized execution summary plus any optional
-    multimodal payloads and embeddings. The function ensures the table exists,
-    redacts sensitive payload fields, and stores binary vectors in the compact
+    multimodal payloads and embeddings. The function redacts sensitive payload
+    fields, strips NUL bytes from text and stores binary vectors in the compact
     representation expected by the schema.
     """
-    ensure_query_log()
-
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -356,7 +221,7 @@ def insert_query_log(
                      :participant, :episode_id, :prompt_tokens, :completion_tokens, :reasoning_tokens,
                      :finish_reason, :trace_json)
                 """),
-                {
+                {chave: _sem_nul(valor) for chave, valor in {
                     "q": query_text,
                     "m": model,
                     "mod": modality,
@@ -398,7 +263,7 @@ def insert_query_log(
                     "reasoning_tokens": reasoning_tokens,
                     "finish_reason": finish_reason,
                     "trace_json": _safe_json(trace) if trace else None,
-                }
+                }.items()},
             )
 
         logger.info(

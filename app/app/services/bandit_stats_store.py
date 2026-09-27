@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Objective: Persistence of contextual bandit statistics (Redis + MariaDB).
+# Objective: Persistence of contextual bandit statistics (Redis + PostgreSQL).
 """Read, parse and persist per-(context, model) bandit statistics.
 
 Redis holds the hot copy (one hash per context, one JSON field per model);
@@ -39,20 +39,23 @@ ContextStats = Dict[str, ModelStats]
 _UPSERT_SQL = text(
     """
     INSERT INTO bandit_context_stats
-      (context_label, model, avg_reward, count, var, M2)
-    VALUES (:ctx, :model, :avg, :count, :var, :M2)
-    ON DUPLICATE KEY UPDATE
-      avg_reward = IF(VALUES(count) >= count, VALUES(avg_reward), avg_reward),
-      var = IF(VALUES(count) >= count, VALUES(var), var),
-      M2 = IF(VALUES(count) >= count, VALUES(M2), M2),
+      (context_label, model, avg_reward, count, var, m2)
+    VALUES (:ctx, :model, :avg, :count, :var, :m2)
+    ON CONFLICT (context_label, model) DO UPDATE SET
+      avg_reward = CASE WHEN EXCLUDED.count >= COALESCE(bandit_context_stats.count, 0)
+                        THEN EXCLUDED.avg_reward ELSE bandit_context_stats.avg_reward END,
+      var = CASE WHEN EXCLUDED.count >= COALESCE(bandit_context_stats.count, 0)
+                 THEN EXCLUDED.var ELSE bandit_context_stats.var END,
+      m2 = CASE WHEN EXCLUDED.count >= COALESCE(bandit_context_stats.count, 0)
+                THEN EXCLUDED.m2 ELSE bandit_context_stats.m2 END,
       last_update = CURRENT_TIMESTAMP,
-      count = GREATEST(count, VALUES(count))
+      count = GREATEST(COALESCE(bandit_context_stats.count, 0), EXCLUDED.count)
     """
 )  # o posterior durável nunca regride: um Redis que recomeçou do prior não sobrescreve o histórico.
-#  `count` por último: o MySQL avalia as atribuições em ordem, e as de cima comparam com o valor antigo.  # executemany: o PyMySQL não substitui parâmetros após VALUES (...); daí VALUES(coluna)
+#  No PostgreSQL todas as expressões do SET leem a linha antiga (a ordem não importa); `count` NULL conta como 0.
 _SELECT_SQL = text(
     """
-    SELECT model, avg_reward, count, var, M2
+    SELECT model, avg_reward, count, var, m2
     FROM bandit_context_stats
     WHERE context_label = :ctx
     """
@@ -153,7 +156,7 @@ def upsert_stats_db(get_engine: Callable[[], Any], updates: Iterable[Tuple[str, 
             "avg": float(s.get("mean", 0.0)),
             "count": int(s.get("count", 0)),
             "var": float(s.get("var", 0.0)),
-            "M2": float(s.get("M2", 0.0)),
+            "m2": float(s.get("M2", 0.0)),
         }
         for ctx, model, s in updates
     ]

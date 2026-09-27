@@ -428,7 +428,7 @@ def test_governance_runtime_adapters_delegate(monkeypatch):
     """Runtime governance adapter should isolate roadmap imports behind thin wrappers."""
     from app.services import governance_runtime as gr
 
-    monkeypatch.setattr(gr, "ensure_roadmap_tables", lambda: "ok")
+    assert not hasattr(gr, "ensure_runtime_support_tables")  # o esquema é do alembic_pg, sem DDL em runtime
     monkeypatch.setattr(gr, "get_active_policy", lambda: {"version": "v1"})
     monkeypatch.setattr(gr, "check_tenant_budget", lambda tenant_id: {"tenant_id": tenant_id, "allowed": True})
 
@@ -439,7 +439,6 @@ def test_governance_runtime_adapters_delegate(monkeypatch):
 
     monkeypatch.setattr(gr, "record_tenant_usage", _record)
 
-    assert gr.ensure_runtime_support_tables() == "ok"
     assert gr.get_runtime_active_policy()["version"] == "v1"
     assert gr.check_runtime_budget("school-1")["tenant_id"] == "school-1"
     gr.record_runtime_usage(tenant_id="school-1", cost_usd=1.0, tokens_in=2, tokens_out=3, requests=1)

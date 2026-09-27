@@ -50,7 +50,7 @@ def make_engine_fail(monkeypatch, fail: list):
         return _Engine()
 
     monkeypatch.setattr(db_module, "create_engine", _create_engine)
-    monkeypatch.setattr(db_module, "get_db_url", lambda: "mysql+pymysql://x/y")
+    monkeypatch.setattr(db_module, "get_db_url", lambda: "postgresql+psycopg2://x/y")
 
 
 def test_a_transient_outage_is_retried_once_the_backoff_passes(monkeypatch):
@@ -82,7 +82,7 @@ def test_the_backoff_refuses_without_touching_the_database(monkeypatch):
         raise RuntimeError("mariadb indisponível")
 
     monkeypatch.setattr(db_module, "create_engine", _create_engine)
-    monkeypatch.setattr(db_module, "get_db_url", lambda: "mysql+pymysql://x/y")
+    monkeypatch.setattr(db_module, "get_db_url", lambda: "postgresql+psycopg2://x/y")
     monkeypatch.setattr(db_module.time, "monotonic", lambda: 1000.0)
 
     with pytest.raises(RuntimeError):
@@ -100,13 +100,12 @@ def test_close_engine_clears_the_backoff(monkeypatch):
     assert db_module._engine_retry_after == 0.0
 
 
-def test_the_connection_carries_socket_timeouts():
-    """PyMySQL defaults to read_timeout=None: a server that accepts the
-    connection but never answers blocks the thread indefinitely."""
+def test_the_connection_carries_timeouts_and_keepalives():
+    """A server that accepts the connection but never answers must not block the thread forever: connect
+    timeout and TCP keepalives on the connection (the statement timeout lives on the PostgreSQL role)."""
     args = db_module._connect_args()
     assert args["connect_timeout"] > 0
-    assert args["read_timeout"] > 0
-    assert args["write_timeout"] > 0
+    assert args["keepalives"] == 1 and args["keepalives_idle"] > 0
 
 
 def test_the_engine_is_created_with_those_timeouts(monkeypatch):
@@ -131,6 +130,6 @@ def test_the_engine_is_created_with_those_timeouts(monkeypatch):
         return _E()
 
     monkeypatch.setattr(db_module, "create_engine", _create_engine)
-    monkeypatch.setattr(db_module, "get_db_url", lambda: "mysql+pymysql://x/y")
+    monkeypatch.setattr(db_module, "get_db_url", lambda: "postgresql+psycopg2://x/y")
     _REAL_GET_ENGINE()
-    assert "read_timeout" in captured["connect_args"]
+    assert captured["connect_args"]["keepalives"] == 1

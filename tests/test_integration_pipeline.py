@@ -23,7 +23,6 @@ def client():
     # Mock external dependencies before importing the app
     with patch("app.main.get_redis", return_value=MagicMock()), \
          patch("app.main.init_vectorstore"), \
-         patch("app.main._ensure_model_metrics_table"), \
          patch("app.main.preload_ollama_models", new_callable=AsyncMock), \
          patch("app.main.vs_add_document", new_callable=AsyncMock), \
          patch("app.main.record_query_side_effects"), \

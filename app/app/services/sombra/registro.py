@@ -19,6 +19,8 @@ COLUNAS = (
     "criado_em", "concluido_em", "p_candidata",
 )
 _JSON = ("estrato", "escores_juizes", "painel")
+#: Colunas BOOLEAN no PostgreSQL: um 1/0 vindo de um chamador antigo seria rejeitado (integer não vira boolean).
+_BOOL = ("executada", "painel_uniforme", "teria_abstido")
 
 
 def _linha(dados: Dict[str, Any]) -> Dict[str, Any]:
@@ -26,6 +28,9 @@ def _linha(dados: Dict[str, Any]) -> Dict[str, Any]:
     for c in _JSON:
         if linha[c] is not None and not isinstance(linha[c], str):
             linha[c] = json.dumps(linha[c], ensure_ascii=False, sort_keys=True)
+    for c in _BOOL:
+        if linha[c] is not None:
+            linha[c] = bool(linha[c])
     return linha
 
 
@@ -49,7 +54,8 @@ def gravar(linhas: Iterable[Dict[str, Any]]) -> int:
 def abrir_suspensao(chave: str, motivo: str, tenant: Optional[str], inicio: str) -> None:
     """Record the start of a suspended interval (idempotent per key: the key encodes motivo, tenant and period)."""
     sql = text(
-        "INSERT IGNORE INTO shadow_suspensions (chave, motivo, tenant, inicio) VALUES (:chave, :motivo, :tenant, :inicio)"
+        "INSERT INTO shadow_suspensions (chave, motivo, tenant, inicio) VALUES (:chave, :motivo, :tenant, :inicio) "
+        "ON CONFLICT (chave) DO NOTHING"
     )
     _executar(sql, {"chave": chave, "motivo": motivo, "tenant": tenant, "inicio": inicio})
 

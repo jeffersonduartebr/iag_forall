@@ -6,11 +6,11 @@ Autor: Jefferson Duarte
 Funcionalidades:
   ✅ Calcula correlações dinâmicas entre latência, custo, qualidade e fitness.
   ✅ Expõe métricas Prometheus (para dashboards).
-  ✅ Armazena o histórico no banco MariaDB para análises futuras e auditorias.
+  ✅ Armazena o histórico no banco (PostgreSQL) para análises futuras e auditorias.
 
 Requisitos de schema:
   - model_metrics(model, latency_ms, cost_usd, quality_score, fitness, generation, timestamp)
-    (criado pelo init_db.sql)
+    (criado pelo alembic_pg)
   - correlation_history(id, model, corr_latency_quality, corr_cost_quality, corr_fitness_weights, r2_mean, generation, timestamp)
     (criado aqui, se não existir)
 
@@ -121,7 +121,7 @@ def wait_for_db(max_wait_seconds: int = 120) -> None:
         try:
             with db_engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-            logger.info("✅ Conexão com MariaDB estabelecida.")
+            logger.info("✅ Conexão com o banco estabelecida.")
             return
         except OperationalError as e:
             elapsed = time.time() - start
@@ -129,47 +129,27 @@ def wait_for_db(max_wait_seconds: int = 120) -> None:
                 logger.error(f"❌ Banco não respondeu após {max_wait_seconds}s: {e}")
                 raise
             sleep_s = min(8.0, delay ** attempt)
-            logger.info(f"⏳ Aguardando MariaDB... (tentativa {attempt+1}, dormindo {sleep_s:.1f}s)")
+            logger.info(f"⏳ Aguardando o banco... (tentativa {attempt+1}, dormindo {sleep_s:.1f}s)")
             time.sleep(sleep_s)
             attempt += 1
 
 # -----------------------------------------------------------------------------
-# 🗃️ Garantia do schema de histórico (idempotente)
-# -----------------------------------------------------------------------------
-def ensure_history_table() -> None:
-    """Cria a tabela de histórico de correlação, se não existir."""
-    ddl = """
-    CREATE TABLE IF NOT EXISTS correlation_history (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        model VARCHAR(255),
-        corr_latency_quality FLOAT,
-        corr_cost_quality FLOAT,
-        corr_fitness_weights FLOAT,
-        r2_mean FLOAT,
-        generation INT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_model_ts (model, timestamp)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """
-    with db_engine.begin() as conn:
-        conn.execute(text(ddl))
-    logger.info("✅ Tabela 'correlation_history' verificada/criada.")
-
-# -----------------------------------------------------------------------------
 # 📥 Coleta de dados
 # -----------------------------------------------------------------------------
-def fetch_recent_metrics(window_sql: str = "1 DAY") -> pd.DataFrame:
+def fetch_recent_metrics(window_sql: str = "1 day") -> pd.DataFrame:
     """
-    Busca métricas recentes de 'model_metrics'.
-    Requer o schema do init_db.sql (latency_ms, cost_usd, quality_score, fitness, generation, timestamp).
+    Busca métricas recentes de 'model_metrics' (tabela criada pelo alembic_pg).
+    ``window_sql`` é um intervalo do PostgreSQL ("1 day", "2 hours"), passado como parâmetro, nunca interpolado.
     """
-    query = f"""
+    query = text(
+        """
         SELECT model, latency_ms, cost_usd, quality_score, fitness, generation
         FROM model_metrics
-        WHERE timestamp > NOW() - INTERVAL {window_sql};
-    """
+        WHERE timestamp > NOW() - CAST(:janela AS interval)
+        """
+    )
     try:
-        df = pd.read_sql(query, db_engine)
+        df = pd.read_sql(query, db_engine, params={"janela": window_sql})
         if df.empty:
             logger.warning("⚠️ Nenhum registro em 'model_metrics' na janela consultada.")
         return df
@@ -335,14 +315,13 @@ This helper encapsulates one focused step used by the surrounding workflow."""
     # Sobe o endpoint de métricas
     start_http_server(PROM_PORT)
 
-    # Espera banco, garante tabela de histórico
+    # Espera o banco (o esquema é do alembic_pg)
     wait_for_db()
-    ensure_history_table()
 
     # Loop
     while True:
         try:
-            df = fetch_recent_metrics(window_sql="1 DAY")
+            df = fetch_recent_metrics(window_sql="1 day")
             if df.empty:
                 logger.warning(f"⚠️ Nenhum dado recente em 'model_metrics'. Aguardando {UPDATE_INTERVAL}s.")
                 time.sleep(UPDATE_INTERVAL)

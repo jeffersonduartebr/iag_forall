@@ -123,24 +123,6 @@ class _EngineProxy:
 
 engine = _EngineProxy()
 
-DDL = """
-CREATE TABLE IF NOT EXISTS settings_dynamic (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    setting_key VARCHAR(512) NOT NULL UNIQUE,
-    setting_value TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  COLLATE=utf8mb4_unicode_ci;
-"""
-
-try:
-    with engine.begin() as conn:
-        conn.execute(text(DDL))
-except Exception as e:
-    logger.warning(f"[settings_dynamic] Falha ao criar tabela: {e}")
-
-
 # ============================================================
 # LRU Cache interno com TTL
 # ============================================================
@@ -382,7 +364,7 @@ class DynamicSettings(TypedSettingsMixin):
                     text("""
                         INSERT INTO settings_dynamic (setting_key, setting_value)
                         VALUES (:k, :v)
-                        ON DUPLICATE KEY UPDATE setting_value = :v
+                        ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value
                     """),
                     {"k": key, "v": stored},
                 )

@@ -49,7 +49,7 @@ def load_rows(days: int, limit: int) -> List[Dict[str, Any]]:
         SELECT chosen_model, modality, quality, latency_s, estimated_cost_usd,
                reward, raw_payload, answer
         FROM query_log
-        WHERE created_at >= NOW() - INTERVAL :days DAY
+        WHERE created_at >= NOW() - make_interval(days => :days)
           AND latency_s IS NOT NULL
           AND quality IS NOT NULL
         ORDER BY created_at DESC
@@ -57,7 +57,7 @@ def load_rows(days: int, limit: int) -> List[Dict[str, Any]]:
         """
     )
     with get_engine().connect() as conn:
-        return [dict(row._mapping) for row in conn.execute(sql, {"days": days, "limit": limit})]
+        return [dict(row._mapping) for row in conn.execute(sql, {"days": int(days), "limit": int(limit)})]
 
 
 def completion_tokens_of(row: Dict[str, Any]) -> Optional[int]:

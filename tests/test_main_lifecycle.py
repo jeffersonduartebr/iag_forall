@@ -158,13 +158,11 @@ async def test_startup_event_executes_warmup_and_shutdown(monkeypatch):
 
     monkeypatch.setattr(main, "settings", SimpleNamespace(ADMIN_TOKEN="abc", get=lambda k, d=None: d))
     monkeypatch.setattr(main.asyncio, "get_running_loop", lambda: SimpleNamespace(set_default_executor=lambda ex: None))
-    monkeypatch.setattr(main, "ensure_runtime_support_tables", lambda: None)
     monkeypatch.setattr(main, "start_reload_listener", lambda: None)
     monkeypatch.setattr(main, "start_background_services", lambda: None)
     monkeypatch.setattr(main, "rate_limit_cleanup", _cleanup)
     monkeypatch.setattr(main, "spawn_background", _spawn)
     monkeypatch.setattr(main, "get_redis", lambda: None)
-    monkeypatch.setattr(main, "_ensure_model_metrics_table", lambda: None)
     monkeypatch.setattr(main, "init_vectorstore", lambda: None)
     monkeypatch.setattr(main, "preload_ollama_models", _preload)
     monkeypatch.setattr(main, "vs_add_document", _add_doc)

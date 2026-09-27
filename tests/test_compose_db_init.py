@@ -40,8 +40,18 @@ def test_the_shell_exits_on_the_first_error(db_init_command):
 
 
 def test_both_migration_steps_are_still_run(db_init_command):
-    assert "alembic upgrade head" in db_init_command
+    """The PostgreSQL chain owns the schema; db_manager only seeds, after it."""
+    assert "alembic -c alembic_pg.ini upgrade head" in db_init_command
     assert "python -m app.db_manager" in db_init_command
+    assert db_init_command.index("alembic_pg.ini upgrade head") < db_init_command.index("app.db_manager")
+    assert "stamp" not in db_init_command
+
+
+def test_the_postgresql_chain_is_mounted():
+    with open(COMPOSE, encoding="utf-8") as handle:
+        volumes = yaml.safe_load(handle)["services"]["db_init"]["volumes"]
+    assert "./alembic_pg.ini:/app/alembic_pg.ini:ro" in volumes
+    assert "./alembic_pg:/app/alembic_pg:ro" in volumes
 
 
 def test_the_api_still_waits_for_it():

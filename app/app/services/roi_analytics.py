@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
 from app.db import get_engine
 from app.model_registry import get_model_config
-from app.query_service import ensure_query_log
 from app.roadmap_features import get_usage_summary
 
 DEFAULT_BASELINE_MODEL = "openai/gpt-4o"
@@ -75,8 +74,7 @@ def _is_acceptable(row: Dict[str, Any], quality_threshold: float) -> bool:
 
 
 def _load_query_rows(*, tenant_id: Optional[str], days: int, limit: int = 50_000) -> List[Dict[str, Any]]:
-    ensure_query_log()
-    since = datetime.utcnow() - timedelta(days=max(1, min(int(days), 365)))
+    since = datetime.now(timezone.utc) - timedelta(days=max(1, min(int(days), 365)))
     sql = """
         SELECT id, query_text, answer, chosen_model, modality, quality, abstained,
                latency_s, estimated_cost_usd, cost_per_1k, tenant_id, created_at
@@ -91,22 +89,9 @@ def _load_query_rows(*, tenant_id: Optional[str], days: int, limit: int = 50_000
     try:
         with get_engine().connect() as conn:
             rows = conn.execute(text(sql), params).mappings().all()
-        return [dict(r) for r in rows]
     except Exception:
-        # Backward compatible when tenant_id column is not migrated yet
-        if not tenant_id:
-            return []
-        sql_fallback = """
-            SELECT id, query_text, answer, chosen_model, modality, quality, abstained,
-                   latency_s, estimated_cost_usd, cost_per_1k, created_at
-            FROM query_log
-            WHERE created_at >= :since
-            ORDER BY id DESC
-            LIMIT :limit
-        """
-        with get_engine().connect() as conn:
-            rows = conn.execute(text(sql_fallback), {"since": since, "limit": limit}).mappings().all()
-        return [dict(r) for r in rows]
+        return []  # sem banco o relatório sai como "dados insuficientes", como antes
+    return [dict(r) for r in rows]
 
 
 def build_roi_report(

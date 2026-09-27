@@ -7,7 +7,7 @@ Coletor de métricas multimodais para o Router LLM.
 Esta versão:
   ✓ Registra métricas separadas por modalidade (text/vision/multimodal)
   ✓ Mantém EMA leve em memória (por modelo + modalidade)
-  ✓ Persiste métricas em MariaDB (tabela model_metrics)
+  ✓ Persiste métricas no PostgreSQL (tabela model_metrics, criada pelo alembic_pg)
   ✓ Suporta custo_per_1k tokens e custo por consulta
   ✓ Guarda tokens_in, tokens_out, embedding_dim, vision_usage
 """
@@ -30,52 +30,9 @@ _LOCK = threading.Lock()
 # }
 _MODEL_METRICS: Dict[tuple, Dict[str, float]] = {}
 
-_table_ready = False
-
-
 def _engine():
     """Return the shared application database engine."""
     return get_engine()
-
-
-# ============================================================
-# TABLE CREATION
-# ============================================================
-
-def _ensure_model_metrics_table() -> None:
-    """Create model_metrics table once at startup."""
-    global _table_ready
-    if _table_ready:
-        return
-    ddl = """
-    CREATE TABLE IF NOT EXISTS model_metrics (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-
-      model VARCHAR(255) NOT NULL,
-      modality VARCHAR(32) NOT NULL DEFAULT 'text',
-
-      latency_ms FLOAT NOT NULL,
-      cost_usd FLOAT NOT NULL,
-      cost_per_1k FLOAT DEFAULT 0,
-      quality_score FLOAT NOT NULL,
-
-      tokens_in INT DEFAULT NULL,
-      tokens_out INT DEFAULT NULL,
-
-      embedding_dim INT DEFAULT NULL,
-      vision_usage TINYINT DEFAULT 0,
-
-      fitness FLOAT NOT NULL,
-      generation INT NOT NULL DEFAULT 0,
-      timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-      INDEX idx_model_modality (model, modality, timestamp),
-      INDEX idx_ts (timestamp)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    """
-    with _engine().begin() as conn:
-        conn.execute(text(ddl))
-    _table_ready = True
 
 
 # ============================================================
@@ -96,11 +53,9 @@ def _persist_sample(
     generation: int = 0,
 ) -> None:
     """
-    Persiste uma linha de métricas multimodais no MariaDB.
+    Persiste uma linha de métricas multimodais (model_metrics).
     """
     try:
-        _ensure_model_metrics_table()
-
         latency_ms = float(latency_s) * 1000.0
         quality = float(quality_0_10)
 

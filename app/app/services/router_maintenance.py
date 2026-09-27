@@ -62,8 +62,8 @@ def retention_loop(
                     before()
                 with engine_factory().begin() as conn:
                     deleted = conn.execute(
-                        text(f"DELETE FROM {table} WHERE created_at < (NOW() - INTERVAL :d DAY)"),  # noqa: S608
-                        {"d": days},
+                        text(f"DELETE FROM {table} WHERE created_at < (NOW() - make_interval(days => :d))"),  # noqa: S608
+                        {"d": int(days)},
                     ).rowcount
                 if deleted:
                     logger.info(f"[{table} cleanup] {deleted} linhas acima de {days} dias")

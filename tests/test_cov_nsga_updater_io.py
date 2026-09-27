@@ -58,13 +58,12 @@ def test_get_redis_client_returns_client_only_when_ping_succeeds(monkeypatch):
     assert nsga.get_redis_client() is None
 
 
-def test_init_db_tables_runs_ddl_and_survives_db_failure(monkeypatch):
-    calls = []
-    monkeypatch.setattr(nsga, "_db_engine", lambda: _engine(calls=calls))
-    nsga.init_db_tables()
-    assert len(calls) == 1
-    monkeypatch.setattr(nsga, "_db_engine", lambda: _engine(fail=True))
-    nsga.init_db_tables()  # só registra o erro
+def test_importing_the_updater_runs_no_ddl():
+    """O esquema é do alembic_pg: o import não cria tabelas."""
+    import inspect
+
+    assert not hasattr(nsga, "init_db_tables")
+    assert "CREATE TABLE" not in inspect.getsource(nsga)
 
 
 def test_candidates_prefer_redis_then_settings_then_fallback(monkeypatch, rds):

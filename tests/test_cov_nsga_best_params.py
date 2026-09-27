@@ -12,8 +12,8 @@ from app import update_nsga_best_params as unb
 
 TRIAL = {
     "trial_id": 4,
-    "N_pop": 16,
-    "N_gen": 10,
+    "n_pop": 16,  # colunas em minúsculas no PostgreSQL (o SELECT * devolve n_pop/n_gen)
+    "n_gen": 10,
     "cxpb": 0.8,
     "mutpb": 0.1,
     "eta_c": 15.0,
@@ -58,11 +58,12 @@ def db(monkeypatch):
     return state
 
 
-def test_init_tables_creates_three_tables_and_tolerates_db_errors(db):
-    unb.init_tables()
-    assert db.calls == [None, None, None]
-    db.error = SQLAlchemyError("db down")
-    unb.init_tables()  # só registra
+def test_importing_the_module_runs_no_ddl():
+    """O esquema é do alembic_pg: nada de CREATE TABLE no import."""
+    import inspect
+
+    assert not hasattr(unb, "init_tables")
+    assert "CREATE TABLE" not in inspect.getsource(unb)
 
 
 def test_load_best_trial(db):
@@ -140,8 +141,9 @@ def test_persist_weights_uses_one_executemany_upsert_then_redis(monkeypatch, db)
     assert db.calls == [
         [{"mod": "multimodal", "model": "a", "w": 0.25}, {"mod": "multimodal", "model": "b", "w": 0.75}]
     ]
-    # Em executemany o PyMySQL não substitui :w depois de VALUES(...): o UPDATE precisa de VALUES(weight).
-    assert "weight = VALUES(weight)" in db.sql[0] and ":w" not in db.sql[0].split("UPDATE")[1]
+    # O UPDATE lê a linha proposta (EXCLUDED) na chave única (modality, model).
+    assert "ON CONFLICT (modality, model)" in db.sql[0]
+    assert "weight = EXCLUDED.weight" in db.sql[0] and ":w" not in db.sql[0].split("DO UPDATE")[1]
     assert rds.get("nsga:weights:multimodal") == '{"a": 0.25, "b": 0.75}'
 
 

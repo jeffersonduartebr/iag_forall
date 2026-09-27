@@ -27,41 +27,6 @@ def _get_engine():
     return get_engine()
 
 
-# Judge calibration table DDL
-JUDGE_CALIBRATION_DDL = """
-CREATE TABLE IF NOT EXISTS judge_calibration (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    judge_model VARCHAR(255) NOT NULL,
-    query_hash VARCHAR(64) NOT NULL,
-    predicted_score FLOAT NOT NULL,
-    was_cached BOOLEAN DEFAULT FALSE,
-    cache_hit_count INT DEFAULT 0,
-    calibration_score FLOAT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_judge_model (judge_model),
-    INDEX idx_query_hash (query_hash),
-    INDEX idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-"""
-
-
-_table_ready = False
-
-
-def _ensure_judge_calibration_table():
-    """Ensure judge_calibration table exists (DDL runs once per process, not per judgment)."""
-    global _table_ready
-    if _table_ready:
-        return
-    try:
-        with _get_engine().begin() as conn:
-            conn.execute(text(JUDGE_CALIBRATION_DDL))
-        _table_ready = True
-    except Exception as exc:
-        logger.warning("[Judges] Failed to create calibration table: %s", exc)
-
-
-
 # ============================================================
 # 🎯 Judge Calibration System (Phase 5 - Improvement 5)
 # ============================================================
@@ -85,7 +50,6 @@ def record_judge_calibration(
         return
 
     try:
-        _ensure_judge_calibration_table()
         query_hash = hashlib.sha256(query.encode()).hexdigest()[:64]
 
         with _get_engine().begin() as conn:
@@ -99,7 +63,7 @@ def record_judge_calibration(
                     "jm": judge_model,
                     "qh": query_hash,
                     "ps": predicted_score,
-                    "wc": was_cached,
+                    "wc": bool(was_cached),
                 },
             )
     except Exception as exc:
@@ -116,9 +80,6 @@ def update_calibration_cache_status(query: str) -> None:
         return
 
     try:
-        # O cache pode gravar antes do primeiro julgamento: sem isto o UPDATE falhava com
-        # "Table 'judge_calibration' doesn't exist".
-        _ensure_judge_calibration_table()
         query_hash = hashlib.sha256(query.encode()).hexdigest()[:64]
 
         with _get_engine().begin() as conn:
@@ -128,7 +89,7 @@ def update_calibration_cache_status(query: str) -> None:
                     UPDATE judge_calibration
                     SET was_cached = TRUE, cache_hit_count = cache_hit_count + 1
                     WHERE query_hash = :qh
-                    AND created_at > NOW() - INTERVAL 1 HOUR
+                    AND created_at > NOW() - INTERVAL '1 hour'
                 """),
                 {"qh": query_hash},
             )
@@ -155,7 +116,7 @@ def get_judge_calibration_metrics() -> Dict[str, Dict[str, float]]:
                         SUM(CASE WHEN predicted_score >= 7.0 THEN 1 ELSE 0 END) as high_score_count,
                         SUM(CASE WHEN predicted_score >= 7.0 AND was_cached THEN 1 ELSE 0 END) as high_score_cached
                     FROM judge_calibration
-                    WHERE created_at > NOW() - INTERVAL 24 HOUR
+                    WHERE created_at > NOW() - INTERVAL '24 hours'
                     GROUP BY judge_model
                 """)
             ).fetchall()

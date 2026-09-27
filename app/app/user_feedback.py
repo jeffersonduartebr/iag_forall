@@ -209,7 +209,7 @@ def _persist_feedback(
                 """),
                 {
                     "query_id": request.query_id,
-                    "query_text": request.query[:2000],
+                    "query_text": request.query[:2000].replace("\x00", ""),
                     "model": request.model,
                     "modality": request.modality,
                     "feedback_type": request.feedback_type.value,
@@ -257,9 +257,9 @@ def get_feedback_stats(model: Optional[str] = None, hours: int = 24) -> Dict[str
                             AVG(CASE WHEN feedback_type = 'rating' THEN rating ELSE NULL END) as avg_rating
                         FROM user_feedback
                         WHERE model = :model
-                        AND created_at > NOW() - INTERVAL :hours HOUR
+                        AND created_at > NOW() - make_interval(hours => :hours)
                     """),
-                    {"model": model, "hours": hours}
+                    {"model": model, "hours": int(hours)}
                 ).fetchone()
             else:
                 result = conn.execute(
@@ -272,9 +272,9 @@ def get_feedback_stats(model: Optional[str] = None, hours: int = 24) -> Dict[str
                             SUM(CASE WHEN feedback_type = 'thumbs_down' THEN 1 ELSE 0 END) as thumbs_down,
                             AVG(CASE WHEN feedback_type = 'rating' THEN rating ELSE NULL END) as avg_rating
                         FROM user_feedback
-                        WHERE created_at > NOW() - INTERVAL :hours HOUR
+                        WHERE created_at > NOW() - make_interval(hours => :hours)
                     """),
-                    {"hours": hours}
+                    {"hours": int(hours)}
                 ).fetchone()
 
             if result:

@@ -1,10 +1,8 @@
-# Objective: Tests that migration 0006 matches the bootstrap schema and is safe to re-run.
-"""A migration and the bootstrap DDL that disagree produce two different databases.
+# Objective: Migration 0006 (MySQL history) survives in the PostgreSQL baseline and was safe to re-run.
+"""The MySQL chain (``alembic/``) is history; the schema now has one owner, the ``alembic_pg`` baseline.
 
-``app.db_manager`` creates the schema on a fresh install; alembic upgrades an
-existing one. If they drift, a column exists on new deployments and not on old
-ones, and the code that writes it fails only in production. Every column this
-migration adds is therefore checked against the bootstrap definition.
+Every column this migration added must still exist in the PostgreSQL baseline with the same nullability and
+default, or the data copied from MariaDB would lose it.
 
 The second property is that the migration guards each step: it is run on
 databases in unknown states, including ones where the application's own
@@ -12,11 +10,11 @@ databases in unknown states, including ones where the application's own
 """
 
 import importlib.util
+import re
 from pathlib import Path
 
+import baseline_pg
 import pytest
-
-from app import db_manager
 
 MIGRATION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0006_formative_semantics.py"
 
@@ -52,20 +50,13 @@ def test_the_revision_chain_has_no_gaps():
 
 
 # ---------------------------------------------------------------------------
-# Agreement with the bootstrap schema
+# Agreement with the PostgreSQL baseline
 # ---------------------------------------------------------------------------
 
 
 def bootstrap_columns(table: str) -> dict:
-    schema = db_manager.SCHEMA_DEFINITIONS[table]
-    columns = dict(schema.get("columns", {}))
-    for line in schema["ddl"].splitlines():
-        stripped = line.strip().rstrip(",")
-        if stripped and not stripped.upper().startswith(
-            ("CREATE", "UNIQUE", "INDEX", "PRIMARY", ")", "--")
-        ):
-            columns.setdefault(stripped.split()[0], stripped)
-    return columns
+    """Columns of ``table`` in the PostgreSQL baseline (name -> definition)."""
+    return baseline_pg.colunas(table)
 
 
 @pytest.mark.parametrize(
@@ -86,11 +77,13 @@ def test_both_ema_tables_gain_the_semantics_column():
     assert "semantics" in bootstrap_columns("ema_history_log")
 
 
-def test_the_definitions_agree_between_migration_and_bootstrap(migration):
-    """A NULL default on one side and NOT NULL on the other is a latent bug."""
-    bootstrap = bootstrap_columns("query_log")
+def test_the_definitions_agree_between_migration_and_baseline(migration):
+    """A NULL default on one side and NOT NULL on the other is a latent bug (types differ: FLOAT -> DOUBLE)."""
+    baseline = bootstrap_columns("query_log")
     for column, definition in migration.QUERY_LOG_COLUMNS.items():
-        assert bootstrap[column].upper().replace('"', "") .strip() == definition.upper().strip(), column
+        assert ("NOT NULL" in baseline[column].upper()) == ("NOT NULL" in definition.upper()), column
+        padrao = re.search(r"DEFAULT ('\w+')", definition)
+        assert not padrao or padrao.group(1) in baseline[column], column
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +111,10 @@ def test_the_new_measurements_are_nullable(migration, column):
 
 def test_the_ema_uniqueness_moves_to_include_the_semantics():
     """Otherwise the calibrated EMAs would overwrite the rubric ones."""
-    ddl = db_manager.SCHEMA_DEFINITIONS["ema_history"]["ddl"]
+    ddl = baseline_pg.restricoes()
     # Desde a 0012 a chave inclui também o período do estudo (policy_namespace).
-    assert "uniq_ema_escopo (model, modality, semantics, policy_namespace)" in ddl
-    assert "UNIQUE KEY uniq_model_modality (" not in ddl
+    assert "UNIQUE (model, modality, semantics, policy_namespace)" in ddl
+    assert "UNIQUE (model, modality)" not in ddl
 
 
 # ---------------------------------------------------------------------------
