@@ -14,7 +14,7 @@ Roteador de consultas para LLMs/VLMs com decisão multiobjetivo (custo, latênci
 - Registra métricas (Prometheus), logs e feedback para aprendizagem online.
 
 ## Arquitetura em uma frase
-FastAPI (`app/app/main.py`) -> roteamento (`app/app/router_core.py`) -> providers (`app/app/providers_async.py`) -> persistência/cache (MariaDB + Redis + ChromaDB) -> feedback em background (Celery/tasks).
+FastAPI (`app/app/main.py`) -> roteamento (`app/app/router_core.py`) -> providers (`app/app/providers_async.py`) -> persistência/cache (PostgreSQL no Cloud SQL + Redis + ChromaDB) -> feedback em background (Celery/tasks).
 
 ## Entenda Rapidamente
 Esta seção foi pensada para professores e outros leitores sem formação em TI.
@@ -72,7 +72,7 @@ flowchart LR
     Ollama[Ollama]
     External[LLM APIs externas]
     Redis[(Redis)]
-    MariaDB[(MariaDB)]
+    Postgres[(PostgreSQL)]
     Chroma[(ChromaDB)]
     Celery[Celery Worker<br/>tasks.py]
     NSGA[NSGA Updater / Meta Optimizer]
@@ -84,17 +84,17 @@ flowchart LR
     Admission --> QueryJobs
     Router --> Redis
     Router --> Chroma
-    Router --> MariaDB
+    Router --> Postgres
     Router --> Providers
     QueryJobs --> Redis
     QueryJobs --> Celery
     Providers --> Ollama
     Providers --> External
     API --> Celery
-    Celery --> MariaDB
+    Celery --> Postgres
     Celery --> Redis
     Celery --> Chroma
-    NSGA --> MariaDB
+    NSGA --> Postgres
     NSGA --> Redis
     API -. metrics/logs .-> Obs
     Celery -. metrics/logs .-> Obs
@@ -149,7 +149,7 @@ flowchart TD
     A[API FastAPI]
     B[Serviços de roteamento]
     C[Ollama e providers]
-    D[Redis, MariaDB, Chroma]
+    D[Redis, PostgreSQL, Chroma]
     E[Celery Worker]
     F[Prometheus, Grafana, Loki]
 

@@ -22,7 +22,7 @@ FROM python:3.11-slim
 
 # ------------------------------------------------------------
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential libmariadb-dev pkg-config curl netcat-traditional && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config curl netcat-traditional && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 
 # ------------------------------------------------------------
@@ -52,7 +52,7 @@ RUN uv pip install --system --no-cache --require-hashes -r /app/requirements.cor
 # ------------------------------------------------------------
 
 ENV PYTHONUNBUFFERED=1 
-ENV DB_HOST=mariadb 
+ENV DB_HOST=postgres 
 ENV DB_USER=router_user 
 ENV DB_PASS=router_pass 
 ENV DB_NAME=routerdb 

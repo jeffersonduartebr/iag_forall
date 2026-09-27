@@ -11,12 +11,13 @@ import os
 from typing import Optional
 from urllib.parse import quote_plus
 
-#: Dialetos: PostgreSQL (Cloud SQL; o SQL da aplicação é PostgreSQL) e MariaDB (só histórico e ferramentas de cópia).
-DIALETOS = {"mysql": ("mysql+pymysql", 3306), "postgresql": ("postgresql+psycopg2", 5432)}
+#: O único banco suportado é o PostgreSQL (Cloud SQL). A chave continua existindo para falhar alto se alguém
+#: configurar outro dialeto (o MariaDB foi removido em 27/09/2026).
+DIALETOS = {"postgresql": ("postgresql+psycopg2", 5432)}
 
 
 def dialeto() -> str:
-    """``DB_DIALECT`` (``postgresql`` default | ``mysql``); anything else is a configuration error."""
+    """``DB_DIALECT`` (only ``postgresql``); anything else is a configuration error, never a silent default."""
     valor = os.getenv("DB_DIALECT", "postgresql").strip().lower()
     if valor not in DIALETOS:
         raise ValueError(f"DB_DIALECT inválido: {valor!r} (use {', '.join(DIALETOS)})")

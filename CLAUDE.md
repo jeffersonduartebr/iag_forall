@@ -83,7 +83,7 @@ locust -f tests/locustfile.py --web-host 0.0.0.0
 
 ### Database Migrations
 ```bash
-cd app && alembic upgrade head
+alembic -c alembic_pg.ini upgrade head
 ```
 
 ## Architecture
@@ -105,7 +105,7 @@ POST /query → router_core.py → bandits.py (model selection)
 | `router_strategy.py` | Hard filters + NSGA-II weight application |
 | `judges.py` | LLM-based quality assessment with consensus |
 | `nsga_weights_updater.py` | Background NSGA-II optimization (DEAP) |
-| `settings_dynamic.py` | 3-tier config (env → Redis → MariaDB) |
+| `settings_dynamic.py` | 3-tier config (env → Redis → PostgreSQL) |
 | `providers_async.py` | Async LLM provider abstraction |
 | `rag_local.py` | Multimodal RAG (text + vision) |
 
@@ -115,7 +115,7 @@ POST /query → router_core.py → bandits.py (model selection)
 - **Meta Optimizer**: Bayesian hyperparameter tuning
 
 ### Data Layer
-- **MariaDB**: Query logs, EMA history, settings, judge verdicts
+- **PostgreSQL** (Cloud SQL, database `aristo`, via PgBouncer; schema owned by `alembic_pg/`): Query logs, EMA history, settings, judge verdicts
 - **Redis**: Bandit state, settings cache, semantic cache
 - **ChromaDB**: Vector embeddings for RAG
 
@@ -134,7 +134,7 @@ PUT  /admin/settings     # Update settings (requires admin token)
 Settings are loaded in 3 layers (from `settings_dynamic.py`):
 1. Environment variables (.env)
 2. Redis LRU cache (30s TTL)
-3. MariaDB persistent table
+3. PostgreSQL persistent table
 
 Key settings: `NSGA_W_QUALITY`, `NSGA_W_LATENCY`, `NSGA_W_COST`, `BANDIT_EPSILON`, `UNCERTAINTY_THRESHOLD`, `CANDIDATE_MODELS_LIST`, `JUDGE_LLMS`
 
@@ -143,7 +143,7 @@ Key settings: `NSGA_W_QUALITY`, `NSGA_W_LATENCY`, `NSGA_W_COST`, `BANDIT_EPSILON
 | Service | Port | Purpose |
 |---------|------|---------|
 | api | 8000 | FastAPI main application |
-| mariadb | 3307 | Database |
+| postgres | 5433 | Database (local dev only: `--profile postgres-local`; production uses Cloud SQL) |
 | redis | 6378 | Cache + state |
 | ollama | 11434 | Local LLM inference |
 | prometheus | 9090 | Metrics |

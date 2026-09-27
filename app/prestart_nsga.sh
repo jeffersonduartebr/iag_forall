@@ -4,7 +4,7 @@
 # 🚀 PRESTART NSGA-II
 # ---------------------------------------------------------
 # Script de inicialização do container nsga_updater.
-# - Aguarda Redis e MariaDB ficarem acessíveis.
+# - Aguarda Redis e o banco ficarem acessíveis.
 # - Lê a lista de modelos do arquivo .env (CANDIDATE_MODELS_LIST).
 # - Popula a chave Redis `nsga:candidate_models` se ela ainda não existir.
 # - Em seguida, inicia o serviço principal (nsga_weights_updater.py).
@@ -29,24 +29,24 @@ fi
 REDIS_HOST="${REDIS_HOST:-redis}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 REDIS_PASSWORD="${REDIS_PASSWORD:-SenhaForte}"
-DB_HOST="${DB_HOST:-mariadb}"
-DB_PORT="${DB_PORT:-3306}"
+DB_HOST="${DB_HOST:-postgres}"
+DB_PORT="${DB_PORT:-5432}"
 
 # ---------------------------------------------------------
-# 🕒 Aguarda Redis e MariaDB ficarem disponíveis
+# 🕒 Aguarda Redis e o banco ficarem disponíveis
 # ---------------------------------------------------------
-echo "⏳ Aguardando Redis e MariaDB ficarem prontos..."
+echo "⏳ Aguardando Redis e o banco ficarem prontos..."
 until nc -z "$REDIS_HOST" "$REDIS_PORT"; do
   echo "   → Redis ainda não disponível em ${REDIS_HOST}:${REDIS_PORT}"
   sleep 2
 done
 
 until nc -z "$DB_HOST" "$DB_PORT"; do
-  echo "   → MariaDB ainda não disponível em ${DB_HOST}:${DB_PORT}"
+  echo "   → o banco ainda não disponível em ${DB_HOST}:${DB_PORT}"
   sleep 2
 done
 
-echo "✅ Redis e MariaDB disponíveis."
+echo "✅ Redis e o banco disponíveis."
 
 # ---------------------------------------------------------
 # 🧩 Lê lista de modelos do .env

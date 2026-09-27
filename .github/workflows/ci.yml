@@ -354,7 +354,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      MYSQL_ROOT_PASSWORD: change-me
       DB_PASS: change-me
       REDIS_PASSWORD: change-me
       ADMIN_UI_PASSWORD: change-me
