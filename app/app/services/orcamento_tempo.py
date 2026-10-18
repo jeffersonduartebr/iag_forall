@@ -21,7 +21,7 @@ ALFA = 0.3  # peso da medição nova na EMA
 def _chave(model: str) -> str:
     nome = model or ""
     rota = next((r for r in _ROTAS if nome.startswith(r)), "")
-    return "tps:" + nome[len(rota):]
+    return "tps:" + nome[len(rota) :]
 
 
 def _num(chave: str, padrao: float) -> float:
@@ -101,10 +101,19 @@ def prazo_da_requisicao(max_tokens: int, piso: float) -> float:
     return min(max(piso, necessario), _num("PRAZO_MAXIMO_S", 420.0))
 
 
-def prazo_da_chamada(model: str, max_tokens: int, restante: float, piso: float = 0.0) -> float:
-    """Timeout of one provider call; while the deadline allows, it leaves room for a fallback attempt."""
+def prazo_da_chamada(model: str, max_tokens: int, restante: float, piso: float = 0.0, pode_ceder: bool = True) -> float:
+    """Timeout of one provider call; while the deadline allows, it leaves room for a fallback attempt.
+
+    A cloud call is also capped by ``PRAZO_CHAMADA_NUVEM_S``: sized by throughput alone (answer plus the
+    reasoning quota), it reached ~200 s, so a degraded provider held the whole request until the global
+    deadline instead of yielding to the next candidate (rehearsal of 2026-10-18: 248 s, then 504). The cap only
+    applies when there is a candidate to yield to (``pode_ceder``): a pinned instrument model has no fallback.
+    """
     raciocina = not (model or "").startswith("ollama/")
     desejado = max(tempo_esperado(model, tokens_totais(max_tokens, raciocina)), piso)
+    teto_nuvem = _num("PRAZO_CHAMADA_NUVEM_S", 60.0)
+    if raciocina and pode_ceder and teto_nuvem > 0:
+        desejado = min(desejado, teto_nuvem)
     reserva = _num("RESERVA_FALLBACK_S", 45.0)
     teto = restante - reserva if restante > 2 * reserva else restante - 0.5
     return max(1.0, min(desejado, teto))

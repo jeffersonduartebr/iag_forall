@@ -277,6 +277,9 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "TPS_PADRAO_NUVEM": "40",
         "LATENCIA_INICIAL_S": "4",
         "RESERVA_FALLBACK_S": "45",
+        # Teto de uma chamada a modelo de nuvem (0 = sem teto): um provedor degradado cede a vez ao próximo
+        # candidato em vez de segurar a requisição até PRAZO_MAXIMO_S. Os locais (ollama/) seguem só a vazão.
+        "PRAZO_CHAMADA_NUVEM_S": "60",
         # Teto do prazo síncrono: cobre modelos lentos com raciocínio longo (DeepSeek levou ~91 s no teste de 100
         # consultas de 2026-09-25; a 30 tok/s, 2048 de resposta + 4096 de raciocínio passam de 270 s).
         "PRAZO_MAXIMO_S": "420",
