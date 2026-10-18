@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import threading
@@ -30,8 +31,11 @@ from ._infra import (
     GEMINI_VERTEX_PROJECT,
     google_genai,
 )
+from ._timeouts import resolve_timeout
 
 _CLIENTES: Dict[tuple, Any] = {}
+#: Folga do wait_for sobre o prazo do SDK, para que normalmente seja o SDK a cortar (e fechar a ligação).
+MARGEM_PRAZO_S = 2.0
 _TRAVA_CLIENTES = threading.Lock()
 
 
@@ -75,6 +79,7 @@ class _GenOptions(NamedTuple):
     tool_config: Optional[dict]
     system_instruction: Optional[str]
     response_format: Optional[dict]
+    timeout_s: Optional[float] = None
 
 
 def _genai_contents(prompt: str, image_b64: Optional[str], contents: Optional[list]) -> list:
@@ -113,6 +118,7 @@ class GeminiProvider(BaseProvider):
             contents: Optional[list] = None,
             system_instruction: Optional[str] = None,
             response_format: Optional[dict] = None,
+            timeout_s: Optional[float] = None,
         ):
             """Execute one Gemini generation call using the available SDK.
 
@@ -120,7 +126,9 @@ class GeminiProvider(BaseProvider):
             resposta bruto (para ``from_gemini_response`` extrair function calls);
             caso contrário, preserva o comportamento antigo (``SimpleNamespace(text)``).
             """
-            options = _GenOptions(temperature, max_tokens, tools, tool_config, system_instruction, response_format)
+            options = _GenOptions(
+                temperature, max_tokens, tools, tool_config, system_instruction, response_format, timeout_s
+            )
             if google_genai is not None:
                 resp = self._generate_genai(model_name, _genai_contents(prompt, image_b64, contents), options)
                 if tools or contents:
@@ -147,6 +155,8 @@ class GeminiProvider(BaseProvider):
             if options.tool_config:
                 config["tool_config"] = options.tool_config
             config.update(ptools.to_gemini_response_config(options.response_format))
+            if options.timeout_s:
+                config["http_options"] = {"timeout": int(options.timeout_s * 1000)}  # o SDK espera milissegundos
             return _cliente_genai().models.generate_content(model=model_name, contents=contents, config=config)
 
         @staticmethod
@@ -192,6 +202,7 @@ class GeminiProvider(BaseProvider):
             canonical = ptools.build_provider_messages(prompt, kwargs.get("system_prompt"), messages, image_b64)
             gem_system, gem_contents = ptools.to_gemini_contents(canonical)
 
+        prazo = resolve_timeout(kwargs)
         await self._acquire_slot(model_name)
         try:
 
@@ -208,12 +219,16 @@ class GeminiProvider(BaseProvider):
                     contents=gem_contents,
                     system_instruction=gem_system,
                     response_format=kwargs.get("response_format"),
+                    timeout_s=prazo,
                 )
 
             # Pool dedicado, não o executor por omissão: o SDK do Gemini é
             # síncrono e a thread não é cancelável, por isso um Gemini lento
             # drenava as 16 threads partilhadas e parava a aplicação inteira.
-            resp = await run_blocking_provider(_call)
+            # O SDK não recebia prazo nenhum: um Vertex degradado prendia a chamada até o deadline global
+            # (ensaio de 18/10: 248 s e 504). O http_options corta a ligação; o wait_for devolve o controle
+            # mesmo que a thread demore a perceber, e a cadeia de fallback segue para outro candidato.
+            resp = await asyncio.wait_for(run_blocking_provider(_call), prazo + MARGEM_PRAZO_S)
             text_out, tool_calls, finish_reason = ptools.from_gemini_response(resp)
 
             cobrados = _tokens_cobrados(resp)

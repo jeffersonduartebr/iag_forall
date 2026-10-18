@@ -100,7 +100,9 @@ def _call_timeout(ctx: RouteContext, model: str) -> Optional[float]:
     configured = effective_provider_timeout_seconds(ctx.runtime_hints)
     if remaining == float("inf"):
         return configured
-    return prazo_da_chamada(model, int(ctx.max_tokens), remaining, piso=configured or 0.0)
+    # pinned_model chega com max_fallbacks=0: sem outro candidato, o teto da chamada de nuvem só a cortaria.
+    pode_ceder = int(ctx.hints.get("max_fallbacks", 1)) > 0
+    return prazo_da_chamada(model, int(ctx.max_tokens), remaining, piso=configured or 0.0, pode_ceder=pode_ceder)
 
 
 def _provider_call(ctx: RouteContext, final_prompt: str, retry_empty: bool):

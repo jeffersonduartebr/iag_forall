@@ -134,9 +134,13 @@ RETRYABLE_ERRORS: tuple[type[BaseException], ...] = (
     httpx.ReadTimeout,
     httpx.HTTPStatusError,
 )
+#: Esperas que estouraram o prazo da chamada: repetir no mesmo modelo gasta o deadline que o fallback usaria.
+#: O ConnectTimeout fica de fora: é rápido e não chega a ocupar o provedor.
+ESPERAS_ESGOTADAS: tuple[type[BaseException], ...] = (httpx.ReadTimeout,)
 
 if AsyncOpenAI is not None:
     RETRYABLE_ERRORS += (APITimeoutError, APIConnectionError, OpenAIRateLimitError)
+    ESPERAS_ESGOTADAS += (APITimeoutError,)
 
 if AsyncAnthropic is not None:
     RETRYABLE_ERRORS += (AnthropicRateLimitError, APIStatusError)
@@ -159,11 +163,11 @@ def _is_retryable(exc: BaseException) -> bool:
     funcionar, abriria o circuito do provider. Um erro de configuração passaria
     por indisponibilidade.
     """
-    if not isinstance(exc, RETRYABLE_ERRORS):
+    if not isinstance(exc, RETRYABLE_ERRORS) or isinstance(exc, ESPERAS_ESGOTADAS):
+        # Ensaio de 18/10: o Vertex degradado estourou o prazo e foi repetido no mesmo modelo até o deadline
+        # global (248 s, 504); quem trata a espera esgotada é a cadeia de fallback, com outro candidato.
         return False
-    status = getattr(getattr(exc, "response", None), "status_code", None)
-    if status is None:
-        status = getattr(exc, "status_code", None)
+    status = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "status_code", None)
     return True if status is None else int(status) in RETRYABLE_STATUS
 
 
