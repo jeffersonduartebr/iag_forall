@@ -21,6 +21,7 @@ EMPRESAS = (
     ("deepseek", "deepseek"), ("granite", "ibm"), ("llama", "meta"), ("qwen", "alibaba"),
     ("mistral", "mistral"), ("mixtral", "mistral"), ("phi", "microsoft"), ("grok", "xai"),
     ("glm", "zhipu"), ("z-ai/", "zhipu"), ("kimi", "moonshot"), ("moonshotai/", "moonshot"),
+    ("mimo", "xiaomi"), ("xiaomi/", "xiaomi"), ("muse", "meta"), ("meta/", "meta"),
 )
 _ROTAS = ("ollama/", "openrouter/", "gemini/", "anthropic/", "openai/")
 
