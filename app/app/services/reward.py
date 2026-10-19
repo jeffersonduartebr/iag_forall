@@ -32,14 +32,13 @@ DEFAULT_REWARD_WEIGHTS: Weights = (0.55, 0.30, 0.15)
 REWARD_WEIGHTS_KEY = "nsga:reward_weights:{modality}"
 DEFAULT_MIN_SHARE = 0.05
 
-# Cost baseline C_base (USD per 1k tokens), recalibrated 2026-09-18 with
-# ``calibrate_cost_baseline`` over the CANDIDATE_MODELS_LIST pool at OpenRouter
-# list prices (in/out per 1k): gpt-5.5 0.005/0.030, claude-opus-4.8 0.005/0.025,
-# claude-sonnet-5 0.002/0.010, claude-haiku-4.5 0.001/0.005, claude-fable-5
-# 0.010/0.050, with a 3:1 input:output token mix (RAG context dominates the
-# prompt). The former 0.12 sat above every candidate, so the cost term was 1.0
-# for all models. Recalibrate whenever the pool or its prices change.
-DEFAULT_COST_BASELINE_PER_1K = 0.007
+# Cost baseline C_base (USD per 1k tokens), recalibrated 2026-10-19 with
+# ``calibrate_cost_baseline`` over the field pool (18 models of CANDIDATE_MODELS_LIST) at the list prices
+# of the pinned providers (OPENROUTER_PROVIDER_PINS; Gemini at Vertex AI global), with a 3:1 input:output
+# token mix (RAG context dominates the prompt): geometric mean 0.00177, rounded to 0.0018. The former 0.007
+# came from a five-model pool (2026-09-18) and the 0.12 before it sat above every candidate, so the cost term
+# was 1.0 for all models. Recalibrate whenever the pool or its prices change.
+DEFAULT_COST_BASELINE_PER_1K = 0.0018
 DEFAULT_COST_INPUT_SHARE = 0.75
 
 # Latency transfer: inverted logistic with slope k and inflection x0 (seconds).

@@ -105,6 +105,9 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "JUDGE_CALIBRATION_ENABLED": "1",
         "JUDGE_CACHE_AGREEMENT_TARGET": "0.7",
         "JUDGE_MODELS": "[]",
+        # "adaptativo": par por aptidão e custo, com exploração epsilon; "uniforme": par e desempate
+        # sorteados com igual probabilidade entre os juízes elegíveis (empresa distinta da do avaliado).
+        "JUDGES_SELECTION_MODE": "adaptativo",
         # "rubric": 3 dimensões (Cap. 5, §5.3.5) por 2 juízes; "binary": CORRECT/INCORRECT.
         "JUDGE_SCORING_MODE": "rubric",
         "JUDGE_RUBRIC_WEIGHTS": json.dumps({"clareza": 0.3, "acuracia": 0.5, "alinhamento": 0.2}),
@@ -118,6 +121,28 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
     },
     "providers": {
         "OPENROUTER_API_KEY": "",
+        # Provedor fixado por modelo (slug do endpoint no catálogo), sem substituição automática: a versão
+        # servida não muda na janela de campo. Consulta ao catálogo em 2026-10-19; critério: o próprio
+        # desenvolvedor quando ele é provedor; senão, o de menor preço (deepseek-chat-v3.1) ou o único listado.
+        "OPENROUTER_PROVIDER_PINS": json.dumps(
+            {
+                "anthropic/claude-haiku-4.5": "anthropic",
+                "anthropic/claude-opus-4.8": "anthropic",
+                "anthropic/claude-opus-5.5": "anthropic",
+                "anthropic/claude-sonnet-5.5": "anthropic",
+                "deepseek/deepseek-chat-v3.1": "deepinfra/fp4",
+                "deepseek/deepseek-v4-pro-0813": "deepseek",
+                "ibm-granite/granite-4.0-h-micro": "cloudflare",
+                "meta/muse-spark-1.1": "meta",
+                "openai/gpt-5-pro": "openai",
+                "openai/gpt-5.1": "openai",
+                "openai/gpt-5.6-sol": "openai",
+                "openai/gpt-6-luna": "openai",
+                "qwen/qwen3.8-max-0902": "alibaba",
+                "xiaomi/mimo-v2.6-pro": "xiaomi/fp8",
+                "xiaomi/mimo-v2.6-flash": "xiaomi/fp8",
+            }
+        ),
         "OLLAMA_BASE_URL": "http://ollama:11434",
         "OLLAMA_HOST": "http://ollama:11434",
         "OLLAMA_CONCURRENCY_LIMIT": "5",
@@ -231,7 +256,7 @@ SETTINGS_BY_DOMAIN: Dict[str, Dict[str, str]] = {
         "REWARD_LATENCY_TOKENS_PER_S": "25.0",
         "REWARD_DEFAULT_COMPLETION_TOKENS": "375",
         # C_base da recompensa (USD/1k tokens); derivação em app.services.reward.
-        "REWARD_COST_BASELINE_PER_1K": "0.007",
+        "REWARD_COST_BASELINE_PER_1K": "0.0018",
         # Parcela mínima de cada objetivo nos pesos da recompensa publicados pelo NSGA-II.
         "REWARD_WEIGHT_MIN_SHARE": "0.05",
         "NSGA_CONVERGENCE_HISTORY_SIZE": "20",

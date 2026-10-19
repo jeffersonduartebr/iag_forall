@@ -110,18 +110,24 @@ def test_cost_per_1k_from_total():
 
 
 def test_cost_baseline_reproduces_calibration():
-    # Pool de CANDIDATE_MODELS_LIST a preços de lista (in/out por 1k), mix 3:1.
-    pool = [(0.005, 0.030), (0.005, 0.025), (0.002, 0.010), (0.001, 0.005), (0.010, 0.050)]
+    # Pool de campo (18 modelos de CANDIDATE_MODELS_LIST), preços de lista dos provedores fixados, mix 3:1.
+    pool = [
+        (0.001, 0.005), (0.005, 0.025), (0.004, 0.020), (0.002, 0.010), (0.00025, 0.00095), (0.00066, 0.00198),
+        (0.0015, 0.009), (0.00075, 0.00375), (0.002, 0.010), (0.000017, 0.000112), (0.00125, 0.00425),
+        (0.015, 0.120), (0.00125, 0.010), (0.004, 0.020), (0.0001, 0.0005), (0.002, 0.006), (0.000435, 0.00087),
+        (0.00014, 0.00028),
+    ]
     assert reward.calibrate_cost_baseline(pool, 0.75) == pytest.approx(reward.DEFAULT_COST_BASELINE_PER_1K, rel=0.02)
     assert reward.calibrate_cost_baseline([], 0.75) == reward.DEFAULT_COST_BASELINE_PER_1K
 
 
 def test_cost_score_discriminates_current_pool():
     base = reward.DEFAULT_COST_BASELINE_PER_1K
-    haiku = reward.cost_score(reward.blended_cost_per_1k(0.001, 0.005, 0.75), base)
-    opus = reward.cost_score(reward.blended_cost_per_1k(0.005, 0.025, 0.75), base)
-    fable = reward.cost_score(reward.blended_cost_per_1k(0.010, 0.050, 0.75), base)
-    assert haiku == 1.0 > opus > fable >= reward.COST_SCORE_FLOOR
+    luna = reward.cost_score(reward.blended_cost_per_1k(0.0001, 0.0005, 0.75), base)
+    flash = reward.cost_score(reward.blended_cost_per_1k(0.0015, 0.009, 0.75), base)
+    sonnet = reward.cost_score(reward.blended_cost_per_1k(0.002, 0.010, 0.75), base)
+    pro = reward.cost_score(reward.blended_cost_per_1k(0.015, 0.120, 0.75), base)
+    assert luna == 1.0 > flash > sonnet > pro == reward.COST_SCORE_FLOOR
     # O baseline antigo (0.12) dava 1.0 para todos: termo de custo inerte.
     assert reward.cost_score(reward.blended_cost_per_1k(0.010, 0.050, 0.75), 0.12) == 1.0
     assert reward.cost_score(None, base) == 1.0

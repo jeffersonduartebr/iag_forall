@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import random
 from typing import List, Optional
 
 from ..embeddings import embed_text
@@ -19,6 +20,7 @@ from ..model_registry import filter_configured_model_names, is_model_configured
 from ..providers_async import call_model
 from ..settings_dynamic import settings
 from ..vectorstore import query_embedding
+from .judge_selection import PAR_SORTEADO, juizes_uniformes
 from .judge_vendors import elegiveis
 
 logger = logging.getLogger("app.judges")
@@ -43,8 +45,17 @@ def _configured_local_fallback() -> str:
     return filtered[0] if filtered else "ollama/phi4:latest"
 
 
-def _resolve_meta_judge_model() -> str:
-    """Resolve the meta-judge: the preferred one, else another judge, never of the evaluated model's company."""
+def _resolve_meta_judge_model(excluir: Optional[List[str]] = None) -> str:
+    """Resolve the meta-judge: the preferred one, else another judge, never of the evaluated model's company.
+
+    In uniform mode (``JUDGES_SELECTION_MODE=uniforme``) the tie-breaker is drawn with equal probability
+    among the eligible judges other than the pair drawn for this request (or ``excluir``), like the pair itself.
+    """
+    if juizes_uniformes():
+        fora = PAR_SORTEADO.get() if excluir is None else excluir
+        restantes = [m for m in _resolve_judge_models() if m not in fora]
+        if restantes:
+            return random.choice(restantes)
     if is_model_configured(META_JUDGE_HINT) and elegiveis([META_JUDGE_HINT]):
         return META_JUDGE_HINT
     alternativas = _resolve_judge_models() + elegiveis([_configured_local_fallback()])

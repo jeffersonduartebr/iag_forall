@@ -27,6 +27,7 @@ from ._infra import (
     OPENROUTER_BASE_URL,
     OPENROUTER_HTTP_REFERER,
 )
+from ._openrouter_pins import pin_provider
 from ._timeouts import resolve_timeout
 
 
@@ -160,8 +161,10 @@ class OpenRouterProvider(OpenAIProvider):
           not reason ignore the param (https://openrouter.ai/docs/use-cases/reasoning-tokens).
         - ``data_collection: deny`` routes only to providers that do not retain or train on prompts: the traffic
           carries minors' submissions (LGPD) (https://openrouter.ai/docs/features/provider-routing).
+        - A model listed in ``OPENROUTER_PROVIDER_PINS`` goes only to its pinned endpoint, with no fallback,
+          so the version frozen at the start of the field window is the one served (``_openrouter_pins``).
         """
-        extra: Dict[str, Any] = {"provider": {"data_collection": "deny"}}
+        extra: Dict[str, Any] = {"provider": pin_provider({"data_collection": "deny"}, model)}
         args: Dict[str, Any] = {"extra_body": extra}
         budget = orcamento_raciocinio()
         if budget:

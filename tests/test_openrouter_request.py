@@ -27,3 +27,19 @@ def test_zero_budget_keeps_the_privacy_policy(monkeypatch):
 
     monkeypatch.setattr(_openai, "orcamento_raciocinio", lambda: 0)
     assert _args("x/y") == {"extra_body": {"provider": {"data_collection": "deny"}}}
+
+
+def test_pinned_model_goes_only_to_its_endpoint_without_fallback():
+    """OPENROUTER_PROVIDER_PINS: the frozen version is the one served, or the call fails (no silent swap)."""
+    prov = _args("xiaomi/mimo-v2.6-pro")["extra_body"]["provider"]
+    assert prov == {"data_collection": "deny", "only": ["xiaomi/fp8"], "allow_fallbacks": False}
+    assert _args("anthropic/claude-opus-5.5")["extra_body"]["provider"]["only"] == ["anthropic"]
+
+
+def test_unpinned_model_and_invalid_setting_keep_the_default_routing(monkeypatch):
+    from app.providers import _openrouter_pins
+
+    assert _args("deepseek/deepseek-v4.1-flash")["extra_body"]["provider"] == {"data_collection": "deny"}
+    for ruim in ("não é json", "[1, 2]"):
+        monkeypatch.setattr(_openrouter_pins.settings, "get", lambda k, d=None, v=ruim: v)
+        assert _openrouter_pins.provider_pins() == {}

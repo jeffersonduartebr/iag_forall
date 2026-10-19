@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import random
 import statistics
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Dict, List, Sequence
 
@@ -27,6 +28,9 @@ MIN_FITNESS = _safe_setting_float("JUDGES_MIN_FITNESS", 0.30)
 W_FIT = _safe_setting_float("JUDGES_WEIGHT_FITNESS", 0.6)
 W_QC = _safe_setting_float("JUDGES_WEIGHT_QC", 0.4)
 EPSILON_RANDOM = _safe_setting_float("JUDGES_EPSILON", 0.10)
+
+#: Pair drawn for the current request in uniform mode; the tie-breaker is drawn among the other judges.
+PAR_SORTEADO: ContextVar[tuple] = ContextVar("par_sorteado", default=())
 
 
 @dataclass
@@ -66,10 +70,23 @@ def _score_candidate(s: JudgeStats) -> float:
     return max(0.0, W_FIT * s.fitness + W_QC * (qc_norm / 10.0))
 
 
+def juizes_uniformes() -> bool:
+    """``JUDGES_SELECTION_MODE=uniforme``: judges drawn with equal probability, ignoring fitness and cost."""
+    return str(settings.get("JUDGES_SELECTION_MODE", "adaptativo")).strip().lower() == "uniforme"
+
+
 def _choose_two(models: List[str], stats: Dict[str, JudgeStats]) -> List[SelectedJudge]:
-    """Select two judges using fitness filtering and weighted randomization (none when no judge is eligible)."""
+    """Select two judges using fitness filtering and weighted randomization (none when no judge is eligible).
+
+    In uniform mode the pair is a simple random sample of the eligible judges (already filtered by company),
+    so no judge is favoured by its own past scores while the field protocol keeps the selection fixed.
+    """
     if not models:
         return []
+    if juizes_uniformes():
+        par = random.sample(models, k=min(2, len(models)))
+        PAR_SORTEADO.set(tuple(par))
+        return [SelectedJudge(m, 1.0) for m in par]
     fitness_vals = [stats.get(m, JudgeStats(m)).fitness for m in models]
     thr = _adaptive_threshold(fitness_vals, MIN_FITNESS)
     valid = [m for m in models if stats.get(m, JudgeStats(m)).fitness >= thr]
