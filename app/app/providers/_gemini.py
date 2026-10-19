@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import threading
 import time
 from types import SimpleNamespace
@@ -100,6 +101,21 @@ def _legacy_contents(prompt: str, image_b64: Optional[str], contents: Optional[l
     return parts
 
 
+#: Do Gemini 4 em diante, a API recusa ``thinking_budget`` (400 "use thinking level instead"): no ensaio de
+#: 18/10, todas as chamadas ao gemini-4-argon falharam assim e caíram no fallback.
+_GERACAO = re.compile(r"gemini-(\d+)")
+
+
+def _thinking_config(model_name: str) -> Dict[str, Any]:
+    """The reasoning cap in the form the model accepts: a token budget, or the nearest level from Gemini 4 on."""
+    orcamento = orcamento_raciocinio()
+    geracao = _GERACAO.search(model_name)
+    if geracao is None or int(geracao.group(1)) < 4:
+        return {"thinking_budget": orcamento}
+    nivel = "MINIMAL" if orcamento == 0 else "LOW" if orcamento <= 4096 else "MEDIUM" if orcamento <= 16384 else "HIGH"
+    return {"thinking_level": nivel}
+
+
 class GeminiProvider(BaseProvider):
     """Call Gemini models through the available Google SDK path."""
 
@@ -142,11 +158,11 @@ class GeminiProvider(BaseProvider):
         def _generate_genai(model_name: str, contents: list, options: "_GenOptions"):
             """``google-genai`` SDK: one client call with everything in ``config``."""
             # O raciocínio conta dentro de max_output_tokens: sem a folga, o pensamento consumia o teto da
-            # resposta. thinking_budget limita o que ele pode gastar.
+            # resposta. O orçamento (ou o nível, do Gemini 4 em diante) limita o que ele pode gastar.
             config: Dict[str, Any] = {
                 "temperature": options.temperature,
                 "max_output_tokens": tokens_totais(options.max_tokens),
-                "thinking_config": {"thinking_budget": orcamento_raciocinio()},
+                "thinking_config": _thinking_config(model_name),
             }
             if options.system_instruction:
                 config["system_instruction"] = options.system_instruction

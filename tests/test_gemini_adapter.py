@@ -70,6 +70,24 @@ def test_genai_plain_text_returns_text_namespace(genai_client):
     }
 
 
+@pytest.mark.parametrize(
+    ("modelo", "orcamento", "esperado"),
+    [
+        ("gemini-3.8-flash", 4096, {"thinking_budget": 4096}),
+        ("gemini-4-argon", 4096, {"thinking_level": "LOW"}),
+        ("gemini/gemini-4-argon", 0, {"thinking_level": "MINIMAL"}),
+        ("gemini-5-pro", 20000, {"thinking_level": "HIGH"}),
+    ],
+)
+def test_gemini_4_and_later_get_a_thinking_level_instead_of_a_budget(
+    genai_client, monkeypatch, modelo, orcamento, esperado
+):
+    monkeypatch.setattr(_gemini, "orcamento_raciocinio", lambda: orcamento)
+    _generate(model_name=modelo)
+    ((_, kwargs),) = genai_client.calls
+    assert kwargs["config"]["thinking_config"] == esperado
+
+
 def test_genai_with_tools_returns_raw_response(genai_client):
     contents = [{"role": "user", "parts": [{"text": "q"}]}]
     out = _generate(
