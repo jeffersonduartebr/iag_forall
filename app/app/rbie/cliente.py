@@ -38,15 +38,8 @@ def hash_corpo(corpo: Dict[str, Any]) -> str:
 
 
 def _limite(id_modelo: str) -> int:
-    parametros = configuracao.geracao(id_modelo)
-    if parametros.get("max_tokens"):
-        return int(parametros["max_tokens"])
-    m = configuracao.modelo(id_modelo)
-    visivel = int((configuracao.configuracao_bruta().get("experimento") or {}).get("max_tokens_saida", 640))
-    if m.get("raciocinio"):
-        visivel += int((configuracao.configuracao_bruta().get("experimento") or {})
-                       .get("orcamento_raciocinio_tokens", 512))
-    return visivel
+    """Limite do corpo; delega a configuracao efetiva (mesma regra do harness)."""
+    return configuracao.limite_geracao(id_modelo)
 
 
 def corpo_gerador(id_modelo: str, prompt: str, semente: Optional[int]) -> Dict[str, Any]:

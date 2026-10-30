@@ -176,6 +176,37 @@ def custo_tabela_usd(id_modelo: str, tokens_entrada: int, tokens_saida: int) -> 
     return (int(tokens_entrada) * entrada + int(tokens_saida) * saida) / 1_000_000.0
 
 
+def raciocinio_ativo(raciocinio: Any) -> bool:
+    """Verdadeiro quando o raciocinio consome orcamento oculto.
+
+    Mesma regra do harness (``_limite`` de ``src/corpo_requisicao.py``): o
+    orcamento de 512 tokens so e somado quando o raciocinio esta ativo. Ele esta
+    desligado quando a configuracao do modelo e ``{"enabled": false}`` (via
+    OpenRouter) ou tem ``thinking_budget: 0`` (via Vertex); nos demais casos com
+    ``raciocinio`` nao nulo, soma-se o orcamento.
+    """
+    if not raciocinio:
+        return False
+    if isinstance(raciocinio, dict):
+        if raciocinio.get("enabled") is False:
+            return False
+        if raciocinio.get("thinking_budget") == 0:
+            return False
+    return True
+
+
+def limite_geracao(id_modelo: str) -> int:
+    """Limite enviado ao provedor: saida visivel mais o orcamento oculto, se houver raciocinio ativo."""
+    parametros = geracao(id_modelo)
+    if parametros.get("max_tokens"):
+        return int(parametros["max_tokens"])
+    experimento = configuracao_bruta().get("experimento") or {}
+    visivel = int(experimento.get("max_tokens_saida", 1024))
+    if raciocinio_ativo(modelo(id_modelo).get("raciocinio")):
+        visivel += int(experimento.get("orcamento_raciocinio_tokens", 512))
+    return visivel
+
+
 def geracao(id_modelo: str) -> Dict[str, Any]:
     """Parametros de geracao do modelo, como o harness os envia."""
     return dict((configuracao_efetiva().get("geracao") or {}).get(id_modelo) or {})

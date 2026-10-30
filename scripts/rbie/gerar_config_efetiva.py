@@ -23,6 +23,18 @@ import yaml
 RAIZ = Path(__file__).resolve().parents[2]
 
 
+def _raciocinio_ativo(raciocinio) -> bool:
+    """Mesma regra do harness (``_limite`` de ``src/corpo_requisicao.py``)."""
+    if not raciocinio:
+        return False
+    if isinstance(raciocinio, dict):
+        if raciocinio.get("enabled") is False:
+            return False
+        if raciocinio.get("thinking_budget") == 0:
+            return False
+    return True
+
+
 def _modelo(cfg: dict, id_modelo: str) -> dict:
     modelos = cfg.get("modelos") or {}
     if id_modelo in modelos:
@@ -57,7 +69,7 @@ def gerar(cfg: dict) -> dict:
             "raciocinio": dados.get("raciocinio"),
         })
         limite = int(experimento["max_tokens_saida"])
-        if dados.get("raciocinio"):
+        if _raciocinio_ativo(dados.get("raciocinio")):
             limite += int(experimento["orcamento_raciocinio_tokens"])
         geracao[id_modelo] = {
             "temperatura": (float(experimento["temperatura_geradores"])
