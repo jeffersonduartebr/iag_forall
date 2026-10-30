@@ -134,6 +134,27 @@ def modelo(id_modelo: str) -> Dict[str, Any]:
     return {}
 
 
+def via_modelo(id_modelo: str) -> str:
+    """Via de acesso do modelo (``openrouter``, ``vertex`` ou ``anthropic``)."""
+    return str((modelo(id_modelo) or {}).get("via") or "openrouter")
+
+
+def provedor_modelo(id_modelo: str) -> str | None:
+    """Nome do provedor como o harness o registra (``provedor`` do config.yaml)."""
+    return (modelo(id_modelo) or {}).get("provedor")
+
+
+def vertex_parametros() -> Dict[str, Any]:
+    """Bloco ``vertex`` da configuracao (projeto, localizacao e nomes das variaveis)."""
+    return dict(configuracao_bruta().get("vertex") or {})
+
+
+def vias() -> Dict[str, str]:
+    """Mapa modelo -> via, exposto em ``/configuracao`` para o adaptador."""
+    return {id_modelo: str(dados.get("via") or "openrouter")
+            for id_modelo, dados in (configuracao_bruta().get("modelos") or {}).items()}
+
+
 def ids_candidatos() -> list[str]:
     return [c["id"] for c in (configuracao_efetiva().get("candidatos") or []) if c.get("id")]
 

@@ -118,6 +118,8 @@ def gerar(cfg: dict) -> dict:
         "recuperacao_interna": bool(roteador.get("recuperacao_interna", False)),
         "classes_risco": dict(classes) or None,
         "openrouter_base_url": (cfg.get("openrouter") or {}).get("url_chat"),
+        "vias": {k: str((v or {}).get("via") or "openrouter")
+                 for k, v in (cfg.get("modelos") or {}).items()},
     }
     return {
         "origem": str(cfg.get("_origem", "")),
@@ -137,6 +139,7 @@ def gerar(cfg: dict) -> dict:
             "temperatura_geradores": experimento.get("temperatura_geradores"),
         },
         "openrouter": dict(cfg.get("openrouter") or {}),
+        "vertex": dict(cfg.get("vertex") or {}),
     }
 
 
