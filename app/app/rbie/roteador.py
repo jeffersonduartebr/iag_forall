@@ -199,19 +199,40 @@ def _escolher_juiz(modelo_gerador: str) -> str:
     return random.choice(elegiveis)
 
 
-async def _avaliar(prompt: str, texto: str, modelo_gerador: str) -> Tuple[Optional[float], float, Optional[Dict[str, Any]]]:
-    """Chama um juiz interno e devolve ``(q_int 0-10, alinhamento 0-1, chamada)``."""
+async def _avaliar(prompt: str, texto: str, modelo_gerador: str):
+    """Chama juiz interno e devolve ``(q_int 0-10, alinhamento 0-1, chamadas)``.
+
+    A instrucao de rubrica do ARISTO pede raciocinio antes das notas. Com o
+    limite de 300 tokens do painel, um juiz mais verboso (por exemplo o
+    glm-5.3-flash) trunca antes do bloco ``<scores>`` e a nota fica ilegivel. O
+    primeiro reenvio do MESMO juiz usa um orcamento maior; se ainda assim nao
+    houver nota, tenta o proximo juiz elegivel do painel. Sem nota valida,
+    ``q_int`` fica nulo (nao avaliado), como no painel do harness.
+    """
+    instrucao = build_rubric_prompt(query=prompt, answer=texto)
     juiz = _escolher_juiz(modelo_gerador)
-    corpo = cliente.corpo_juiz(juiz, build_rubric_prompt(query=prompt, answer=texto))
-    chamada, saida = await cliente.chamar(juiz, corpo, papel="juiz_interno")
-    if chamada.get("erro") is not None:
-        return None, 0.0, chamada
-    notas = parse_rubric_scores(saida)
-    if notas is None:
-        return None, 0.0, chamada
-    q = weighted_quality(notas, DEFAULT_RUBRIC_WEIGHTS)
-    alinhamento = float(notas.get("alinhamento", 0.0)) / 10.0
-    return float(q), alinhamento, chamada
+    empresa = _modelo_de_empresa(modelo_gerador)
+    elegiveis = [j for j in configuracao.juizes_internos()
+                 if _modelo_de_empresa(j) != empresa] or configuracao.juizes_internos()
+    candidatos = [juiz] + [j for j in elegiveis if j != juiz][:1]
+    limite_padrao = int(configuracao.parametros_juiz()["max_tokens"])
+    limite_ampliado = max(limite_padrao, int(os.environ.get("ARISTO_JUIZ_MAX_TOKENS", "1024") or 1024))
+    chamadas: List[Dict[str, Any]] = []
+    for candidato in candidatos:
+        for limite in (limite_padrao, limite_ampliado):
+            corpo = cliente.corpo_juiz(candidato, instrucao, max_tokens=limite)
+            chamada, saida = await cliente.chamar(candidato, corpo, papel="juiz_interno")
+            chamadas.append(chamada)
+            if chamada.get("erro") is not None:
+                break
+            notas = parse_rubric_scores(saida)
+            if notas is not None:
+                q = weighted_quality(notas, DEFAULT_RUBRIC_WEIGHTS)
+                alinhamento = float(notas.get("alinhamento", 0.0)) / 10.0
+                return float(q), alinhamento, chamadas
+            if chamada.get("finish_reason") != "length":
+                break
+    return None, 0.0, chamadas
 
 
 def _recompensa(estado: Dict[str, Any], qualidade: float, latencia_s: float,
@@ -388,9 +409,8 @@ async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optio
         q_int: Optional[float] = None
         alinhamento = 0.0
         if erro is None and texto:
-            q_int, alinhamento, chamada_juiz = await _avaliar(prompt, texto, modelo)
-            if chamada_juiz is not None:
-                chamadas.append(chamada_juiz)
+            q_int, alinhamento, chamadas_juiz = await _avaliar(prompt, texto, modelo)
+            chamadas.extend(chamadas_juiz)
         qualidade = float(q_int or 0.0)
 
         custo_gerador = cliente.custo_tabela_chamada(chamada_gerador)

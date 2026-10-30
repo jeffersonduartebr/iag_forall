@@ -72,10 +72,12 @@ def corpo_gerador(id_modelo: str, prompt: str, semente: Optional[int]) -> Dict[s
     return corpo
 
 
-def corpo_juiz(id_modelo: str, prompt: str) -> Dict[str, Any]:
-    """Corpo de uma chamada a juiz interno: temperatura 0 e limite dos juizes."""
+def corpo_juiz(id_modelo: str, prompt: str, max_tokens: int | None = None) -> Dict[str, Any]:
+    """Corpo de uma chamada a juiz interno: temperatura 0 e limite dos juizes (ou o informado)."""
     m = configuracao.modelo(id_modelo)
     juiz = configuracao.parametros_juiz()
+    if max_tokens is not None:
+        juiz["max_tokens"] = int(max_tokens)
     corpo: Dict[str, Any] = {
         "model": id_modelo,
         "messages": [{"role": "user", "content": prompt}],
