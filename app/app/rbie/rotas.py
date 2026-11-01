@@ -54,7 +54,11 @@ def criar_estado(dados: Dict[str, Any] = Body(default={})) -> Any:
     if not id_estado:
         return _erro("id_estado obrigatorio")
     try:
-        estado = estado_modulo.criar(id_estado, corpo.get("de_instantaneo"))
+        estado = estado_modulo.criar(
+            id_estado, corpo.get("de_instantaneo"),
+            politica=corpo.get("politica"),
+            alpha=corpo.get("alpha"),
+        )
     except KeyError as exc:
         return _erro(str(exc))
     return {"id_estado": id_estado, "hash_estado": estado_modulo.hash_estado(estado)}
@@ -143,11 +147,13 @@ async def rotear_requisicao(dados: Dict[str, Any] = Body(default={})) -> Any:
     if bool(corpo.get("usar_cache_semantico")):
         return _erro("cache semantico desligado neste experimento")
     semente = corpo.get("semente")
+    texto_redacao = corpo.get("texto_redacao")
     try:
         resposta = await roteador.rotear(
             id_estado, id_requisicao, prompt,
             int(semente) if semente is not None else None,
             _corpo(corpo.get("metadados")),
+            texto_redacao if isinstance(texto_redacao, str) else None,
         )
     except KeyError as exc:
         return _erro(str(exc))

@@ -137,7 +137,7 @@ def _estatisticas_contexto(estado: Dict[str, Any], id_centroide: int) -> Dict[st
     return estatisticas.get("global") or {}
 
 
-def _decidir(estado: Dict[str, Any], prompt: str) -> Tuple[str, Dict[str, Any]]:
+def _decidir_centroide(estado: Dict[str, Any], prompt: str) -> Tuple[str, Dict[str, Any]]:
     """Decide o modelo: centroides, fatores de risco e votacao das tres politicas."""
     contexto = _contexto(estado, prompt)
     parametros = configuracao.parametros()
@@ -181,6 +181,22 @@ def _decidir(estado: Dict[str, Any], prompt: str) -> Tuple[str, Dict[str, Any]]:
         "fatores_aplicados": {m: round(f, 6) for m, f in fatores.items()},
     }
     return escolhido, decisao
+
+
+def _decidir_linucb(estado: Dict[str, Any], texto_redacao: Optional[str],
+                    prompt: str) -> Tuple[str, Dict[str, Any], Any]:
+    """Decide o modelo pelo LinUCB sobre as caracteristicas da redacao.
+
+    Nao usa centroides, ``_contexto`` nem fatores de risco. A decisao por
+    requisicao e sempre do LinUCB nesta politica; o ciclo NSGA-II continua
+    atualizando apenas os pesos da recompensa.
+    """
+    from . import linucb
+
+    caracteristica = linucb.caracteristicas(texto_redacao or "", prompt)
+    escolhido, detalhes = linucb.escolher(
+        estado, caracteristica, configuracao.ids_candidatos())
+    return escolhido, detalhes, caracteristica
 
 
 # --------------------------------------------------------------------------
@@ -252,13 +268,14 @@ def _recompensa(estado: Dict[str, Any], qualidade: float, latencia_s: float,
     return max(0.0, min(1.0, float(r)))
 
 
-def _atualizar_estatisticas(estado: Dict[str, Any], id_centroide: int, modelo: str,
+def _atualizar_estatisticas(estado: Dict[str, Any], id_centroide: Optional[int], modelo: str,
                             recompensa: float, latencia_s: float, qualidade: float,
                             custo_usd: float, alinhamento: float) -> None:
-    estatisticas = estado.setdefault("estatisticas", {})
-    for chave in (f"cluster:{id_centroide}", "global"):
-        contexto = estatisticas.setdefault(chave, {})
-        contexto[modelo] = welford_beta(contexto.get(modelo, {}), recompensa)
+    if id_centroide is not None:
+        estatisticas = estado.setdefault("estatisticas", {})
+        for chave in (f"cluster:{id_centroide}", "global"):
+            contexto = estatisticas.setdefault(chave, {})
+            contexto[modelo] = welford_beta(contexto.get(modelo, {}), recompensa)
     from app.services.ema_store import next_ema
 
     estado.setdefault("ema", {})[modelo] = next_ema(
@@ -381,7 +398,8 @@ def parar_coletor() -> None:
 # --------------------------------------------------------------------------
 
 async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optional[int],
-                 metadados: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 metadados: Optional[Dict[str, Any]] = None,
+                 texto_redacao: Optional[str] = None) -> Dict[str, Any]:
     """Executa uma requisicao do contrato; devolve o documento de resposta.
 
     A trava do estado e mantida apenas nas duas secoes criticas: a decisao, que
@@ -400,9 +418,14 @@ async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optio
             return repetida
 
         inicio = time.perf_counter()
+        politica_estado = str(estado.get("politica") or "centroide")
         estado_modulo.entrar(estado)
         t_decisao = time.perf_counter()
-        modelo, decisao = _decidir(estado, prompt)
+        caracteristica = None
+        if politica_estado == "linucb":
+            modelo, decisao, caracteristica = _decidir_linucb(estado, texto_redacao, prompt)
+        else:
+            modelo, decisao = _decidir_centroide(estado, prompt)
         latencia_decisao = time.perf_counter() - t_decisao
         estado_modulo.salvar(estado)
     finally:
@@ -438,8 +461,14 @@ async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optio
                                  int(chamada_gerador.get("tokens_saida") or 0))
 
         estado["n_requisicoes"] = int(estado.get("n_requisicoes", 0)) + 1
-        _atualizar_estatisticas(estado, int(decisao["id_centroide"]), modelo, recompensa,
-                                latencia_gerador, qualidade, custo_gerador, alinhamento)
+        if caracteristica is not None:
+            from . import linucb
+
+            linucb.atualizar(estado, caracteristica, modelo, recompensa)
+        _atualizar_estatisticas(estado, (None if caracteristica is not None
+                                         else int(decisao["id_centroide"])),
+                                modelo, recompensa, latencia_gerador, qualidade,
+                                custo_gerador, alinhamento)
         estado_modulo.sair(estado)
         latencia_total = time.perf_counter() - inicio
         resposta = {
@@ -458,6 +487,9 @@ async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optio
             "origem_pesos": estado.get("origem_pesos", "padrao"),
             "pesos": dict(estado.get("pesos") or {}),
             "decisao": decisao,
+            "politica": politica_estado,
+            "alpha": (float((estado.get("linucb") or {}).get("alpha"))
+                      if politica_estado == "linucb" else None),
             "n_centroides": len(estado.get("centroides") or []),
             "ciclos_evolutivos": int(estado.get("ciclos_evolutivos", 0)),
             "hash_estado_depois": estado_modulo.hash_estado(estado),

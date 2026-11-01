@@ -193,6 +193,7 @@ def novo_estado(id_estado: str) -> Dict[str, Any]:
         "n_requisicoes": 0,
         "ciclos_evolutivos": 0,
         "ultimo_ciclo_utc": None,
+        "politica": "centroide",
         "pesos": _pesos_padrao(),
         "origem_pesos": "padrao",
         "tamanho_populacao": int(os.environ.get("ARISTO_NSGA_POP", "40") or 40),
@@ -235,8 +236,13 @@ def salvar(estado: Dict[str, Any]) -> None:
     _gravar_redis(PREFIXO_REDIS + str(estado["id_estado"]), estado)
 
 
-def criar(id_estado: str, de_instantaneo: Optional[str] = None) -> Dict[str, Any]:
-    """Cria um estado vazio ou a partir de um instantaneo; sempre comeca pausado."""
+def criar(id_estado: str, de_instantaneo: Optional[str] = None,
+          politica: Optional[str] = None, alpha: Optional[float] = None) -> Dict[str, Any]:
+    """Cria um estado vazio ou a partir de um instantaneo; sempre comeca pausado.
+
+    ``politica`` escolhe a decisao por requisicao: ``centroide`` (padrao) ou
+    ``linucb``. ``alpha`` so vale para o LinUCB e fica registrado no estado.
+    """
     _carregar_uma_vez()
     if de_instantaneo is not None:
         payload = _INSTANTANEOS.get(de_instantaneo)
@@ -250,6 +256,14 @@ def criar(id_estado: str, de_instantaneo: Optional[str] = None) -> Dict[str, Any
         estado["idempotencia"] = {}
     else:
         estado = novo_estado(id_estado)
+    if politica:
+        estado["politica"] = str(politica)
+    if estado.get("politica") == "linucb":
+        from . import linucb
+
+        linucb.inicializar(estado, configuracao.ids_candidatos(), alpha)
+    elif alpha is not None:
+        estado.setdefault("linucb", {})["alpha"] = float(alpha)
     salvar(estado)
     return estado
 
@@ -300,6 +314,12 @@ def retomar(id_estado: str) -> None:
     salvar(_ESTADOS[id_estado])
 
 
+def _resumo_linucb(estado: Dict[str, Any]) -> Dict[str, Any]:
+    from . import linucb
+
+    return linucb.resumo(estado)
+
+
 def resumo(id_estado: str) -> Dict[str, Any]:
     estado = obter(id_estado)
     return {
@@ -313,6 +333,10 @@ def resumo(id_estado: str) -> Dict[str, Any]:
         "tamanho_populacao": int(estado.get("tamanho_populacao", 40) or 40),
         "pesos_atuais": dict(estado.get("pesos") or {}),
         "origem_pesos_atual": estado.get("origem_pesos", "padrao"),
+        "politica": estado.get("politica", "centroide"),
+        "alpha": (float((estado.get("linucb") or {}).get("alpha"))
+                  if estado.get("politica") == "linucb" else None),
+        "linucb": (_resumo_linucb(estado) if estado.get("politica") == "linucb" else None),
     }
 
 
