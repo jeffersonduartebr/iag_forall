@@ -66,3 +66,29 @@ def test_caracteristicas_tem_bias_e_norma() -> None:
     assert vetor.shape == (linucb.DIMENSAO_CARACTERISTICAS,)
     assert vetor[-1] == pytest.approx(1.0)
     assert np.linalg.norm(vetor[:-1]) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_prior_do_nsga_entra_em_b_e_observacoes_superam() -> None:
+    """O prior do NSGA-II entra com forca n0 e as observacoes reais o superam."""
+    estado = _estado()
+    contexto = np.array([0.5, 0.5, 1.0])
+    linucb.inicializar(estado, BRACOS, alpha=0.25, n0=20.0)
+    # prior favorece braco_a (peso 1) e zera braco_b
+    linucb.aplicar_prior(estado, {"braco_a": 1.0, "braco_b": 0.0})
+    assert estado["linucb"]["bracos"]["braco_a"]["b_prior"] == pytest.approx(20.0)
+    assert estado["linucb"]["bracos"]["braco_b"]["b_prior"] == pytest.approx(0.0)
+    assert linucb.escolher(estado, contexto, BRACOS)[0] == "braco_a"
+    # A continua identidade mais as observacoes; b observado nao recebe o prior
+    A = np.asarray(estado["linucb"]["bracos"]["braco_a"]["A"], dtype=float)
+    assert np.allclose(A, np.eye(3))
+    assert np.linalg.norm(estado["linucb"]["bracos"]["braco_a"]["b"]) == 0.0
+    # observacoes reais e opostas ao prior: braco_b recebe 1, braco_a recebe 0
+    for _ in range(12):
+        linucb.atualizar(estado, contexto, "braco_a", 0.0)
+        linucb.atualizar(estado, contexto, "braco_b", 1.0)
+    assert linucb.escolher(estado, contexto, BRACOS)[0] == "braco_b"
+    # suavizacao: um novo ciclo nao substitui o prior aprendido, aproxima devagar
+    anterior = estado["linucb"]["bracos"]["braco_a"]["b_prior"]
+    linucb.aplicar_prior(estado, {"braco_a": 0.0, "braco_b": 1.0})
+    novo = estado["linucb"]["bracos"]["braco_a"]["b_prior"]
+    assert novo == pytest.approx((1.0 - linucb.SUAVIZACAO_PRIOR) * anterior)

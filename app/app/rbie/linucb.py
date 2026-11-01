@@ -33,6 +33,12 @@ CAMINHO_PCA = Path(os.environ.get(
     "ARISTO_PCA_LINUCB", str(RAIZ_ARISTO / "state" / "rbie" / "pca_linucb.json")))
 
 ALPHA_PADRAO = 0.25
+#: Forca do prior do NSGA-II, em pseudo-observacoes; pequena para que as
+#: observacoes reais a superem com o tempo.
+N0_PADRAO = 20.0
+#: Suavizacao do prior a cada ciclo: o novo valor e uma media com o anterior,
+#: sem substituir o que o bandit ja aprendeu.
+SUAVIZACAO_PRIOR = 0.5
 N_COMPONENTES = 64
 DIMENSAO_CARACTERISTICAS = N_COMPONENTES + 1  # componentes + bias
 
@@ -87,7 +93,8 @@ def alpha_de(estado: Dict[str, Any]) -> float:
 
 def _estrutura(estado: Dict[str, Any], bracos: Sequence[str],
                alpha: Optional[float] = None,
-               dimensao: Optional[int] = None) -> Dict[str, Any]:
+               dimensao: Optional[int] = None,
+               n0: Optional[float] = None) -> Dict[str, Any]:
     """Garante a estrutura do LinUCB no estado e devolve o dicionario.
 
     ``dimensao`` vem do vetor de caracteristicas (65 no uso real: 64 componentes
@@ -96,6 +103,9 @@ def _estrutura(estado: Dict[str, Any], bracos: Sequence[str],
     """
     linucb = estado.setdefault("linucb", {})
     linucb.setdefault("alpha", float(alpha if alpha is not None else ALPHA_PADRAO))
+    if n0 is not None:
+        linucb["n0"] = float(n0)
+    linucb.setdefault("n0", N0_PADRAO)
     linucb.setdefault("n_atualizacoes", 0)
     armas = linucb.setdefault("bracos", {})
     d = int(dimensao or DIMENSAO_CARACTERISTICAS)
@@ -105,15 +115,57 @@ def _estrutura(estado: Dict[str, Any], bracos: Sequence[str],
             armas[braco] = {
                 "A": np.eye(d, dtype=np.float64).tolist(),
                 "b": [0.0] * d,
+                "b_prior": 0.0,
                 "n": 0,
             }
+        else:
+            dados.setdefault("b_prior", 0.0)
     return linucb
 
 
 def inicializar(estado: Dict[str, Any], bracos: Sequence[str],
-                alpha: Optional[float] = None) -> Dict[str, Any]:
+                alpha: Optional[float] = None,
+                n0: Optional[float] = None) -> Dict[str, Any]:
     """Cria (ou completa) a estrutura do LinUCB no estado."""
-    return _estrutura(estado, bracos, alpha)
+    return _estrutura(estado, bracos, alpha, n0=n0)
+
+
+def n0_de(estado: Dict[str, Any]) -> float:
+    """Forca do prior do NSGA-II usada no estado."""
+    return float((estado.get("linucb") or {}).get("n0", N0_PADRAO))
+
+
+def aplicar_prior(estado: Dict[str, Any], pesos: Dict[str, float],
+                  n0: Optional[float] = None,
+                  suavizacao: float = SUAVIZACAO_PRIOR) -> None:
+    """Converte os pesos da mistura do NSGA-II em prior do LinUCB, com suavizacao.
+
+    Para cada braco, ``b_prior`` recebe uma media (fator ``suavizacao``) entre o
+    valor anterior e ``w_a * n0``. O prior entra na escolha como deslocamento na
+    coordenada de bias; a matriz A permanece identidade mais as observacoes
+    reais, e o vetor b observado nunca e substituido.
+    """
+    linucb = _estrutura(estado, list(pesos) or configuracao_ids(estado), n0=n0)
+    forca = float(linucb.get("n0", N0_PADRAO) if n0 is None else n0)
+    beta = max(0.0, min(1.0, float(suavizacao)))
+    primeiro = not bool(linucb.get("prior_aplicado"))
+    for braco, peso in pesos.items():
+        dados = linucb["bracos"].setdefault(
+            braco, {"A": np.eye(DIMENSAO_CARACTERISTICAS).tolist(),
+                    "b": [0.0] * DIMENSAO_CARACTERISTICAS, "b_prior": 0.0, "n": 0})
+        alvo = float(peso) * forca
+        if primeiro:
+            # primeiro ciclo inicializa o prior com a forca n0
+            dados["b_prior"] = alvo
+        else:
+            anterior = float(dados.get("b_prior", 0.0))
+            dados["b_prior"] = (1.0 - beta) * anterior + beta * alvo
+    linucb["prior_aplicado"] = True
+
+
+def configuracao_ids(estado: Dict[str, Any]) -> Sequence[str]:
+    """Bracos conhecidos no estado (usado quando ``pesos`` vem vazio)."""
+    return list((estado.get("linucb") or {}).get("bracos") or {})
 
 
 def escolher(estado: Dict[str, Any], caracteristica: np.ndarray,
@@ -123,10 +175,13 @@ def escolher(estado: Dict[str, Any], caracteristica: np.ndarray,
     linucb = _estrutura(estado, bracos, dimensao=x.size)
     alpha = float(linucb["alpha"])
     pontuacoes: Dict[str, float] = {}
+    bias = np.zeros(DIMENSAO_CARACTERISTICAS if x.size == DIMENSAO_CARACTERISTICAS else x.size,
+                    dtype=np.float64)
+    bias[-1] = 1.0
     for braco in bracos:
         dados = linucb["bracos"][braco]
         A = np.asarray(dados["A"], dtype=np.float64)
-        b = np.asarray(dados["b"], dtype=np.float64)
+        b = np.asarray(dados["b"], dtype=np.float64) + float(dados.get("b_prior", 0.0)) * bias
         try:
             theta = np.linalg.solve(A, b)
             bonus = float(np.sqrt(max(0.0, float(x @ np.linalg.solve(A, x)))))
@@ -166,5 +221,15 @@ def resumo(estado: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "alpha": float(linucb.get("alpha", ALPHA_PADRAO)),
         "n_atualizacoes": int(linucb.get("n_atualizacoes", 0)),
+        "n0": float(linucb.get("n0", N0_PADRAO)),
         "n_por_braco": {braco: int((dados or {}).get("n", 0)) for braco, dados in armas.items()},
+        "b_prior": {braco: round(float((dados or {}).get("b_prior", 0.0)), 6)
+                    for braco, dados in armas.items()},
+        "desvio_a": {braco: round(float(np.linalg.norm(
+            np.asarray((dados or {}).get("A"), dtype=np.float64) - np.eye(
+                len((dados or {}).get("A") or [])))), 6)
+            for braco, dados in armas.items()},
+        "norma_b": {braco: round(float(np.linalg.norm(
+            np.asarray((dados or {}).get("b"), dtype=np.float64))), 6)
+            for braco, dados in armas.items()},
     }
