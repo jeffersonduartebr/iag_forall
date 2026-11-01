@@ -194,6 +194,7 @@ def novo_estado(id_estado: str) -> Dict[str, Any]:
         "ciclos_evolutivos": 0,
         "ultimo_ciclo_utc": None,
         "politica": "centroide",
+        "aprender": True,
         "pesos": _pesos_padrao(),
         "origem_pesos": "padrao",
         "tamanho_populacao": int(os.environ.get("ARISTO_NSGA_POP", "40") or 40),
@@ -237,11 +238,14 @@ def salvar(estado: Dict[str, Any]) -> None:
 
 
 def criar(id_estado: str, de_instantaneo: Optional[str] = None,
-          politica: Optional[str] = None, alpha: Optional[float] = None) -> Dict[str, Any]:
+          politica: Optional[str] = None, alpha: Optional[float] = None,
+          n0: Optional[float] = None, aprender: Optional[bool] = None) -> Dict[str, Any]:
     """Cria um estado vazio ou a partir de um instantaneo; sempre comeca pausado.
 
     ``politica`` escolhe a decisao por requisicao: ``centroide`` (padrao) ou
-    ``linucb``. ``alpha`` so vale para o LinUCB e fica registrado no estado.
+    ``linucb``. ``alpha`` e ``n0`` so valem para o LinUCB e ficam registrados no
+    estado. ``aprender=False`` congela o bandit (escolhe sem atualizar A e b),
+    como na fase de teste do experimento.
     """
     _carregar_uma_vez()
     if de_instantaneo is not None:
@@ -258,10 +262,12 @@ def criar(id_estado: str, de_instantaneo: Optional[str] = None,
         estado = novo_estado(id_estado)
     if politica:
         estado["politica"] = str(politica)
+    if aprender is not None:
+        estado["aprender"] = bool(aprender)
     if estado.get("politica") == "linucb":
         from . import linucb
 
-        linucb.inicializar(estado, configuracao.ids_candidatos(), alpha)
+        linucb.inicializar(estado, configuracao.ids_candidatos(), alpha, n0)
     elif alpha is not None:
         estado.setdefault("linucb", {})["alpha"] = float(alpha)
     salvar(estado)
@@ -336,6 +342,9 @@ def resumo(id_estado: str) -> Dict[str, Any]:
         "politica": estado.get("politica", "centroide"),
         "alpha": (float((estado.get("linucb") or {}).get("alpha"))
                   if estado.get("politica") == "linucb" else None),
+        "n0": (float((estado.get("linucb") or {}).get("n0"))
+               if estado.get("politica") == "linucb" else None),
+        "aprender": bool(estado.get("aprender", True)),
         "linucb": (_resumo_linucb(estado) if estado.get("politica") == "linucb" else None),
     }
 

@@ -33,7 +33,7 @@ from app.services.judge_rubric import DEFAULT_RUBRIC_WEIGHTS, build_rubric_promp
     parse_rubric_scores, weighted_quality
 from app.services.reward import cost_score, derive_reward_weights, latency_score
 
-from . import cliente, configuracao, estado as estado_modulo
+from . import cliente, configuracao, estado as estado_modulo, interpretacao
 
 QUANTIDADE_MEDIA = 0.15  # EMA_ALPHA de services.ema_store
 _COLETOR_ATIVO = False
@@ -251,25 +251,28 @@ async def _avaliar(prompt: str, texto: str, modelo_gerador: str):
     return None, 0.0, chamadas
 
 
-def _recompensa(estado: Dict[str, Any], qualidade: float, latencia_s: float,
-                custo_gerador: float, tokens_entrada: int, tokens_saida: int) -> float:
-    pesos = estado.get("pesos") or {}
-    w_q = float(pesos.get("w_q", 0.55))
-    w_l = float(pesos.get("w_l", 0.30))
-    w_c = float(pesos.get("w_c", 0.15))
+def _recompensa(estado: Dict[str, Any], concordancia: Optional[float], latencia_s: float,
+                custo_gerador: float, tokens_entrada: int, tokens_saida: int):
+    """Recompensa alinhada a nota humana; devolve ``(valor, disponivel)``.
+
+    A qualidade e a concordancia com as notas humanas; o escore dos juizes nao
+    entra. Sem concordancia, usa apenas latencia e custo e marca indisponivel.
+    """
+    from . import recompensa as recompensa_modulo
+
     parametros = configuracao.parametros()
-    k = float(parametros.get("latencia_k", 0.12) or 0.12)
-    x0 = float(parametros.get("latencia_x0", 20.0) or 20.0)
-    tokens = int(tokens_entrada) + int(tokens_saida)
-    custo_por_mil = (float(custo_gerador) / tokens * 1000.0) if tokens > 0 else None
-    r = (w_q * max(0.0, min(10.0, float(qualidade))) / 10.0
-         + w_l * latency_score(latencia_s, k=k, x0=x0)
-         + w_c * cost_score(custo_por_mil, configuracao.c_base_usd_por_mil()))
-    return max(0.0, min(1.0, float(r)))
+    return recompensa_modulo.combinar(
+        estado.get("pesos") or {}, concordancia, latencia_s, custo_gerador,
+        tokens_entrada, tokens_saida,
+        latencia_k=float(parametros.get("latencia_k", 0.12) or 0.12),
+        latencia_x0=float(parametros.get("latencia_x0", 20.0) or 20.0),
+        c_base_usd_por_mil=configuracao.c_base_usd_por_mil(),
+    )
 
 
 def _atualizar_estatisticas(estado: Dict[str, Any], id_centroide: Optional[int], modelo: str,
-                            recompensa: float, latencia_s: float, qualidade: float,
+                            recompensa: float, latencia_s: float,
+                            qualidade: Optional[float],
                             custo_usd: float, alinhamento: float) -> None:
     if id_centroide is not None:
         estatisticas = estado.setdefault("estatisticas", {})
@@ -278,13 +281,17 @@ def _atualizar_estatisticas(estado: Dict[str, Any], id_centroide: Optional[int],
             contexto[modelo] = welford_beta(contexto.get(modelo, {}), recompensa)
     from app.services.ema_store import next_ema
 
+    anterior = (estado.get("ema") or {}).get(modelo) or {}
+    qualidade_ema = (float(qualidade) if qualidade is not None
+                     else float(anterior.get("ema_quality", 5.0)))
     estado.setdefault("ema", {})[modelo] = next_ema(
-        (estado.get("ema") or {}).get(modelo), latencia_s, qualidade, custo_usd)
+        anterior, latencia_s, qualidade_ema, custo_usd)
     ema = estado["ema"][modelo]
     ema["ema_alignment"] = alinhamento
     historico = estado.setdefault("historico", [])
     historico.append({"modelo": modelo, "latencia_s": round(latencia_s, 6),
-                      "custo_usd": round(custo_usd, 8), "qualidade": round(qualidade, 4),
+                      "custo_usd": round(custo_usd, 8),
+                      "qualidade": (None if qualidade is None else round(qualidade, 4)),
                       "alinhamento": round(alinhamento, 4),
                       "recompensa": round(recompensa, 6), "carimbo_utc": estado_modulo.carimbo_utc()})
     if len(historico) > 200:
@@ -324,6 +331,10 @@ def rodar_ciclo(estado: Dict[str, Any]) -> None:
                                   min_share=0.05)
     estado["pesos"] = {"w_q": round(pesos[0], 6), "w_l": round(pesos[1], 6), "w_c": round(pesos[2], 6)}
     estado["origem_pesos"] = "ciclo_evolutivo"
+    if estado.get("politica") == "linucb":
+        from . import linucb
+
+        linucb.aplicar_prior(estado, pesos_modelos)
     estado["populacao"] = [{"pesos_modelos": {m: round(float(w), 6) for m, w in pesos_modelos.items()},
                             "eficiencia": round(float(eficiencia), 6),
                             "latencia_s": round(sys_lat, 6), "custo_usd": round(sys_cst, 8),
@@ -399,7 +410,9 @@ def parar_coletor() -> None:
 
 async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optional[int],
                  metadados: Optional[Dict[str, Any]] = None,
-                 texto_redacao: Optional[str] = None) -> Dict[str, Any]:
+                 texto_redacao: Optional[str] = None,
+                 notas_humanas: Optional[List[int]] = None,
+                 aprender: Optional[bool] = None) -> Dict[str, Any]:
     """Executa uma requisicao do contrato; devolve o documento de resposta.
 
     A trava do estado e mantida apenas nas duas secoes criticas: a decisao, que
@@ -456,20 +469,31 @@ async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optio
     await asyncio.to_thread(estado_modulo.TRAVA.acquire)
     try:
         estado = estado_modulo.obter(id_estado)
-        recompensa = _recompensa(estado, qualidade, latencia_gerador, custo_gerador,
-                                 int(chamada_gerador.get("tokens_entrada") or 0),
-                                 int(chamada_gerador.get("tokens_saida") or 0))
+        aprender_efetivo = (bool(estado.get("aprender", True))
+                            if aprender is None else bool(aprender))
+        status_parser, niveis_atribuidos = (interpretacao.interpretar_saida(texto)
+                                            if texto else ("formato_invalido", None))
+        concordancia = interpretacao.qualidade_concordancia(niveis_atribuidos, notas_humanas)
+        recompensa, disponivel = _recompensa(
+            estado, (concordancia if aprender_efetivo else None), latencia_gerador,
+            custo_gerador, int(chamada_gerador.get("tokens_entrada") or 0),
+            int(chamada_gerador.get("tokens_saida") or 0))
+        if not aprender_efetivo:
+            recompensa = None
+            disponivel = False
 
-        estado["n_requisicoes"] = int(estado.get("n_requisicoes", 0)) + 1
-        if caracteristica is not None:
-            from . import linucb
+        if aprender_efetivo:
+            estado["n_requisicoes"] = int(estado.get("n_requisicoes", 0)) + 1
+            if caracteristica is not None:
+                from . import linucb
 
-            linucb.atualizar(estado, caracteristica, modelo, recompensa)
-        _atualizar_estatisticas(estado, (None if caracteristica is not None
-                                         else int(decisao["id_centroide"])),
-                                modelo, recompensa, latencia_gerador, qualidade,
-                                custo_gerador, alinhamento)
-        estado_modulo.sair(estado)
+                linucb.atualizar(estado, caracteristica, modelo, float(recompensa or 0.0))
+            _atualizar_estatisticas(
+                estado, (None if caracteristica is not None else int(decisao["id_centroide"])),
+                modelo, float(recompensa or 0.0), latencia_gerador,
+                (concordancia * 10.0 if concordancia is not None else None),
+                custo_gerador, alinhamento)
+            estado_modulo.sair(estado)
         latencia_total = time.perf_counter() - inicio
         resposta = {
             "id_estado": id_estado,
@@ -483,13 +507,21 @@ async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optio
             "custo_tabela_gerador_usd": round(custo_gerador, 9),
             "custo_tabela_juizes_internos_usd": round(custo_juizes, 9),
             "q_int": q_int,
-            "recompensa": round(recompensa, 6),
+            "recompensa": (None if recompensa is None else round(recompensa, 6)),
+            "recompensa_disponivel": bool(disponivel),
+            "qualidade_concordancia": (None if not aprender_efetivo or concordancia is None
+                                       else round(concordancia, 6)),
+            "niveis_atribuidos": niveis_atribuidos,
+            "status_parser": status_parser,
+            "aprender": aprender_efetivo,
             "origem_pesos": estado.get("origem_pesos", "padrao"),
             "pesos": dict(estado.get("pesos") or {}),
             "decisao": decisao,
             "politica": politica_estado,
             "alpha": (float((estado.get("linucb") or {}).get("alpha"))
                       if politica_estado == "linucb" else None),
+            "n0": (float((estado.get("linucb") or {}).get("n0"))
+                   if politica_estado == "linucb" else None),
             "n_centroides": len(estado.get("centroides") or []),
             "ciclos_evolutivos": int(estado.get("ciclos_evolutivos", 0)),
             "hash_estado_depois": estado_modulo.hash_estado(estado),

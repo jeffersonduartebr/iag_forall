@@ -58,6 +58,8 @@ def criar_estado(dados: Dict[str, Any] = Body(default={})) -> Any:
             id_estado, corpo.get("de_instantaneo"),
             politica=corpo.get("politica"),
             alpha=corpo.get("alpha"),
+            n0=corpo.get("n0"),
+            aprender=corpo.get("aprender"),
         )
     except KeyError as exc:
         return _erro(str(exc))
@@ -148,12 +150,18 @@ async def rotear_requisicao(dados: Dict[str, Any] = Body(default={})) -> Any:
         return _erro("cache semantico desligado neste experimento")
     semente = corpo.get("semente")
     texto_redacao = corpo.get("texto_redacao")
+    notas_humanas = corpo.get("notas_humanas")
+    if notas_humanas is not None and not isinstance(notas_humanas, (list, tuple)):
+        return _erro("notas_humanas deve ser lista de cinco inteiros")
+    aprender = corpo.get("aprender")
     try:
         resposta = await roteador.rotear(
             id_estado, id_requisicao, prompt,
             int(semente) if semente is not None else None,
             _corpo(corpo.get("metadados")),
             texto_redacao if isinstance(texto_redacao, str) else None,
+            list(notas_humanas) if notas_humanas is not None else None,
+            bool(aprender) if aprender is not None else None,
         )
     except KeyError as exc:
         return _erro(str(exc))
