@@ -16,7 +16,7 @@ set -euo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PORTA="${ARISTO_PORTA:-8000}"
-CONFIG_EXPERIMENTO="${CONFIG_EXPERIMENTO:-/data/desenvolvimento/doutorado-publicacoes/rbie-roteamento-feedback-enem/experimentos/codigo/config.yaml}"
+CONFIG_EXPERIMENTO="${CONFIG_EXPERIMENTO:-/data/desenvolvimento/doutorado-publicacoes/rbie-roteamento-feedback-enem/experimentos-v2/codigo/config.yaml}"
 ENV_EXPERIMENTO="${ENV_EXPERIMENTO:-/data/desenvolvimento/doutorado-publicacoes/.env}"
 DIR_ESTADO="$RAIZ/state/rbie"
 CNT_REDIS="aristo-rbie-redis"
