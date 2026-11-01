@@ -382,7 +382,14 @@ def parar_coletor() -> None:
 
 async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optional[int],
                  metadados: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Executa uma requisicao do contrato; devolve o documento de resposta."""
+    """Executa uma requisicao do contrato; devolve o documento de resposta.
+
+    A trava do estado e mantida apenas nas duas secoes criticas: a decisao, que
+    le e atualiza centroides e contadores, e a atualizacao final. As chamadas de
+    rede ficam fora da trava, o que permite varias requisicoes simultaneas no
+    mesmo estado sem serializar a espera das APIs.
+    """
+    # --- secao critica 1: decisao -------------------------------------------------
     await asyncio.to_thread(estado_modulo.TRAVA.acquire)
     try:
         estado = estado_modulo.obter(id_estado)
@@ -397,26 +404,35 @@ async def rotear(id_estado: str, id_requisicao: str, prompt: str, semente: Optio
         t_decisao = time.perf_counter()
         modelo, decisao = _decidir(estado, prompt)
         latencia_decisao = time.perf_counter() - t_decisao
+        estado_modulo.salvar(estado)
+    finally:
+        estado_modulo.TRAVA.release()
 
-        chamadas: List[Dict[str, Any]] = []
-        corpo = cliente.corpo_gerador(modelo, prompt, semente)
-        chamada_gerador, texto = await cliente.chamar(modelo, corpo, papel="gerador")
-        chamadas.append(chamada_gerador)
-        erro = chamada_gerador.get("erro")
-        if erro is not None:
-            texto = ""
+    # --- fora da trava: chamadas de rede -----------------------------------------
+    chamadas: List[Dict[str, Any]] = []
+    corpo = cliente.corpo_gerador(modelo, prompt, semente)
+    chamada_gerador, texto = await cliente.chamar(modelo, corpo, papel="gerador")
+    chamadas.append(chamada_gerador)
+    erro = chamada_gerador.get("erro")
+    if erro is not None:
+        texto = ""
 
-        q_int: Optional[float] = None
-        alinhamento = 0.0
-        if erro is None and texto:
-            q_int, alinhamento, chamadas_juiz = await _avaliar(prompt, texto, modelo)
-            chamadas.extend(chamadas_juiz)
-        qualidade = float(q_int or 0.0)
+    q_int: Optional[float] = None
+    alinhamento = 0.0
+    if erro is None and texto:
+        q_int, alinhamento, chamadas_juiz = await _avaliar(prompt, texto, modelo)
+        chamadas.extend(chamadas_juiz)
+    qualidade = float(q_int or 0.0)
 
-        custo_gerador = cliente.custo_tabela_chamada(chamada_gerador)
-        custo_juizes = sum(cliente.custo_tabela_chamada(c) for c in chamadas
-                           if c.get("papel") == "juiz_interno")
-        latencia_gerador = float(chamada_gerador.get("latencia_s") or 0.0)
+    custo_gerador = cliente.custo_tabela_chamada(chamada_gerador)
+    custo_juizes = sum(cliente.custo_tabela_chamada(c) for c in chamadas
+                       if c.get("papel") == "juiz_interno")
+    latencia_gerador = float(chamada_gerador.get("latencia_s") or 0.0)
+
+    # --- secao critica 2: atualizacao do estado e resposta -----------------------
+    await asyncio.to_thread(estado_modulo.TRAVA.acquire)
+    try:
+        estado = estado_modulo.obter(id_estado)
         recompensa = _recompensa(estado, qualidade, latencia_gerador, custo_gerador,
                                  int(chamada_gerador.get("tokens_entrada") or 0),
                                  int(chamada_gerador.get("tokens_saida") or 0))
