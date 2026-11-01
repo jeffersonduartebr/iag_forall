@@ -79,7 +79,10 @@ def gerar(cfg: dict) -> dict:
             "seed": bool(dados.get("aceita_seed", True)) or None,
         }
 
-    painel = list((cfg.get("juizes") or {}).get("painel") or [])
+    # Juizes internos do roteador: a ESPECIFICACAO fixa os tres do painel, mesmo
+    # quando o painel externo do experimento tem mais juizes (emenda 1, v2).
+    painel_externo = list((cfg.get("juizes") or {}).get("painel") or [])
+    painel = list(roteador.get("juizes_internos") or painel_externo)
     detalhes_juizes = {}
     for id_modelo in painel:
         dados = _modelo(cfg, id_modelo)
@@ -127,7 +130,8 @@ def gerar(cfg: dict) -> dict:
         "configuracao": configuracao,
         "modelos": {k: dict(v or {}) for k, v in (cfg.get("modelos") or {}).items()},
         "juizes": {
-            "painel": painel,
+            "painel": painel_externo,
+            "juizes_internos": painel,
             "temperatura": (cfg.get("juizes") or {}).get("temperatura", 0.0),
             "max_tokens": (cfg.get("juizes") or {}).get("max_tokens", 300),
             "pesos_q": (cfg.get("juizes") or {}).get("pesos_q"),
