@@ -36,3 +36,9 @@ coverage.json
 mutants/
 .hypothesis/
 .mutmut-work/
+
+# Saidas locais do autor e do contrato RBIE (nao versionadas)
+evij/
+Claude outputs/
+._Claude outputs
+docker-compose.yml.bak

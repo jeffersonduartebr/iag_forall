@@ -90,6 +90,8 @@ from .query_jobs import (  # noqa: F401  (enqueue_query_job re-export p/ query_h
     get_query_job_result,
     get_query_job_status,
 )
+from .rbie import roteador as rbie_roteador
+from .rbie.rotas import router as rbie_router
 from .router_core import route_and_answer, start_background_services, stop_background_services
 from .routers import rag_router
 from .schemas import (
@@ -288,6 +290,10 @@ install_middleware(
 
 app.include_router(rag_router.router)
 
+# Superficie aditiva do contrato do experimento RBIE (/saude, /configuracao,
+# /estados, /rotear). Nao substitui /query nem compartilha estado com ele.
+app.include_router(rbie_router)
+
 
 @app.get("/metrics")
 def metrics(x_metrics_token: str | None = Header(None, alias="X-Metrics-Token")):
@@ -347,6 +353,7 @@ async def startup_event():
     get_cpu_executor()
     start_reload_listener()
     start_background_services()
+    rbie_roteador.iniciar_coletor()
     log_process_file_descriptor_limit("startup")
     await start_provider_runtime_services()
 
@@ -431,6 +438,7 @@ async def shutdown_event():
     # Close HTTP connection pool
     try:
         stop_background_services()
+        rbie_roteador.parar_coletor()
         stop_reload_listener()
         await stop_provider_runtime_services()
         await close_http_client()
