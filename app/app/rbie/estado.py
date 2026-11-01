@@ -37,7 +37,9 @@ RAIZ_ARISTO = configuracao.RAIZ_ARISTO
 DIR_ESTADO = Path(os.environ.get("ARISTO_ESTADO_DIR", str(RAIZ_ARISTO / "state" / "rbie")))
 DIR_INSTANTANEOS = DIR_ESTADO / "instantaneos"
 
-#: Serializa operacoes de estado no processo (o harness nao envia concorrencia).
+#: Serializa as secoes criticas de estado no processo. O harness envia
+#: requisicoes concorrentes (controlador dinamico de concorrencia), e a trava
+#: cobre apenas a decisao e a atualizacao final, nao as chamadas de rede.
 TRAVA = threading.Lock()
 
 _ESTADOS: Dict[str, Dict[str, Any]] = {}

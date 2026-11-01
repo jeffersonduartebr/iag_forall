@@ -64,7 +64,9 @@ def main() -> int:
     congelado = f"teste-congelado-{sufixo}"
     _post("/estados", {"id_estado": congelado, "politica": "linucb",
                        "alpha": 0.25, "n0": 20, "aprender": False})
-    _post(f"/estados/{congelado}/retomar")
+    # O estado fica pausado de proposito: a pausa congela o relogio do ciclo
+    # NSGA-II, de modo que a comparacao de hash isola o efeito da requisicao.
+    # A pausa nao impede a escolha do braco nem a chamada ao gerador.
     antes = _get(f"/estados/{congelado}/resumo")
     r_congelado = _post("/rotear", {
         "id_estado": congelado, "id_requisicao": f"congelado|{sufixo}",
